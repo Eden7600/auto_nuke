@@ -33,10 +33,11 @@ defmodule AutoNuke.Ticker do
   end
 
   @impl true
-  def handle_info(:loop, state) do
+  def handle_info(:loop, old_state) do
     sim_speed = get_sim_speed()
-    state = update_state(state, sim_speed)
-    {:noreply, state, {:continue, :loop}}
+    new_state = update_state(old_state, sim_speed)
+    PubSub.publish(:ticker, {:tick, old_state.ms, new_state.ms})
+    {:noreply, new_state, {:continue, :loop}}
   end
 
   defp update_state(state, 0), do: %State{state | last_time: DateTime.utc_now()}
