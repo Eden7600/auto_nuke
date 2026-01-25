@@ -31,6 +31,7 @@ defmodule AutoNuke.SecondaryFill do
       fill_level: get_fill_percent(loop)
     }
 
+    Logger.info(@log_prefix <> "Started with fill level of #{state.fill_level * 100}%.")
     {:ok, state, {:continue, :loop}}
   end
 
@@ -56,8 +57,6 @@ defmodule AutoNuke.SecondaryFill do
 
   defp update_fill_level(new_level, %State{} = state) do
     pid = state.pid |> PIDControl.step(@target_percent, new_level)
-
-    IO.inspect(pid.output, label: "output")
     state = %State{state | pid: pid, fill_level: new_level}
 
     new_speed =
