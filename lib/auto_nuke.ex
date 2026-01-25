@@ -4,6 +4,7 @@ defmodule AutoNuke do
 
   def start(_type, _args) do
     children = [
+      {AutoNuke.CoreTemp, core: 1},
       {AutoNuke.SecondaryFill, loop: 2},
       AutoNuke.VacuumTank
     ]
