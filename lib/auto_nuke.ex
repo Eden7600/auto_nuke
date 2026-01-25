@@ -1,18 +1,15 @@
 defmodule AutoNuke do
-  @moduledoc """
-  Documentation for `AutoNuke`.
-  """
+  use Application
+  require Logger
 
-  @doc """
-  Hello world.
+  def start(_type, _args) do
+    children = [
+      PubSub,
+      AutoNuke.Ticker,
+      {AutoNuke.SecondaryFill, loop: 2}
+    ]
 
-  ## Examples
-
-      iex> AutoNuke.hello()
-      :world
-
-  """
-  def hello do
-    :world
+    opts = [strategy: :one_for_one, name: AutoNuke.Supervisor]
+    Supervisor.start_link(children, opts)
   end
 end

@@ -13,6 +13,10 @@ defmodule AutoNuke.Ticker do
   @loop_every 100
   @slew_factor 0.1
 
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, nil, opts)
+  end
+
   @impl true
   def init(nil) do
     ts = calibrate()
@@ -36,7 +40,6 @@ defmodule AutoNuke.Ticker do
   def handle_info(:loop, old_state) do
     sim_speed = get_sim_speed()
     new_state = update_state(old_state, sim_speed)
-    PubSub.publish(:ticker, {:tick, old_state.ms, new_state.ms})
     {:noreply, new_state, {:continue, :loop}}
   end
 
@@ -47,8 +50,12 @@ defmodule AutoNuke.Ticker do
     now = DateTime.utc_now()
     elapsed = DateTime.diff(now, state.last_time, :millisecond) * sim_speed
 
-    %State{state | ms: state.ms + elapsed, last_time: now}
-    |> apply_correction(timestamp, elapsed)
+    new_state =
+      %State{state | ms: state.ms + elapsed, last_time: now}
+      |> apply_correction(timestamp, elapsed)
+
+    PubSub.publish(:ticker, {:tick, state.ms, new_state.ms})
+    new_state
   end
 
   defp apply_correction(%State{} = state, game_ts, elapsed) do

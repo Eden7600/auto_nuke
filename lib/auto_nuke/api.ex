@@ -13,7 +13,12 @@ defmodule AutoNuke.API do
 
   def get_string(key), do: get(key)
   def get_integer(key), do: get(key) |> String.to_integer()
-  def get_float(key), do: get(key) |> String.to_float()
+
+  # Handles either `62.3` or just `62`.
+  def get_float(key) do
+    {float, ""} = get(key) |> Float.parse()
+    float
+  end
 
   def put(key, value) do
     req_new()
