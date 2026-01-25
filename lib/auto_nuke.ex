@@ -4,8 +4,6 @@ defmodule AutoNuke do
 
   def start(_type, _args) do
     children = [
-      PubSub,
-      AutoNuke.Ticker,
       {AutoNuke.SecondaryFill, loop: 2}
     ]
 

@@ -3,17 +3,12 @@ defmodule AutoNuke.SecondaryFill do
   require Logger
 
   defmodule State do
-    @enforce_keys [:loop, :pid, :speed]
-    defstruct(
-      loop: nil,
-      pid: nil,
-      speed: nil,
-      last_fill_level: nil,
-      last_ms: nil
-    )
+    @enforce_keys [:loop, :pid, :speed, :fill_level]
+    defstruct(@enforce_keys)
   end
 
   @log_prefix "[#{inspect(__MODULE__)}] "
+  @loop_every 100
 
   @tank_size 60000.0
   @target_percent 0.5
@@ -27,38 +22,43 @@ defmodule AutoNuke.SecondaryFill do
 
   @impl true
   def init(loop) when loop in 0..2 do
-    pid = PIDControl.new(kp: 0.5, kd: 0.2, ki: 0.03)
-    PubSub.subscribe(self(), :ticker)
-    {:ok, %State{loop: loop, pid: pid, speed: get_speed(loop)}}
+    pid = PIDControl.new(kp: 1, kd: 0, ki: 0)
+
+    state = %State{
+      loop: loop,
+      pid: pid,
+      speed: get_speed(loop),
+      fill_level: get_fill_percent(loop)
+    }
+
+    {:ok, state, {:continue, :loop}}
   end
 
   @impl true
-  def handle_info({:tick, _old_ms, new_ms}, state) do
-    fill_level = get_fill_percent(state.loop)
+  def handle_info(:loop, state) do
+    state =
+      get_fill_percent(state.loop)
+      |> update_fill_level(state)
 
-    cond do
-      is_nil(state.last_fill_level) ->
-        # First loop.
-        {:noreply, %State{state | last_fill_level: fill_level, last_ms: new_ms}}
-
-      state.last_fill_level == fill_level ->
-        # Nothing changed.
-        {:noreply, state}
-
-      true ->
-        # Fill level has changed.
-        {:noreply, update_pump_speed(state, fill_level, new_ms)}
-    end
+    {:noreply, state, {:continue, :loop}}
   end
 
-  defp update_pump_speed(state, fill_level, new_ms) do
-    pid =
-      state.pid
-      |> update_time_factor(new_ms - state.last_ms)
-      |> PIDControl.step(@target_percent, get_fill_percent(state.loop))
+  @impl true
+  def handle_continue(:loop, state) do
+    Process.send_after(self(), :loop, @loop_every)
+    {:noreply, state}
+  end
+
+  defp update_fill_level(level, %State{fill_level: level} = state) do
+    # Nothing changed.
+    state
+  end
+
+  defp update_fill_level(new_level, %State{} = state) do
+    pid = state.pid |> PIDControl.step(@target_percent, new_level)
 
     IO.inspect(pid.output, label: "output")
-    state = %State{state | pid: pid, last_fill_level: fill_level, last_ms: new_ms}
+    state = %State{state | pid: pid, fill_level: new_level}
 
     new_speed =
       (get_outlet(state.loop) / @inlet_factor)
@@ -94,9 +94,5 @@ defmodule AutoNuke.SecondaryFill do
 
   defp set_speed(loop, value) do
     AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop}_ORDERED_SPEED", value)
-  end
-
-  defp update_time_factor(pid, elapsed_ms) do
-    %PIDControl{pid | config: Map.replace!(pid.config, :t, elapsed_ms / 1000.0)}
   end
 end
