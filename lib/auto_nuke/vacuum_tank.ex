@@ -3,7 +3,7 @@ defmodule AutoNuke.VacuumTank do
   require Logger
 
   defmodule State do
-    @enforce_keys [:pid, :fill_level, :omsi, :smsi]
+    @enforce_keys [:pid, :fill_level, :omsi, :smsi, :offset]
     defstruct(@enforce_keys)
   end
 
@@ -19,14 +19,18 @@ defmodule AutoNuke.VacuumTank do
 
   @impl true
   def init(nil) do
-    pid = PIDControl.new(kp: 30, kd: 1, ki: 0.1)
+    pid = PIDControl.new(kp: 5, kd: 0.5, ki: 0.05)
+    smsi = get_smsi()
+    omsi = get_omsi()
 
-    state = %State{
-      pid: pid,
-      fill_level: get_fill_percent(),
-      smsi: get_smsi(),
-      omsi: get_omsi()
-    }
+    state =
+      %State{
+        pid: pid,
+        fill_level: get_fill_percent(),
+        smsi: get_smsi(),
+        omsi: get_omsi(),
+        offset: calculate_offset(omsi, smsi)
+      }
 
     Logger.info(@log_prefix <> "Started with fill level of #{state.fill_level * 100}%.")
     {:ok, state, {:continue, :loop}}
@@ -54,17 +58,18 @@ defmodule AutoNuke.VacuumTank do
 
   defp update_fill_level(new_level, %State{} = state) do
     pid = state.pid |> PIDControl.step(@target_percent, new_level)
+    open = pid.output + state.offset
 
-    state = %State{state | pid: pid, fill_level: new_level}
+    state = %State{state | pid: pid, fill_level: new_level, offset: state.offset * 0.999}
 
-    if pid.output < 0 do
+    if open < 0 do
       state
       |> update_smsi(0)
-      |> update_omsi(100 + round(100 * pid.output))
+      |> update_omsi(100 + round(100 * open))
     else
       state
       |> update_omsi(100)
-      |> update_smsi(round(100 * pid.output))
+      |> update_smsi(round(100 * open))
     end
   end
 
@@ -93,8 +98,12 @@ defmodule AutoNuke.VacuumTank do
 
   defp get_omsi(), do: AutoNuke.API.get_integer(@omsi <> "_ORDERED")
   defp get_smsi(), do: AutoNuke.API.get_integer(@smsi <> "_ORDERED")
-  defp get_bypass(), do: AutoNuke.API.get_integer("STEAM_TURBINE_2_BYPASS_ACTUAL")
+  # defp get_bypass(), do: AutoNuke.API.get_integer("STEAM_TURBINE_2_BYPASS_ACTUAL")
 
   defp set_omsi(value) when is_integer(value), do: AutoNuke.API.put(@omsi, value)
   defp set_smsi(value) when is_integer(value), do: AutoNuke.API.put(@smsi, value)
+
+  defp calculate_offset(omsi, smsi) do
+    (omsi + smsi - 100) / 100.0
+  end
 end
