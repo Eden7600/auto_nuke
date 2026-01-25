@@ -3,7 +3,8 @@ defmodule AutoNuke.Ticker do
   require Logger
 
   @log_prefix "[#{inspect(__MODULE__)}] "
-  @loop_every 200
+  @tick_every 200
+  @pause_wait 100
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, nil, opts)
@@ -11,29 +12,39 @@ defmodule AutoNuke.Ticker do
 
   @impl true
   def init(nil) do
-    ts = get_timestamp()
-    Logger.info(@log_prefix <> "Started with timestamp #{ts}.")
-    {:ok, get_timestamp(), {:continue, :loop}}
+    schedule_next()
+    Logger.info(@log_prefix <> "Started ticking.")
+    {:ok, 0}
   end
 
   @impl true
-  def handle_info(:loop, old_ts) do
-    case get_timestamp() do
-      ^old_ts ->
-        {:noreply, old_ts, {:continue, :loop}}
+  def handle_info(:tick, counter) do
+    PubSub.publish(:ticker, {:tick, counter})
+    schedule_next()
+    {:noreply, counter + 1}
+  end
 
-      new_ts ->
-        Logger.debug(@log_prefix <> "Ticked #{old_ts} -> #{new_ts}.")
-        PubSub.publish(:ticker, {:tick, new_ts})
-        {:noreply, new_ts, {:continue, :loop}}
+  @impl true
+  def handle_info(:paused, counter) do
+    schedule_next()
+    {:noreply, counter}
+  end
+
+  defp get_sim_speed, do: AutoNuke.API.get_integer("GAME_SIM_SPEED")
+
+  defp schedule_next do
+    {lag, speed} = :timer.tc(&get_sim_speed/0, :millisecond)
+
+    if speed == 0 do
+      Process.send_after(self(), :paused, @pause_wait)
+    else
+      interval =
+        @tick_every
+        |> div(speed)
+        |> Kernel.-(lag)
+        |> max(1)
+
+      Process.send_after(self(), :tick, interval)
     end
   end
-
-  @impl true
-  def handle_continue(:loop, state) do
-    Process.send_after(self(), :loop, @loop_every)
-    {:noreply, state}
-  end
-
-  defp get_timestamp, do: AutoNuke.API.get_integer("TIME_STAMP")
 end

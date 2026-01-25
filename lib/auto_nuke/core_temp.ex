@@ -8,9 +8,8 @@ defmodule AutoNuke.CoreTemp do
   end
 
   @log_prefix "[#{inspect(__MODULE__)}] "
-  @loop_every 100
 
-  @target_temperature 300
+  @target_temperature 280
 
   def start_link(opts) do
     {core, opts} = Keyword.pop!(opts, :core)
@@ -24,7 +23,7 @@ defmodule AutoNuke.CoreTemp do
     state =
       %State{
         core: core,
-        pid: PIDControl.new(kp: 0.01, kd: 0, ki: 0),
+        pid: PIDControl.new(kp: 0.02, kd: 0.01, ki: 0.0001),
         temperature: get_temperature(core),
         rods: rods,
         offset: calculate_offset(rods)
@@ -35,37 +34,28 @@ defmodule AutoNuke.CoreTemp do
         "Started with temperature #{state.temperature}°C and rods at #{rods / 10}%."
     )
 
-    {:ok, state, {:continue, :loop}}
+    PubSub.subscribe(self(), :ticker)
+    {:ok, state}
   end
 
   @impl true
-  def handle_info(:loop, state) do
+  def handle_info({:tick, _}, state) do
     state =
       get_temperature(state.core)
       |> update_temperature(state)
 
-    {:noreply, state, {:continue, :loop}}
-  end
-
-  @impl true
-  def handle_continue(:loop, state) do
-    Process.send_after(self(), :loop, @loop_every)
     {:noreply, state}
-  end
-
-  defp update_temperature(temp, %State{temperature: temp} = state) do
-    # Nothing changed.
-    state
   end
 
   defp update_temperature(new_temp, %State{} = state) do
     pid = state.pid |> PIDControl.step(@target_temperature, new_temp)
     rods = calculate_new_rods(pid.output + state.offset)
 
-    IO.inspect(temp: new_temp, output: pid.output, rods: rods, offset: state.offset)
+    # IO.inspect(temp: new_temp, output: pid.output, rods: rods, offset: state.offset)
 
-    %State{state | pid: pid, temperature: new_temp, offset: state.offset * 0.999}
+    %State{state | pid: pid, temperature: new_temp}
     |> update_rods(rods)
+    |> adjust_offset(pid.output)
   end
 
   defp update_rods(%State{rods: same} = state, same), do: state
@@ -103,5 +93,14 @@ defmodule AutoNuke.CoreTemp do
 
   defp calculate_offset(rods) do
     -((rods - 500) / 500)
+  end
+
+  # Reduce offset by 1% per update if we're starting to approach the PID limits.
+  defp adjust_offset(state, pid_output) do
+    if pid_output <= -0.9 or pid_output >= 0.9 do
+      %State{state | offset: state.offset * 0.99}
+    else
+      state
+    end
   end
 end
