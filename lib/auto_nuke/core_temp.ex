@@ -96,9 +96,12 @@ defmodule AutoNuke.CoreTemp do
   end
 
   # Reduce offset by 1% per update if we're starting to approach the PID limits.
-  defp adjust_offset(state, pid_output) do
-    if pid_output <= -0.9 or pid_output >= 0.9 do
-      %State{state | offset: state.offset * 0.99}
+  defp adjust_offset(state, out) do
+    if out <= -0.9 or out >= 0.9 do
+      old = state.offset
+      new = old * 0.99
+      Logger.warning(@log_prefix <> "PID at #{out}, reducing offset from #{old} to #{new}.")
+      %State{state | offset: new}
     else
       state
     end

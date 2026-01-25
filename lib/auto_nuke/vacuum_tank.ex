@@ -60,7 +60,7 @@ defmodule AutoNuke.VacuumTank do
     pid = state.pid |> PIDControl.step(@target_percent, new_level)
     open = pid.output + state.offset
 
-    state = %State{state | pid: pid, fill_level: new_level, offset: state.offset * 0.999}
+    state = %State{state | pid: pid, fill_level: new_level}
 
     if open < 0 do
       state
@@ -71,6 +71,7 @@ defmodule AutoNuke.VacuumTank do
       |> update_omsi(100)
       |> update_smsi(round(100 * open))
     end
+    |> adjust_offset(pid.output)
   end
 
   defp update_omsi(%State{omsi: same} = state, same), do: state
@@ -105,5 +106,17 @@ defmodule AutoNuke.VacuumTank do
 
   defp calculate_offset(omsi, smsi) do
     (omsi + smsi - 100) / 100.0
+  end
+
+  # Reduce offset by 1% per update if we're starting to approach the PID limits.
+  defp adjust_offset(state, out) do
+    if out <= -0.9 or out >= 0.9 do
+      old = state.offset
+      new = old * 0.99
+      Logger.warning(@log_prefix <> "PID at #{out}, reducing offset from #{old} to #{new}.")
+      %State{state | offset: new}
+    else
+      state
+    end
   end
 end
