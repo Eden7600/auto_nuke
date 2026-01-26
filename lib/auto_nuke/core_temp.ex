@@ -3,26 +3,32 @@ defmodule AutoNuke.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:core, :pid, :temperature, :rods, :offset]
+    @enforce_keys [:core, :target, :pid, :temperature, :rods, :offset]
     defstruct(@enforce_keys)
   end
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
-  @target_temperature 280
+  @default_target 285
 
   def start_link(opts) do
     {core, opts} = Keyword.pop!(opts, :core)
-    GenServer.start_link(__MODULE__, core, opts)
+    {target, opts} = Keyword.pop(opts, :target, @default_target)
+    GenServer.start_link(__MODULE__, {core, target}, opts)
+  end
+
+  def set_target(pid, target) do
+    GenServer.cast(pid, {:target, target})
   end
 
   @impl true
-  def init(core) when core in 1..9 do
+  def init({core, target}) when core in 1..9 do
     rods = get_rods(core)
 
     state =
       %State{
         core: core,
+        target: target,
         pid: PIDControl.new(kp: 0.02, kd: 0.01, ki: 0.0001),
         temperature: get_temperature(core),
         rods: rods,
@@ -39,6 +45,12 @@ defmodule AutoNuke.CoreTemp do
   end
 
   @impl true
+  def handle_cast({:target, t}, state) do
+    Logger.info("Target changed from #{state.target}°C to #{t}°C.")
+    {:noreply, %State{state | target: t}}
+  end
+
+  @impl true
   def handle_info({:tick, _}, state) do
     state =
       get_temperature(state.core)
@@ -48,7 +60,7 @@ defmodule AutoNuke.CoreTemp do
   end
 
   defp update_temperature(new_temp, %State{} = state) do
-    pid = state.pid |> PIDControl.step(@target_temperature, new_temp)
+    pid = state.pid |> PIDControl.step(state.target, new_temp)
     rods = calculate_new_rods(pid.output + state.offset)
 
     # IO.inspect(temp: new_temp, output: pid.output, rods: rods, offset: state.offset)
