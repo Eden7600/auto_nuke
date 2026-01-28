@@ -61,7 +61,7 @@ defmodule AutoNuke.CoreTemp do
 
   defp update_temperature(new_temp, %State{} = state) do
     pid = state.pid |> PIDControl.step(state.target, new_temp)
-    rods = calculate_new_rods(pid.output + state.offset)
+    rods = calculate_new_rods(pid.output + state.offset, state.rods)
 
     # IO.inspect(temp: new_temp, output: pid.output, rods: rods, offset: state.offset)
 
@@ -96,11 +96,23 @@ defmodule AutoNuke.CoreTemp do
     AutoNuke.API.put("ROD_BANK_POS_#{core - 1}_ORDERED", value / 10.0)
   end
 
-  defp calculate_new_rods(output) do
-    (500 - output * 500)
-    |> round()
-    |> min(1000)
-    |> max(0)
+  defp calculate_new_rods(output, old) do
+    new = 500 - output * 500
+
+    # Compare `new` (a float) to `old` (an integer),
+    # and reject the change unless it's almost all the way
+    # to the next number in either direction.
+    #
+    # This avoids oscillations when the float value is
+    # hovering just at the `.5` point between two settings.
+    if abs(new - old) < 0.95 do
+      old
+    else
+      new
+      |> round()
+      |> min(1000)
+      |> max(0)
+    end
   end
 
   defp calculate_offset(rods) do
