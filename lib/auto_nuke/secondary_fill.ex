@@ -39,7 +39,7 @@ defmodule AutoNuke.SecondaryFill do
 
     PubSub.subscribe(self(), :ticker)
 
-    fill_level = get_fill_percent(loop)
+    fill_level = get_fill_percent(loop) |> Float.round(2)
     Logger.info(@log_prefix <> "Started with fill level of #{fill_level * 100}%.")
 
     {:ok, state}

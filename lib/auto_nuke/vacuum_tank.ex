@@ -28,7 +28,7 @@ defmodule AutoNuke.VacuumTank do
 
     PubSub.subscribe(self(), :ticker)
 
-    fill_level = get_fill_percent()
+    fill_level = get_fill_percent() |> Float.round(2)
     Logger.info(@log_prefix <> "Started with fill level of #{fill_level * 100}%.")
 
     {:ok, axis}
