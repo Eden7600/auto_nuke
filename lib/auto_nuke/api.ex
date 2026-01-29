@@ -1,8 +1,8 @@
 defmodule AutoNuke.API do
-  @base_url Application.compile_env!(:auto_nuke, :api_url)
+  defp api_url, do: Application.fetch_env!(:auto_nuke, :api_url)
 
   defp req_new do
-    Req.new(base_url: @base_url)
+    Req.new(base_url: api_url())
   end
 
   defp get(key) do
