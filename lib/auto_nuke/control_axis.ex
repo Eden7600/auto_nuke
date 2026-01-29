@@ -8,6 +8,7 @@ defmodule AutoNuke.ControlAxis do
     {ki, opts} = Keyword.pop(opts, :ki, 0)
     {t_v_fn, opts} = Keyword.pop(opts, :to_value_fn, &Function.identity/1)
     {offset, opts} = Keyword.pop(opts, :offset, 0.0)
+    {initial, opts} = Keyword.pop(opts, :initial_value, nil)
 
     unless Enum.empty?(opts) do
       raise "Unknown options for #{__MODULE__}.new: #{Keyword.keys(opts) |> inspect()}"
@@ -17,7 +18,7 @@ defmodule AutoNuke.ControlAxis do
       pidc: PIDControl.new(kp: kp, kd: kd, ki: ki),
       offset: offset,
       to_value_fn: t_v_fn,
-      last_value: nil
+      last_value: initial
     }
   end
 

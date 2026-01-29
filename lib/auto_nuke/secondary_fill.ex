@@ -21,12 +21,15 @@ defmodule AutoNuke.SecondaryFill do
 
   @impl true
   def init(loop) when loop in 0..2 do
+    speed = get_speed(loop)
+
     axis =
       ControlAxis.new(
         kp: 1,
         ki: 0.1,
         to_value_fn: &axis_to_speed/1,
-        offset: get_speed(loop) |> speed_to_axis()
+        offset: speed |> speed_to_axis(),
+        initial_value: speed
       )
 
     state = %State{
