@@ -3,18 +3,17 @@ defmodule AutoNuke.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:core, :target, :pid, :temperature, :rods, :offset]
+    @enforce_keys [:core, :target, :axis, :last_n_temps]
     defstruct(@enforce_keys)
   end
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  alias AutoNuke.ControlAxis
 
-  @default_target 285
+  @log_prefix "[#{inspect(__MODULE__)}] "
 
   def start_link(opts) do
     {core, opts} = Keyword.pop!(opts, :core)
-    {target, opts} = Keyword.pop(opts, :target, @default_target)
-    GenServer.start_link(__MODULE__, {core, target}, opts)
+    GenServer.start_link(__MODULE__, core, opts)
   end
 
   def set_target(pid, target) do
@@ -22,25 +21,30 @@ defmodule AutoNuke.CoreTemp do
   end
 
   @impl true
-  def init({core, target}) when core in 1..9 do
+  def init(core) when core in 1..9 do
     rods = get_rods(core)
+    temp = get_temperature(core)
+
+    axis =
+      ControlAxis.new(
+        kp: 0.02,
+        kd: 0.01,
+        ki: 0.0001,
+        to_value_fn: &axis_to_rods/1,
+        offset: rods |> rods_to_axis(),
+        initial_value: rods
+      )
 
     state =
       %State{
         core: core,
-        target: target,
-        pid: PIDControl.new(kp: 0.02, kd: 0.01, ki: 0.0001),
-        temperature: get_temperature(core),
-        rods: rods,
-        offset: calculate_offset(rods)
+        target: temp,
+        last_n_temps: [temp],
+        axis: axis
       }
 
-    Logger.info(
-      @log_prefix <>
-        "Started with temperature #{state.temperature}°C and rods at #{rods / 10}%."
-    )
-
     PubSub.subscribe(self(), :ticker)
+    Logger.info(@log_prefix <> "Started with temperature #{temp}°C and rods at #{rods}%.")
     {:ok, state}
   end
 
@@ -51,83 +55,48 @@ defmodule AutoNuke.CoreTemp do
   end
 
   @impl true
-  def handle_info({:tick, _}, state) do
-    state =
-      get_temperature(state.core)
-      |> update_temperature(state)
+  def handle_info({:tick, _}, %State{core: core} = state) do
+    {temp, last_n} = get_smoothed_temperature(core, state.last_n_temps)
 
-    {:noreply, state}
+    case ControlAxis.step(state.axis, state.target, temp) do
+      {:changed, axis, new, old} ->
+        Logger.info(@log_prefix <> "Changing core #{core} rods from #{old} to #{new}.")
+        set_rods(core, new)
+        axis
+
+      {:unchanged, axis, _old_value} ->
+        axis
+    end
+    |> then(fn axis ->
+      {:noreply, %State{state | axis: axis, last_n_temps: last_n}}
+    end)
   end
 
-  defp update_temperature(new_temp, %State{} = state) do
-    pid = state.pid |> PIDControl.step(state.target, new_temp)
-    rods = calculate_new_rods(pid.output + state.offset, state.rods)
+  @temp_count 3
 
-    # IO.inspect(temp: new_temp, output: pid.output, rods: rods, offset: state.offset)
+  defp get_smoothed_temperature(core, last_n) do
+    temp = get_temperature(core)
+    last_n = [temp | Enum.take(last_n, @temp_count - 1)] |> Enum.sort()
+    middle_index = Enum.count(last_n) |> div(2)
+    median = last_n |> Enum.at(middle_index)
 
-    %State{state | pid: pid, temperature: new_temp}
-    |> update_rods(rods)
-    |> adjust_offset(pid.output)
+    {median, last_n}
+    |> IO.inspect(label: "last_n")
   end
 
-  defp update_rods(%State{rods: same} = state, same), do: state
-
-  defp update_rods(%State{core: core, rods: old} = state, new) do
-    Logger.info(
-      @log_prefix <> "Changing core #{core} control rods from #{old / 10}% to #{new / 10}%."
-    )
-
-    set_rods(core, new)
-    %State{state | rods: new}
+  defp get_temperature(core) when core in 1..9 do
+    AutoNuke.API.get_float("CORE_FUEL_#{core}_TEMPERATURE")
   end
 
-  defp get_temperature(_core) do
-    AutoNuke.API.get_float("CORE_TEMP")
-  end
-
-  # Expressed as an integer from 0..1000 where 12.3 = 123.
   defp get_rods(core) do
     AutoNuke.API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
-    |> Kernel.*(10)
-    |> round()
+    |> Float.round(1)
   end
 
-  defp set_rods(core, value) when value in 0..1000 do
-    AutoNuke.API.put("ROD_BANK_POS_#{core - 1}_ORDERED", value / 10.0)
+  defp set_rods(core, value) when value >= 0.0 and value <= 100.0 do
+    AutoNuke.API.put("ROD_BANK_POS_#{core - 1}_ORDERED", value)
   end
 
-  defp calculate_new_rods(output, old) do
-    new = 500 - output * 500
-
-    # Compare `new` (a float) to `old` (an integer),
-    # and reject the change unless it's almost all the way
-    # to the next number in either direction.
-    #
-    # This avoids oscillations when the float value is
-    # hovering just at the `.5` point between two settings.
-    if abs(new - old) < 0.95 do
-      old
-    else
-      new
-      |> round()
-      |> min(1000)
-      |> max(0)
-    end
-  end
-
-  defp calculate_offset(rods) do
-    -((rods - 500) / 500)
-  end
-
-  # Reduce offset by 1% per update if we're starting to approach the PID limits.
-  defp adjust_offset(state, out) do
-    if out <= -0.9 or out >= 0.9 do
-      old = state.offset
-      new = old * 0.99
-      Logger.warning(@log_prefix <> "PID at #{out}, reducing offset from #{old} to #{new}.")
-      %State{state | offset: new}
-    else
-      state
-    end
-  end
+  defp axis_to_rods(output), do: (50 + output * 50) |> Float.round(1)
+  defp rods_to_axis(rods), do: ((rods - 50) / 50) |> Float.round(5)
 end
