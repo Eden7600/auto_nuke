@@ -1,4 +1,4 @@
-defmodule AutoNuke.SecondaryFill do
+defmodule AutoNuke.Operator.SecondaryFill do
   use GenServer
   require Logger
 
@@ -20,7 +20,7 @@ defmodule AutoNuke.SecondaryFill do
   end
 
   @impl true
-  def init(loop) when loop in 0..2 do
+  def init(loop) when loop in 1..3 do
     speed = get_speed(loop)
 
     axis =
@@ -62,15 +62,15 @@ defmodule AutoNuke.SecondaryFill do
   end
 
   defp get_fill_percent(loop) do
-    AutoNuke.API.get_float("COOLANT_SEC_#{loop}_LIQUID_VOLUME") / @tank_size
+    AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
   end
 
   defp get_speed(loop) do
-    AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop}_ORDERED_SPEED")
+    AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED")
   end
 
   defp set_speed(loop, value) do
-    AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop}_ORDERED_SPEED", value)
+    AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
   end
 
   defp axis_to_speed(output), do: 50 + round(output * 50)

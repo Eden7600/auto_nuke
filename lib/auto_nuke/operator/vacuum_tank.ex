@@ -1,4 +1,4 @@
-defmodule AutoNuke.VacuumTank do
+defmodule AutoNuke.Operator.VacuumTank do
   use GenServer
   require Logger
 

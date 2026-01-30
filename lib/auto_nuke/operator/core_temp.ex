@@ -1,4 +1,4 @@
-defmodule AutoNuke.CoreTemp do
+defmodule AutoNuke.Operator.CoreTemp do
   use GenServer
   require Logger
 
