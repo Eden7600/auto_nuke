@@ -81,7 +81,6 @@ defmodule AutoNuke.Operator.CoreTemp do
     median = last_n |> Enum.at(middle_index)
 
     {median, last_n}
-    |> IO.inspect(label: "last_n")
   end
 
   defp get_temperature(core) when core in 1..9 do
