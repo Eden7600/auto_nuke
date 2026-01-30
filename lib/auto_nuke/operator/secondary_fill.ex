@@ -27,6 +27,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
       ControlAxis.new(
         kp: 1,
         ki: 0.1,
+        deadzone: 0.01,
         to_value_fn: &axis_to_speed/1,
         offset: speed |> speed_to_axis(),
         initial_value: speed

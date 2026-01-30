@@ -30,6 +30,7 @@ defmodule AutoNuke.Operator.CoreTemp do
         kp: 0.02,
         kd: 0.01,
         ki: 0.0001,
+        deadzone: 0.2,
         to_value_fn: &axis_to_rods/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods

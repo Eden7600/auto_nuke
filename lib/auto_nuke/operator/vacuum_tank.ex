@@ -21,6 +21,7 @@ defmodule AutoNuke.Operator.VacuumTank do
       ControlAxis.new(
         kp: 1,
         ki: 0.1,
+        deadzone: 0.01,
         to_value_fn: &axis_to_msi/1,
         offset: msi |> msi_to_axis(),
         initial_value: msi
