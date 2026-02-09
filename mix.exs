@@ -26,7 +26,8 @@ defmodule AutoNuke.MixProject do
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
       {:req, "~> 0.5.0"},
       {:pid_control, "~> 0.1.0"},
-      {:pubsub, "~> 1.0"}
+      {:pubsub, "~> 1.0"},
+      {:progress_bar, "~> 3.0"}
     ]
   end
 end
