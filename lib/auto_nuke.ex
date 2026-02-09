@@ -21,5 +21,11 @@ defmodule AutoNuke do
     Supervisor.start_link(children, opts)
   end
 
-  defp do_start?, do: Application.get_env(:auto_nuke, :start, false)
+  defp do_start? do
+    case System.fetch_env("NUKE_START") do
+      {:ok, "1"} -> true
+      {:ok, "0"} -> false
+      :error -> Application.get_env(:auto_nuke, :start, false)
+    end
+  end
 end
