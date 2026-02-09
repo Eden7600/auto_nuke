@@ -1,5 +1,10 @@
 defmodule AutoNuke.API do
-  defp api_url, do: Application.fetch_env!(:auto_nuke, :api_url)
+  defp api_url do
+    case System.fetch_env("NUKE_URL") do
+      {:ok, url} -> url
+      :error -> Application.fetch_env!(:auto_nuke, :api_url)
+    end
+  end
 
   defp req_new do
     Req.new(base_url: api_url())
@@ -20,8 +25,16 @@ defmodule AutoNuke.API do
     float
   end
 
+  def get_boolean(key) do
+    case get(key) do
+      "True" -> true
+      "False" -> false
+    end
+  end
+
   def put(key, value) do
     req_new()
     |> Req.post!(url: "/", params: [variable: key, value: value], body: "")
+    |> then(fn %{status: 200} -> :ok end)
   end
 end
