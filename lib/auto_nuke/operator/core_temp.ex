@@ -13,7 +13,8 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   def start_link(opts) do
     {core, opts} = Keyword.pop!(opts, :core)
-    GenServer.start_link(__MODULE__, core, opts)
+    {target, opts} = Keyword.pop(opts, :target)
+    GenServer.start_link(__MODULE__, {core, target}, opts)
   end
 
   def set_target(pid, target) do
@@ -21,9 +22,10 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
-  def init(core) when core in 1..9 do
+  def init({core, target}) when (core in 1..9 and is_number(target)) or is_nil(target) do
     rods = get_rods(core)
     temp = get_temperature(core)
+    target = target || temp
 
     axis =
       ControlAxis.new(
@@ -39,13 +41,17 @@ defmodule AutoNuke.Operator.CoreTemp do
     state =
       %State{
         core: core,
-        target: temp,
+        target: target,
         last_n_temps: [temp],
         axis: axis
       }
 
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Started with temperature #{temp}°C and rods at #{rods}%.")
+
+    Logger.info(
+      @log_prefix <> "Started with temperature #{temp}°C, target #{target}°C, rods at #{rods}%."
+    )
+
     {:ok, state}
   end
 

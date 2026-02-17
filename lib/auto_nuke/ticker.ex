@@ -11,7 +11,7 @@ defmodule AutoNuke.Ticker do
   # If paused, wait 50ms to check if unpaused:
   @pause_wait 50
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 

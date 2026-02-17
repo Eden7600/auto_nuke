@@ -9,7 +9,9 @@ defmodule AutoNuke.Operator.VacuumTank do
   @tank_size 40000.0
   @target_percent 0.5
 
-  def start_link(opts) do
+  def tank_size, do: @tank_size
+
+  def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 

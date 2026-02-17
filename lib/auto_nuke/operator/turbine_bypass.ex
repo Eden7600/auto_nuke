@@ -8,7 +8,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @target_percent 1.0
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
