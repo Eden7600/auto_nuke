@@ -280,6 +280,18 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp start_vacuum_pump do
     console("Condenser")
+    retention_target = AutoNuke.Operator.VacuumTank.tank_size() / 2
+
+    if API.get_float("VACUUM_RETENTION_TANK_VOLUME") < retention_target do
+      # If we don't turn off the vacuum pump,
+      # we'll likely never reach our retention target.
+      set_wait(
+        "Vacuum Pump",
+        "OFF",
+        fn -> !API.get_boolean("CONDENSER_VACUUM_PUMP_ACTIVE") end,
+        fn -> API.put("CONDENSER_VACUUM_PUMP_START_STOP", "STOP") end
+      )
+    end
 
     progress_loop(
       label: "Retention Tank Level",
@@ -303,18 +315,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.get_boolean("CONDENSER_VACUUM_PUMP_ACTIVE") end,
       fn -> API.put("CONDENSER_VACUUM_PUMP_START_STOP", "START") end
     )
-    # We sometimes stall here and I can't figure out why.
-    |> IO.inspect(label: "vacuum pump set_wait")
 
     progress_loop(
-      label: "Condenser Pressure",
+      label: "Condenser Vacuum",
       fetch: fn ->
-        API.get_float("CONDENSER_PRESSURE")
-        |> IO.inspect(label: "condenser pressure")
-        |> Kernel.*(-1)
-        |> Float.round(2)
+        (1 - API.get_float("CONDENSER_PRESSURE"))
+        |> Kernel.*(100)
+        |> round()
       end,
-      max: -0.1
+      max: 90
     )
 
     set_wait(
