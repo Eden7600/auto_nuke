@@ -12,7 +12,13 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @log_prefix "[#{inspect(__MODULE__)}] "
 
   @tank_size 60000.0
-  @target_percent 0.5
+
+  # Use 50% fill level at 60 bars of pressure.
+  @reference_pressure 60
+  @reference_level 0.5
+  # For every 10 bars deviation, adjust fill level by 5%.
+  @adjust_pressure 10
+  @adjust_level 0.05
 
   def start_link(opts) do
     {loop, opts} = Keyword.pop!(opts, :loop)
@@ -48,7 +54,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   @impl true
   def handle_info({:tick, _}, %State{loop: loop} = state) do
-    case ControlAxis.step(state.axis, @target_percent, get_fill_percent(loop)) do
+    case ControlAxis.step(state.axis, get_target_percent(loop), get_fill_percent(loop)) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing loop #{loop} speed from #{old} to #{new}.")
         set_speed(loop, new)
@@ -64,6 +70,17 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   defp get_fill_percent(loop) do
     AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
+  end
+
+  defp get_target_percent(loop) do
+    pressure = AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
+
+    # Both of these are positive if pressure is low, negative if high.
+    delta_p = @reference_pressure - pressure
+    adjust = @adjust_level * (delta_p / @adjust_pressure)
+
+    # Increase if pressure is low, decrease if high.
+    @reference_level + adjust
   end
 
   defp get_speed(loop) do
