@@ -230,7 +230,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
 
     wait("Status", "WAIT FOR CRITICAL MASS", fn ->
-      API.get_float("CORE_STATE_CRITICALITY") >= 1.0
+      API.get_boolean("CORE_CRITICAL_MASS_REACHED")
     end)
 
     progress_loop(
