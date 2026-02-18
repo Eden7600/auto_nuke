@@ -10,7 +10,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   def run([]) do
     Application.put_env(:auto_nuke, :start, false)
-    {:ok, _} = Application.ensure_all_started([:auto_nuke])
+    {:ok, _} = Application.ensure_all_started([:auto_nuke, :logger, :pubsub])
+    log_to_file("startup.log")
 
     {:ok, _} = PubSub.start_link()
     {:ok, _} = AutoNuke.Ticker.start_link()
@@ -491,5 +492,22 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       Process.sleep(500)
       progress_loop(fetch, max, check, format)
     end
+  end
+
+  defp log_to_file(file) do
+    file = Path.expand(file)
+
+    {:ok, default} = :logger.get_handler_config(:default)
+    :logger.remove_handler(:default)
+
+    :logger.add_handler(
+      :startup_handler,
+      :logger_std_h,
+      %{
+        config: %{file: String.to_charlist(file)},
+        formatter: Map.fetch!(default, :formatter),
+        level: Map.fetch!(default, :level)
+      }
+    )
   end
 end

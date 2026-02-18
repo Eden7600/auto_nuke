@@ -21,3 +21,4 @@ auto_nuke-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+/*.log
