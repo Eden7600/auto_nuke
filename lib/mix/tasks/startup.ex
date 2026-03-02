@@ -21,7 +21,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     start_primary_circulation()
     start_condenser()
     open_steam_valves()
+
+    wait_before_request()
     request_connection()
+
     enable_resistor_bank()
     load_fuel()
     achieve_criticality()
@@ -63,13 +66,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     console("Pressurizer")
     set("Thermostat", "ON")
     set("Heating Power", "ON")
-    set("Heating Power Level", "set to HIGH")
 
-    progress_loop(
-      label: "Core Pressure",
-      fetch: fn -> API.get_float("CORE_PRESSURE") |> floor() end,
-      max: 150
-    )
+    wait("Heating Power Level", "set to HIGH", fn ->
+      API.get_float("CORE_PRESSURE") > 1.0
+    end)
   end
 
   defp start_primary_circulation do
@@ -87,15 +87,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait("Circulation Pump 3", "ON", fn ->
       API.get_integer("COOLANT_CORE_CIRCULATION_PUMP_2_STATUS") in 1..2
     end)
-
-    progress_loop(
-      label: "Pump Speed",
-      fetch: fn ->
-        API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_SPEED")
-        |> floor()
-      end,
-      max: 50
-    )
   end
 
   defp start_condenser do
@@ -113,12 +104,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       "MEDIUM (50%)",
       fn -> API.get_float("CONDENSER_CIRCULATION_PUMP_ORDERED_SPEED") >= 50 end,
       fn -> API.put("CONDENSER_CIRCULATION_PUMP_ORDERED_SPEED", 50) end
-    )
-
-    progress_loop(
-      label: "Pump Speed",
-      fetch: fn -> API.get_float("CONDENSER_CIRCULATION_PUMP_SPEED") |> floor() end,
-      max: 50
     )
   end
 
@@ -143,15 +128,60 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
 
     set_wait(
+      "Operational Motive Steam Inlet",
+      "CLOSED (0%)",
+      fn -> API.get_float("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE_ORDERED") <= 0 end,
+      fn -> API.put("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE", 0) end
+    )
+
+    set_wait(
       "Condensate Return Valve",
       "CLOSED (0%)",
       fn -> API.get_float("STEAM_EJECTOR_CONDENSER_RETURN_VALVE_ORDERED") <= 0 end,
       fn -> API.put("STEAM_EJECTOR_CONDENSER_RETURN_VALVE", 0) end
     )
+  end
+
+  defp wait_before_request do
+    console("Pressurizer")
+
+    progress_loop(
+      label: "Core Pressure",
+      fetch: fn -> API.get_float("CORE_PRESSURE") |> floor() end,
+      max: 150
+    )
+
+    console("Coolant System")
+
+    progress_loop(
+      label: "Pump Speed",
+      fetch: fn ->
+        API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_SPEED")
+        |> floor()
+      end,
+      max: 50
+    )
+
+    console("Condenser")
+
+    progress_loop(
+      label: "Pump Speed",
+      fetch: fn -> API.get_float("CONDENSER_CIRCULATION_PUMP_SPEED") |> floor() end,
+      max: 50
+    )
 
     progress_loop(
       label: "SMSI",
       fetch: fn -> API.get_float("STEAM_EJECTOR_STARTUP_MOTIVE_VALVE_ACTUAL") |> floor() end,
+      max: 100
+    )
+
+    progress_loop(
+      label: "OMSI",
+      fetch: fn ->
+        (100 - API.get_float("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE_ACTUAL"))
+        |> floor()
+      end,
       max: 100
     )
 
@@ -268,15 +298,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait("Secondary Pump 3", "ON", fn ->
       API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_2_STATUS") in 1..2
     end)
-
-    progress_loop(
-      label: "Pump Speed",
-      fetch: fn ->
-        API.get_float("COOLANT_SEC_CIRCULATION_PUMP_2_SPEED")
-        |> floor()
-      end,
-      max: 50
-    )
   end
 
   defp start_vacuum_pump do
@@ -284,8 +305,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     retention_target = AutoNuke.Operator.VacuumTank.tank_size() / 2
 
     if API.get_float("VACUUM_RETENTION_TANK_VOLUME") < retention_target do
-      # If we don't turn off the vacuum pump,
-      # we'll likely never reach our retention target.
+      # This is in case the script is re-run while already starting up.
+      # If we don't turn off the vacuum pump, we'll likely never reach our retention target.
       set_wait(
         "Vacuum Pump",
         "OFF",
@@ -390,6 +411,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     console("Reactor Core")
 
+    # Make sure temperature has recovered after injection:
     progress_loop(
       label: "Primary Temperature",
       fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
