@@ -7,6 +7,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
   @log_prefix "[#{inspect(__MODULE__)}] "
 
   @target_percent 1.0
+  @deadzone 0.05
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
@@ -20,7 +21,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
       ControlAxis.new(
         kp: 1,
         ki: 0.1,
-        deadzone: 0.02,
+        deadzone: @deadzone,
         to_value_fn: &axis_to_bypass/1,
         offset: bypass |> bypass_to_axis(),
         initial_value: bypass
@@ -61,6 +62,6 @@ defmodule AutoNuke.Operator.TurbineBypass do
     AutoNuke.API.put("STEAM_TURBINE_2_BYPASS_ORDERED", value)
   end
 
-  defp axis_to_bypass(output), do: round(50 - output * 50)
-  defp bypass_to_axis(rods), do: (50 - rods) / 50
+  def axis_to_bypass(output), do: round(25 - output * 25)
+  def bypass_to_axis(bypass), do: ((25 - bypass) / 25) |> max(0.0)
 end
