@@ -8,6 +8,20 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   @width 60
 
+  # Target PPM for boron injection:
+  @boron_target 2800
+  # How carefully to inject boron (higher = more):
+  @boron_easing 3
+  # At easing of 3, we start slowing down when boron PPM is
+  # within 150 of target, since 50 g/m * 3 = 150.
+  # This should allow us to miss some data ticks (which shouldn't happen anyway)
+  # and still safely stop at the target.
+
+  # Set rods to this (%) to begin reaction:
+  @startup_rods 92
+  # Stop and maintain this temperature (°C):
+  @startup_temp 300
+
   def run([]) do
     Application.put_env(:auto_nuke, :start, false)
     {:ok, _} = Application.ensure_all_started([:auto_nuke, :logger, :pubsub])
@@ -28,7 +42,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     enable_resistor_bank()
     load_fuel()
     achieve_criticality()
-    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(core: 1, target: 275)
+    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(core: 1, target: @startup_temp)
     start_secondary_circulation()
     {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: 3)
     start_vacuum_pump()
@@ -255,9 +269,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     set_wait(
       "Control Rod Height",
-      "SET TO 93%",
-      fn -> API.get_float("ROD_BANK_POS_0_ORDERED") == 93.0 end,
-      fn -> API.put("ROD_BANK_POS_0_ORDERED", 93.0) end
+      "SET TO #{@startup_rods}%",
+      fn -> API.get_float("ROD_BANK_POS_0_ORDERED") == @startup_rods end,
+      fn -> API.put("ROD_BANK_POS_0_ORDERED", @startup_rods) end
     )
 
     wait("Status", "WAIT FOR CRITICAL MASS", fn ->
@@ -267,7 +281,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     progress_loop(
       label: "Primary Temperature",
       fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
-      max: 275
+      max: @startup_temp
     )
   end
 
@@ -393,10 +407,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         ppm = API.get_float("CHEM_BORON_PPM")
 
         rate =
-          if ppm >= 3000 do
+          if ppm >= @boron_target do
             0
           else
-            ((3000 - ppm) / 10)
+            ((@boron_target - ppm) / @boron_easing)
             |> ceil()
             |> min(50)
           end
@@ -406,7 +420,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         ppm
         |> floor()
       end,
-      max: 3000
+      max: @boron_target
     )
 
     console("Reactor Core")
@@ -415,7 +429,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     progress_loop(
       label: "Primary Temperature",
       fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
-      max: 275
+      max: @startup_temp
     )
   end
 
