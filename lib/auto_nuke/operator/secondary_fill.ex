@@ -20,6 +20,9 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @adjust_pressure 10
   @adjust_level 0.05
 
+  # Set speed to ideal speed, plus or minus this much based on fill:
+  @max_speed_deviation 10
+
   def start_link(opts) do
     {loop, opts} = Keyword.pop!(opts, :loop)
     GenServer.start_link(__MODULE__, loop, opts)
@@ -34,8 +37,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
         kp: 1,
         ki: 0.1,
         deadzone: 0.01,
-        to_value_fn: &axis_to_speed/1,
-        offset: speed |> speed_to_axis(),
+        to_value_fn: &axis_to_speed(&1, loop),
+        offset: speed |> speed_to_axis(loop),
         initial_value: speed
       )
 
@@ -83,6 +86,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
     @reference_level + adjust
   end
 
+  defp get_outlet(loop) do
+    AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+  end
+
   defp get_speed(loop) do
     AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED")
   end
@@ -91,6 +98,15 @@ defmodule AutoNuke.Operator.SecondaryFill do
     AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
   end
 
-  defp axis_to_speed(output), do: 50 + round(output * 50)
-  defp speed_to_axis(speed), do: (speed - 50) / 50
+  defp axis_to_speed(output, loop) do
+    round(ideal_speed(loop) + output * @max_speed_deviation)
+  end
+
+  defp speed_to_axis(speed, loop) do
+    ((speed - ideal_speed(loop)) / @max_speed_deviation)
+    |> max(-1.0)
+    |> min(1.0)
+  end
+
+  defp ideal_speed(loop), do: get_outlet(loop) / 2.0
 end
