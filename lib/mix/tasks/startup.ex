@@ -124,11 +124,23 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp open_steam_valves do
     console("Energy Generation")
 
-    set_wait(
+    init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
+
+    set_wait_unless(
+      "Main Steam Control Valve",
+      "REDUCED (5%)",
+      fn -> init_mscv == 5 end,
+      fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
+      fn -> API.put("MSCV_2_OPENING_ORDERED", 5) end
+    )
+
+    init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
+
+    set_wait_unless(
       "Turbine Bypass Valve 3",
       "OPEN (100%)",
-      # No read access to BYPASS_ORDERED unfortunately.
-      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") >= 1 end,
+      fn -> init_bypass == 100 end,
+      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") != init_bypass end,
       fn -> API.put("STEAM_TURBINE_2_BYPASS_ORDERED", 100) end
     )
 
@@ -373,11 +385,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp start_turbine do
     console("Energy Generation")
 
-    set_wait(
+    init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
+
+    set_wait_unless(
       "Turbine Bypass Valve 3",
       "CLOSED (0%)",
-      # No read access to BYPASS_ORDERED unfortunately.
-      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") <= 99 end,
+      fn -> init_bypass == 0 end,
+      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") != init_bypass end,
       fn -> API.put("STEAM_TURBINE_2_BYPASS_ORDERED", 0) end
     )
   end
@@ -457,6 +471,16 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp set_wait(key, value, check, set) do
     line = dot_line(key, value)
     wait_loop(line, check, set)
+  end
+
+  defp set_wait_unless(key, value, initial, check, set) do
+    line = dot_line(key, value)
+
+    if initial.() do
+      IO.puts(["\r", @checkmark_emoji, "  ", line])
+    else
+      wait_loop(line, check, set)
+    end
   end
 
   defp wait_loop(line, check, set \\ fn -> :noop end) do
