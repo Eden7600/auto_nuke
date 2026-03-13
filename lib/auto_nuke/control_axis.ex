@@ -1,6 +1,7 @@
 defmodule AutoNuke.ControlAxis do
   @enforce_keys [:pidc, :offset, :deadzone, :to_value_fn, :last_value]
   defstruct(@enforce_keys)
+  alias __MODULE__
 
   def new(opts) do
     {kp, opts} = Keyword.pop!(opts, :kp)
@@ -24,7 +25,7 @@ defmodule AutoNuke.ControlAxis do
     }
   end
 
-  def step(axis, target, measurement) do
+  def step(%ControlAxis{} = axis, target, measurement) do
     measurement = apply_deadzone(axis.deadzone, target, measurement)
     pidc = PIDControl.step(axis.pidc, target, measurement)
     {output, offset} = adjusted_output(pidc.output, axis.offset)

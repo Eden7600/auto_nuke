@@ -56,7 +56,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
-  def handle_cast({:target, t}, state) do
+  def handle_cast({:target, t}, %State{} = state) do
     Logger.info(
       @log_prefix <> "Core #{state.core} target changed from #{state.target}°C to #{t}°C."
     )
