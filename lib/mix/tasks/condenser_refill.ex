@@ -3,6 +3,7 @@ defmodule Mix.Tasks.AutoNuke.Condenser.Refill do
   @shortdoc "Refills condenser"
 
   use Mix.Task
+  alias AutoNuke.TaskUI, as: UI
 
   @tank_size 360_000
   @default_target 0.5
@@ -12,21 +13,23 @@ defmodule Mix.Tasks.AutoNuke.Condenser.Refill do
   def refill(target) when target >= 0.0 and target <= 1.0 do
     {:ok, _} = Application.ensure_all_started([:req])
 
-    set_switch(true)
-    loop_until_full(target * @tank_size)
-    set_switch(false)
-  end
+    target_volume = @tank_size * target
 
-  defp loop_until_full(target) do
-    if get_level() >= target do
-      :ok
-    else
-      Process.sleep(100)
-      loop_until_full(target)
+    if get_volume() <= target_volume do
+      set_switch(true)
+
+      UI.progress_loop(
+        label: "Condenser Level",
+        fetch: &get_volume/0,
+        max: round(target_volume)
+      )
     end
+
+    set_switch(false)
+    IO.puts("Done!")
   end
 
-  defp get_level, do: AutoNuke.API.get_float("CONDENSER_VOLUME")
+  defp get_volume, do: AutoNuke.API.get_float("CONDENSER_VOLUME") |> round()
 
   @switch "FREIGHT_PUMP_CONDENSER_SWITCH"
   defp set_switch(true), do: AutoNuke.API.put(@switch, "True")

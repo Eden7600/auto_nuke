@@ -4,9 +4,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   use Mix.Task
   alias AutoNuke.API
-  alias IO.ANSI
-
-  @width 60
+  alias AutoNuke.TaskUI, as: UI
 
   # Target PPM for boron injection:
   @boron_target 2800
@@ -32,7 +30,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   def run([]) do
     Application.put_env(:auto_nuke, :start, false)
     {:ok, _} = Application.ensure_all_started([:auto_nuke, :logger, :pubsub])
-    log_to_file("startup.log")
+    UI.log_to_file("startup.log")
 
     {:ok, _} = PubSub.start_link()
     {:ok, _} = AutoNuke.Ticker.start_link()
@@ -60,68 +58,68 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     connect_to_grid()
     {:ok, _} = AutoNuke.Operator.TurbineBypass.start_link()
 
-    console("ALL")
-    wait("Operator", "TAKE OVER", fn -> false end)
+    UI.console("ALL")
+    UI.wait("Operator", "TAKE OVER", fn -> false end)
   end
 
   defp check_power_source do
-    console("Internal Supply")
+    UI.console("Internal Supply")
 
     cond do
       API.get_float("EMERGENCY_BATTERIES_POWER_OUTPUT_KW") > 0.0 ->
-        warn("Currently running on batteries.")
-        notice("Consider enabling external power, or starting one of the generators.")
+        UI.warn("Currently running on batteries.")
+        UI.notice("Consider enabling external power, or starting one of the generators.")
 
       API.get_float("EMERGENCY_GENERATOR_POWER_OUTPUT_KW") > 0.0 ->
-        warn("Currently running on emergency generators.")
-        notice("Consider enabling external power, if available.")
+        UI.warn("Currently running on emergency generators.")
+        UI.notice("Consider enabling external power, if available.")
 
       API.get_float("POWER_FROM_EXTERNAL_KW") > 0.0 ->
-        success("Currently running on external power.")
+        UI.success("Currently running on external power.")
 
       true ->
-        warn("Can't figure out where power is coming from.")
+        UI.warn("Can't figure out where power is coming from.")
     end
   end
 
   defp start_pressurizer do
-    console("Pressurizer")
-    set("Thermostat", "ON")
-    set("Heating Power", "ON")
+    UI.console("Pressurizer")
+    UI.set("Thermostat", "ON")
+    UI.set("Heating Power", "ON")
 
-    wait("Heating Power Level", "set to HIGH", fn ->
+    UI.wait("Heating Power Level", "set to HIGH", fn ->
       API.get_float("CORE_PRESSURE") > 1.0
     end)
   end
 
   defp start_primary_circulation do
-    console("Coolant System")
+    UI.console("Coolant System")
 
     # This has to come before "pump on" because we can't tell the difference
     # between a pump that is off, and a pump that is on but set to zero.
-    set_wait(
+    UI.set_wait(
       "Primary Pump Speed",
       "MEDIUM (50%)",
       fn -> API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_ORDERED_SPEED") >= 50 end,
       fn -> API.put("COOLANT_CORE_CIRCULATION_PUMP_2_ORDERED_SPEED", 50) end
     )
 
-    wait("Circulation Pump 3", "ON", fn ->
+    UI.wait("Circulation Pump 3", "ON", fn ->
       API.get_integer("COOLANT_CORE_CIRCULATION_PUMP_2_STATUS") in 1..2
     end)
   end
 
   defp start_condenser do
-    console("Condenser")
+    UI.console("Condenser")
 
-    set_wait(
+    UI.set_wait(
       "Cooling Pump",
       "ON",
       fn -> API.get_boolean("CONDENSER_CIRCULATION_PUMP_SWITCH") end,
       fn -> API.put("CONDENSER_CIRCULATION_PUMP_SWITCH", true) end
     )
 
-    set_wait(
+    UI.set_wait(
       "Cooling Pump Speed",
       "MEDIUM (50%)",
       fn -> API.get_float("CONDENSER_CIRCULATION_PUMP_ORDERED_SPEED") >= 50 end,
@@ -130,11 +128,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp open_steam_valves do
-    console("Steam Generator")
+    UI.console("Steam Generator")
 
     init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
 
-    set_wait_unless(
+    UI.set_wait_unless(
       "Main Steam Control Valve",
       "REDUCED (#{@startup_mscv}%)",
       fn -> init_mscv == @startup_mscv end,
@@ -142,11 +140,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.put("MSCV_2_OPENING_ORDERED", @startup_mscv) end
     )
 
-    console("Generation & Distribution")
+    UI.console("Generation & Distribution")
 
     init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
 
-    set_wait_unless(
+    UI.set_wait_unless(
       "Turbine Bypass Valve 3",
       "OPEN (100%)",
       fn -> init_bypass == 100 end,
@@ -154,23 +152,23 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.put("STEAM_TURBINE_2_BYPASS_ORDERED", 100) end
     )
 
-    console("Condenser")
+    UI.console("Condenser")
 
-    set_wait(
+    UI.set_wait(
       "Startup Motive Steam Inlet",
       "OPEN (100%)",
       fn -> API.get_float("STEAM_EJECTOR_STARTUP_MOTIVE_VALVE_ORDERED") >= 100 end,
       fn -> API.put("STEAM_EJECTOR_STARTUP_MOTIVE_VALVE", 100) end
     )
 
-    set_wait(
+    UI.set_wait(
       "Operational Motive Steam Inlet",
       "CLOSED (0%)",
       fn -> API.get_float("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE_ORDERED") <= 0 end,
       fn -> API.put("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE", 0) end
     )
 
-    set_wait(
+    UI.set_wait(
       "Condensate Return Valve",
       "CLOSED (0%)",
       fn -> API.get_float("STEAM_EJECTOR_CONDENSER_RETURN_VALVE_ORDERED") <= 0 end,
@@ -179,16 +177,16 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp request_connection do
-    tablet("Communications Center")
-    set("Start Operations", "REQUEST")
-    set("Response", "WAIT FOR PERMISSION")
+    UI.tablet("Communications Center")
+    UI.set("Start Operations", "REQUEST")
+    UI.set("Response", "WAIT FOR PERMISSION")
     IO.gets("Press enter when permission received ...")
   end
 
   defp wait_before_load_fuel do
-    console("Coolant System")
+    UI.console("Coolant System")
 
-    progress_loop(
+    UI.progress_loop(
       label: "Pump Speed",
       fetch: fn ->
         API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_SPEED")
@@ -197,21 +195,21 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 50
     )
 
-    console("Condenser")
+    UI.console("Condenser")
 
-    progress_loop(
+    UI.progress_loop(
       label: "Pump Speed",
       fetch: fn -> API.get_float("CONDENSER_CIRCULATION_PUMP_SPEED") |> floor() end,
       max: 50
     )
 
-    progress_loop(
+    UI.progress_loop(
       label: "SMSI",
       fetch: fn -> API.get_float("STEAM_EJECTOR_STARTUP_MOTIVE_VALVE_ACTUAL") |> floor() end,
       max: 100
     )
 
-    progress_loop(
+    UI.progress_loop(
       label: "OMSI",
       fetch: fn ->
         (100 - API.get_float("STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE_ACTUAL"))
@@ -220,7 +218,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 100
     )
 
-    progress_loop(
+    UI.progress_loop(
       label: "CRV",
       fetch: fn ->
         (100 - API.get_float("STEAM_EJECTOR_CONDENSER_RETURN_VALVE_ACTUAL"))
@@ -229,9 +227,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 100
     )
 
-    console("Steam Generator")
+    UI.console("Steam Generator")
 
-    progress_loop(
+    UI.progress_loop(
       label: "MSCV",
       fetch: fn ->
         # Hack to support the fact that progress bars must be ascending:
@@ -241,25 +239,25 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 100
     )
 
-    console("Generation & Distribution")
+    UI.console("Generation & Distribution")
 
-    progress_loop(
+    UI.progress_loop(
       label: "Bypass",
       fetch: fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") |> floor() end,
       max: 100
     )
 
-    console("Pressurizer")
+    UI.console("Pressurizer")
 
-    progress_loop(
+    UI.progress_loop(
       label: "Core Pressure",
       fetch: fn -> API.get_float("CORE_PRESSURE") |> floor() end,
       max: 150
     )
 
-    console("Chemical Treatemnt")
+    UI.console("Chemical Treatemnt")
 
-    progress_loop(
+    UI.progress_loop(
       label: "Boron PPM",
       fetch: fn -> API.get_float("CHEM_BORON_PPM") |> Float.round(1) end,
       max: @boron_target
@@ -267,16 +265,16 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp enable_resistor_bank do
-    console("Generation & Distribution")
+    UI.console("Generation & Distribution")
 
-    set_wait(
+    UI.set_wait(
       "Resistor Bank Main Switch",
       "ON",
       fn -> API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH") end,
       fn -> API.put("RESISTOR_BANKS_MAIN_SWITCH", true) end
     )
 
-    set_wait(
+    UI.set_wait(
       "Resistor Bank Switch 1",
       "ON",
       fn -> API.get_boolean("RESISTOR_BANK_01_SWITCH") end,
@@ -285,42 +283,42 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp load_fuel do
-    console("Fuel")
+    UI.console("Fuel")
 
-    set_wait(
+    UI.set_wait(
       "Operating Mode",
       "NOMINAL",
       fn -> API.get_string("CORE_OPERATION_MODE") == "NOMINAL" end,
       fn -> API.put("CORE_OPERATION_MODE", "NOMINAL") end
     )
 
-    set_wait(
+    UI.set_wait(
       "Lower Piston",
       "PRESS",
       fn -> API.get_float("CORE_FUEL_1_FISSIONABLE") > 0 end,
       fn -> API.put("CORE_BAY_1_FUEL_LOADING", "LOAD") end
     )
 
-    wait("Fuel Temperature Gauge", "CONFIRM ACTIVE", fn ->
+    UI.wait("Fuel Temperature Gauge", "CONFIRM ACTIVE", fn ->
       API.get_float("CORE_FUEL_1_TEMPERATURE") > 20
     end)
   end
 
   defp achieve_criticality do
-    console("Reactor Core")
+    UI.console("Reactor Core")
 
-    set_wait(
+    UI.set_wait(
       "Control Rod Height",
       "SET TO #{@startup_rods}%",
       fn -> API.get_float("ROD_BANK_POS_0_ORDERED") == @startup_rods end,
       fn -> API.put("ROD_BANK_POS_0_ORDERED", @startup_rods) end
     )
 
-    wait("Status", "WAIT FOR CRITICAL MASS", fn ->
+    UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
     end)
 
-    progress_loop(
+    UI.progress_loop(
       label: "Primary Temperature",
       fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
       max: @startup_temp
@@ -328,30 +326,30 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp start_secondary_circulation do
-    console("Steam Generator")
+    UI.console("Steam Generator")
 
     # This has to come before "pump on" because we can't tell the difference
     # between a pump that is off, and a pump that is on but set to zero.
-    set_wait(
+    UI.set_wait(
       "Secondary Pump Speed",
       "MEDIUM (50%)",
       fn -> API.get_float("COOLANT_SEC_CIRCULATION_PUMP_2_ORDERED_SPEED") >= 50 end,
       fn -> API.put("COOLANT_SEC_CIRCULATION_PUMP_2_ORDERED_SPEED", 50) end
     )
 
-    wait("Secondary Pump 3", "ON", fn ->
+    UI.wait("Secondary Pump 3", "ON", fn ->
       API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_2_STATUS") in 1..2
     end)
   end
 
   defp start_vacuum_pump do
-    console("Condenser")
+    UI.console("Condenser")
     retention_target = AutoNuke.Operator.VacuumTank.tank_size() * @retention_percent / 100.0
 
     if API.get_float("VACUUM_RETENTION_TANK_VOLUME") < retention_target do
       # This is in case the script is re-run while already starting up.
       # If we don't turn off the vacuum pump, we'll likely never reach our retention target.
-      set_wait(
+      UI.set_wait(
         "Vacuum Pump",
         "OFF",
         fn -> !API.get_boolean("CONDENSER_VACUUM_PUMP_ACTIVE") end,
@@ -359,7 +357,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       )
     end
 
-    progress_loop(
+    UI.progress_loop(
       label: "Retention Tank Level",
       fetch: fn ->
         API.get_float("VACUUM_RETENTION_TANK_VOLUME")
@@ -368,21 +366,21 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: round(retention_target)
     )
 
-    set_wait(
+    UI.set_wait(
       "Vacuum Pump Mode",
       "STARTUP",
       fn -> API.get_string("CONDENSER_VACUUM_PUMP_MODE") == "STARTUP" end,
       fn -> API.put("CONDENSER_VACUUM_PUMP_MODE", "STARTUP") end
     )
 
-    set_wait(
+    UI.set_wait(
       "Vacuum Pump",
       "ON",
       fn -> API.get_boolean("CONDENSER_VACUUM_PUMP_ACTIVE") end,
       fn -> API.put("CONDENSER_VACUUM_PUMP_START_STOP", "START") end
     )
 
-    progress_loop(
+    UI.progress_loop(
       label: "Condenser Vacuum",
       fetch: fn ->
         (1 - API.get_float("CONDENSER_PRESSURE"))
@@ -392,7 +390,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 90
     )
 
-    set_wait(
+    UI.set_wait(
       "Vacuum Pump Mode",
       "OPERATIONAL",
       fn -> API.get_string("CONDENSER_VACUUM_PUMP_MODE") == "OPERACIONAL" end,
@@ -401,11 +399,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp start_turbine do
-    console("Generation & Distribution")
+    UI.console("Generation & Distribution")
 
     init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
 
-    set_wait_unless(
+    UI.set_wait_unless(
       "Turbine Bypass Valve 3",
       "CLOSED (0%)",
       fn -> init_bypass == 0 end,
@@ -415,27 +413,27 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp connect_to_grid do
-    console("Generation & Distribution")
+    UI.console("Generation & Distribution")
 
-    progress_loop(
+    UI.progress_loop(
       label: "RPM",
       fetch: fn -> API.get_float("STEAM_TURBINE_2_RPM") |> round() end,
       max: 3050
     )
 
-    set("Synchroscope / RPM", "ADJUST UNTIL SYNC")
+    UI.set("Synchroscope / RPM", "ADJUST UNTIL SYNC")
 
-    wait("Circuit Breaker", "CLOSE", fn ->
+    UI.wait("Circuit Breaker", "CLOSE", fn ->
       !API.get_boolean("GENERATOR_2_BREAKER")
     end)
   end
 
   defp begin_injecting_boron do
-    console("Chemical Treatment")
+    UI.console("Chemical Treatment")
 
     init_boron = API.get_float("CHEM_BORON_PPM")
 
-    set_wait_unless(
+    UI.set_wait_unless(
       "Boron Injection",
       "BEGIN",
       fn -> init_boron >= @boron_target end,
@@ -466,129 +464,5 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     Process.sleep(500)
     inject_boron_loop()
-  end
-
-  @warning_emoji "\u26a0\ufe0f"
-  @checkmark_emoji "\u2705\ufe0f"
-  @right_triangle_emoji "\u25b6\ufe0f"
-  @pointing_emoji "\u{1f449}\ufe0f"
-  @panel_emoji "\u{1f39b}\ufe0f"
-  @spin_emoji "\u{1f504}\ufe0f"
-  # @hourglass_emoji "\u23f3\ufe0f"
-  @phone_emoji "\u{1f4f2}\ufe0f"
-
-  defp console(name), do: IO.puts(["\n", @panel_emoji, " ", String.upcase(name), ":"])
-  defp tablet(name), do: IO.puts(["\n", @phone_emoji, " ", String.upcase(name), ":"])
-
-  defp set(key, value) do
-    dot_line(key, value, @pointing_emoji) |> IO.puts()
-  end
-
-  defp wait(key, value, check) do
-    line = dot_line(key, value)
-    wait_loop(line, check)
-  end
-
-  defp set_wait(key, value, check, set) do
-    line = dot_line(key, value)
-    wait_loop(line, check, set)
-  end
-
-  defp set_wait_unless(key, value, initial, check, set) do
-    line = dot_line(key, value)
-
-    if initial.() do
-      IO.puts(["\r", @checkmark_emoji, "  ", line])
-    else
-      wait_loop(line, check, set)
-    end
-  end
-
-  defp wait_loop(line, check, set \\ fn -> :noop end) do
-    if check.() do
-      IO.puts(["\r", @checkmark_emoji, "  ", line])
-    else
-      IO.write(["\r", @pointing_emoji, "  ", line])
-      set.()
-      Process.sleep(500)
-      wait_loop(line, check)
-    end
-  end
-
-  defp dot_line(key, value, emoji \\ nil) do
-    dot_count = @width - String.length(key) - String.length(value) - 6
-    dots = String.duplicate(".", max(dot_count, 3))
-    line = [key, " ", dots, " ", value]
-
-    case emoji do
-      nil -> line
-      str when is_binary(str) -> [emoji, "  " | line]
-    end
-  end
-
-  defp warn(msg) do
-    IO.puts([
-      ANSI.yellow(),
-      @warning_emoji,
-      " ",
-      msg,
-      ANSI.reset()
-    ])
-  end
-
-  defp success(msg), do: IO.puts([@checkmark_emoji, "  ", msg])
-  defp notice(msg), do: IO.puts([@right_triangle_emoji, "  ", msg])
-
-  defp progress_loop(opts) do
-    fetch = Keyword.fetch!(opts, :fetch)
-    max = Keyword.fetch!(opts, :max)
-    check = Keyword.get(opts, :check, fn v -> v >= max end)
-
-    label =
-      case Keyword.fetch(opts, :label) do
-        {:ok, l} -> "#{@spin_emoji}  #{l}"
-        :error -> "#{@spin_emoji} "
-      end
-
-    format = [
-      left: "#{label} [",
-      right: "]",
-      width: @width - 1,
-      percent: false,
-      suffix: :count
-    ]
-
-    progress_loop(fetch, max, check, format)
-  end
-
-  defp progress_loop(fetch, max, check, format) do
-    value = fetch.()
-
-    if check.(value) do
-      format = Keyword.update!(format, :left, &String.replace(&1, @spin_emoji, @checkmark_emoji))
-      ProgressBar.render(min(value, max), max, format)
-      :ok
-    else
-      ProgressBar.render(value, max, format)
-      Process.sleep(500)
-      progress_loop(fetch, max, check, format)
-    end
-  end
-
-  defp log_to_file(file) do
-    file = Path.expand(file)
-
-    {:ok, default} = :logger.get_handler_config(:default)
-    :logger.remove_handler(:default)
-
-    :logger.add_handler(
-      :startup_handler,
-      :logger_std_h,
-      %{
-        config: %{file: String.to_charlist(file)},
-        formatter: Map.fetch!(default, :formatter),
-        level: Map.fetch!(default, :level)
-      }
-    )
   end
 end
