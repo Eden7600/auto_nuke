@@ -18,9 +18,16 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # and still safely stop at the target.
 
   # Set rods to this (%) to begin reaction:
-  @startup_rods 92
+  @startup_rods 78
   # Stop and maintain this temperature (°C):
   @startup_temp 300
+  # Open or close MSCV to this (%):
+  @startup_mscv 5
+
+  # Need at least this % in the retention tank before we start the vacuum pump:
+  @retention_percent 45
+  # The reason we don't use 50% is that we'll already have the retention tank
+  # process running and targeting 50%, and it might linger around 49%.
 
   def run([]) do
     Application.put_env(:auto_nuke, :start, false)
@@ -33,24 +40,25 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     check_power_source()
     start_pressurizer()
     start_primary_circulation()
+    begin_injecting_boron()
     start_condenser()
     open_steam_valves()
+    enable_resistor_bank()
 
-    wait_before_request()
     request_connection()
 
-    enable_resistor_bank()
+    wait_before_load_fuel()
     load_fuel()
-    achieve_criticality()
-    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(core: 1, target: @startup_temp)
+
     start_secondary_circulation()
     {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: 3)
-    start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
+    achieve_criticality()
+    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(core: 1, target: @startup_temp)
+    start_vacuum_pump()
     start_turbine()
     connect_to_grid()
     {:ok, _} = AutoNuke.Operator.TurbineBypass.start_link()
-    inject_boron()
 
     console("ALL")
     wait("Operator", "TAKE OVER", fn -> false end)
@@ -122,17 +130,19 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp open_steam_valves do
-    console("Energy Generation")
+    console("Steam Generator")
 
     init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
 
     set_wait_unless(
       "Main Steam Control Valve",
-      "REDUCED (5%)",
-      fn -> init_mscv == 5 end,
+      "REDUCED (#{@startup_mscv}%)",
+      fn -> init_mscv == @startup_mscv end,
       fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
-      fn -> API.put("MSCV_2_OPENING_ORDERED", 5) end
+      fn -> API.put("MSCV_2_OPENING_ORDERED", @startup_mscv) end
     )
+
+    console("Generation & Distribution")
 
     init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
 
@@ -168,15 +178,14 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  defp wait_before_request do
-    console("Pressurizer")
+  defp request_connection do
+    tablet("Communications Center")
+    set("Start Operations", "REQUEST")
+    set("Response", "WAIT FOR PERMISSION")
+    IO.gets("Press enter when permission received ...")
+  end
 
-    progress_loop(
-      label: "Core Pressure",
-      fetch: fn -> API.get_float("CORE_PRESSURE") |> floor() end,
-      max: 150
-    )
-
+  defp wait_before_load_fuel do
     console("Coolant System")
 
     progress_loop(
@@ -220,24 +229,45 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 100
     )
 
-    console("Energy Generation")
+    console("Steam Generator")
+
+    progress_loop(
+      label: "MSCV",
+      fetch: fn ->
+        # Hack to support the fact that progress bars must be ascending:
+        delta = abs(@startup_mscv - API.get_float("MSCV_2_OPENING_ACTUAL")) |> ceil()
+        100 - delta
+      end,
+      max: 100
+    )
+
+    console("Generation & Distribution")
 
     progress_loop(
       label: "Bypass",
       fetch: fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") |> floor() end,
       max: 100
     )
-  end
 
-  defp request_connection do
-    tablet("Communications Center")
-    set("Start Operations", "REQUEST")
-    set("Response", "WAIT FOR PERMISSION")
-    IO.gets("Press enter when permission received ...")
+    console("Pressurizer")
+
+    progress_loop(
+      label: "Core Pressure",
+      fetch: fn -> API.get_float("CORE_PRESSURE") |> floor() end,
+      max: 150
+    )
+
+    console("Chemical Treatemnt")
+
+    progress_loop(
+      label: "Boron PPM",
+      fetch: fn -> API.get_float("CHEM_BORON_PPM") |> Float.round(1) end,
+      max: @boron_target
+    )
   end
 
   defp enable_resistor_bank do
-    console("Energy Generation")
+    console("Generation & Distribution")
 
     set_wait(
       "Resistor Bank Main Switch",
@@ -298,19 +328,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp start_secondary_circulation do
-    console("Steam Generation")
-
-    progress_loop(
-      label: "Secondary Temperature",
-      fetch: fn -> API.get_float("COOLANT_SEC_2_TEMPERATURE") |> floor() end,
-      max: 100
-    )
-
-    progress_loop(
-      label: "Secondary Pressure",
-      fetch: fn -> API.get_float("COOLANT_SEC_2_PRESSURE") |> Float.round(1) end,
-      max: 10
-    )
+    console("Steam Generator")
 
     # This has to come before "pump on" because we can't tell the difference
     # between a pump that is off, and a pump that is on but set to zero.
@@ -328,7 +346,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp start_vacuum_pump do
     console("Condenser")
-    retention_target = AutoNuke.Operator.VacuumTank.tank_size() / 2
+    retention_target = AutoNuke.Operator.VacuumTank.tank_size() * @retention_percent / 100.0
 
     if API.get_float("VACUUM_RETENTION_TANK_VOLUME") < retention_target do
       # This is in case the script is re-run while already starting up.
@@ -347,7 +365,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         API.get_float("VACUUM_RETENTION_TANK_VOLUME")
         |> floor()
       end,
-      max: round(AutoNuke.Operator.VacuumTank.tank_size() / 2)
+      max: round(retention_target)
     )
 
     set_wait(
@@ -383,7 +401,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp start_turbine do
-    console("Energy Generation")
+    console("Generation & Distribution")
 
     init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
 
@@ -397,7 +415,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp connect_to_grid do
-    console("Energy Generation")
+    console("Generation & Distribution")
 
     progress_loop(
       label: "RPM",
@@ -412,39 +430,42 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
   end
 
-  defp inject_boron do
+  defp begin_injecting_boron do
     console("Chemical Treatment")
 
-    progress_loop(
-      label: "Boron PPM",
-      fetch: fn ->
-        ppm = API.get_float("CHEM_BORON_PPM")
+    init_boron = API.get_float("CHEM_BORON_PPM")
 
-        rate =
-          if ppm >= @boron_target do
-            0
-          else
-            ((@boron_target - ppm) / @boron_easing)
-            |> ceil()
-            |> min(50)
-          end
-
-        API.put("CHEM_BORON_DOSAGE_ORDERED_RATE", rate)
-
-        ppm
-        |> floor()
-      end,
-      max: @boron_target
+    set_wait_unless(
+      "Boron Injection",
+      "BEGIN",
+      fn -> init_boron >= @boron_target end,
+      fn -> API.get_float("CHEM_BORON_PPM") > init_boron end,
+      fn ->
+        spawn_link(fn ->
+          # Ensure only one:
+          Process.register(self(), :boron_injector)
+          inject_boron_loop()
+        end)
+      end
     )
+  end
 
-    console("Reactor Core")
+  defp inject_boron_loop do
+    ppm = API.get_float("CHEM_BORON_PPM")
 
-    # Make sure temperature has recovered after injection:
-    progress_loop(
-      label: "Primary Temperature",
-      fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
-      max: @startup_temp
-    )
+    rate =
+      if ppm >= @boron_target do
+        0
+      else
+        ((@boron_target - ppm) / @boron_easing)
+        |> ceil()
+        |> min(50)
+      end
+
+    API.put("CHEM_BORON_DOSAGE_ORDERED_RATE", rate)
+
+    Process.sleep(500)
+    inject_boron_loop()
   end
 
   @warning_emoji "\u26a0\ufe0f"
