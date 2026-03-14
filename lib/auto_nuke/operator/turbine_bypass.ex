@@ -63,5 +63,5 @@ defmodule AutoNuke.Operator.TurbineBypass do
   end
 
   def axis_to_bypass(output), do: round(25 - output * 25)
-  def bypass_to_axis(bypass), do: ((25 - bypass) / 25) |> max(0.0)
+  def bypass_to_axis(bypass), do: (25 - bypass) / 25
 end
