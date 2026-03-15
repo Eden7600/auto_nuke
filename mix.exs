@@ -27,7 +27,8 @@ defmodule AutoNuke.MixProject do
       {:req, "~> 0.5.0"},
       {:pid_control, "~> 0.1.0"},
       {:pubsub, "~> 1.0"},
-      {:progress_bar, "~> 3.0"}
+      {:progress_bar, "~> 3.0"},
+      {:ex_git_test, "~> 0.1.2", only: [:dev, :test], runtime: false}
     ]
   end
 end
