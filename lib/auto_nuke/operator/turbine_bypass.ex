@@ -2,11 +2,17 @@ defmodule AutoNuke.Operator.TurbineBypass do
   use GenServer
   require Logger
 
+  alias AutoNuke.Smoother
+
   defmodule State do
+    # Give us the average of the last 5 ticks (1 sec) of generation:
+    @generator_smoothing 5
+
     @enforce_keys [:axis, :limiter]
     defstruct(
       axis: nil,
-      limiter: nil
+      limiter: nil,
+      smoothed_generation: Smoother.new(@generator_smoothing)
     )
   end
 
@@ -49,7 +55,9 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @impl true
   def handle_info({:tick, _}, %State{axis: axis} = state) do
-    case ControlAxis.step(axis, @target_percent, get_demand_ratio()) do
+    {ratio, %State{} = state} = get_demand_ratio(state)
+
+    case ControlAxis.step(axis, @target_percent, ratio) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing bypass from #{old} to #{new}.")
         limiter = TorqueLimiter.set_bypass(state.limiter, new)
@@ -64,14 +72,21 @@ defmodule AutoNuke.Operator.TurbineBypass do
     end)
   end
 
-  defp get_demand_ratio do
-    generated_kw = AutoNuke.API.get_float("GENERATOR_2_KW")
+  defp get_demand_ratio(%State{smoothed_generation: smoothed} = state) do
+    smoothed = smoothed |> Smoother.add(get_generation_kw())
+
+    generated_kw = Smoother.average(smoothed)
     used_kw = AutoNuke.API.get_float("POWER_FROM_TURBINE_KW")
     demand_kw = AutoNuke.API.get_float("POWER_DEMAND_MW") * 1000
-    (generated_kw - used_kw) / demand_kw
+    ratio = (generated_kw - used_kw) / demand_kw
+
+    {ratio, %State{state | smoothed_generation: smoothed}}
   end
 
-
+  defp get_generation_kw do
+    # TODO: add other generators
+    AutoNuke.API.get_float("GENERATOR_2_KW")
+  end
 
   def axis_to_bypass(output), do: round(50 - output * 50)
   def bypass_to_axis(bypass), do: (50 - bypass) / 50
