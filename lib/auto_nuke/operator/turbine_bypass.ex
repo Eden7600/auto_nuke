@@ -6,8 +6,8 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
-  @target_percent 1.0
-  @deadzone 0.05
+  @target_percent 0.975
+  @deadzone 0.025
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
@@ -50,8 +50,9 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   defp get_demand_ratio do
     generated_kw = AutoNuke.API.get_float("GENERATOR_2_KW")
+    used_kw = AutoNuke.API.get_float("POWER_FROM_TURBINE_KW")
     demand_kw = AutoNuke.API.get_float("POWER_DEMAND_MW") * 1000
-    generated_kw / demand_kw
+    (generated_kw - used_kw) / demand_kw
   end
 
   defp get_bypass do
