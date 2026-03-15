@@ -7,6 +7,7 @@ defmodule AutoNuke.Smoother do
   )
 
   alias __MODULE__
+  require Integer
 
   def new(max_size) when is_integer(max_size) and max_size > 1, do: %Smoother{max: max_size}
 
@@ -27,10 +28,27 @@ defmodule AutoNuke.Smoother do
     }
   end
 
-  def average(%Smoother{data: data, size: size}) do
+  def average(%Smoother{data: data, size: size}) when size > 0 do
     data
     |> :queue.to_list()
     |> Enum.sum()
     |> Kernel./(size)
+  end
+
+  def median(%Smoother{data: data, size: size}) when Integer.is_odd(size) and size > 0 do
+    data
+    |> :queue.to_list()
+    |> Enum.sort()
+    |> Enum.at(div(size, 2))
+  end
+
+  def median(%Smoother{data: data, size: size}) when Integer.is_even(size) and size > 0 do
+    [a, b] =
+      data
+      |> :queue.to_list()
+      |> Enum.sort()
+      |> Enum.slice(div(size, 2) - 1, 2)
+
+    (a + b) / 2
   end
 end

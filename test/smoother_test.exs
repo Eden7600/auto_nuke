@@ -50,4 +50,27 @@ defmodule AutoNuke.SmootherTest do
     smoother = smoother |> Smoother.add(19)
     assert Smoother.average(smoother) == 12.8
   end
+
+  test "Smoother.median/1 returns median of stored data" do
+    smoother = Smoother.new(5) |> Smoother.add(100)
+    # Only one entry, so that's the median.
+    assert Smoother.median(smoother) == 100
+
+    smoother = smoother |> Smoother.add(200)
+    # Two entries, median is the average.
+    assert Smoother.median(smoother) == 150
+
+    # [100, >200<, 300]
+    smoother = smoother |> Smoother.add(300)
+    assert Smoother.median(smoother) == 200
+    # [100, >200, 250<, 300] = 225
+    smoother = smoother |> Smoother.add(250)
+    assert Smoother.median(smoother) == 225
+    # [100, 150, >200<, 250, 300]
+    smoother = smoother |> Smoother.add(150)
+    assert Smoother.median(smoother) == 200
+    # [150, 200, >250<, 300, 400]
+    smoother = smoother |> Smoother.add(400)
+    assert Smoother.median(smoother) == 250
+  end
 end

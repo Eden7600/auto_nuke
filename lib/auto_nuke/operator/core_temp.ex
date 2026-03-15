@@ -3,13 +3,18 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:core, :target, :axis, :last_n_temps]
+    @enforce_keys [:core, :target, :axis, :smoothed_temp]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
+  alias AutoNuke.Smoother
 
   @log_prefix "[#{inspect(__MODULE__)}] "
+
+  # Core temperature tends to have semi-rare transient spikes depending on read timing.
+  # To mitigate this, use the median of the last 5 readings (~1 second at normal speed).
+  @temp_smoothing 5
 
   def start_link(opts) do
     {core, opts} = Keyword.pop!(opts, :core)
@@ -42,7 +47,7 @@ defmodule AutoNuke.Operator.CoreTemp do
       %State{
         core: core,
         target: target,
-        last_n_temps: [temp],
+        smoothed_temp: Smoother.new(@temp_smoothing) |> Smoother.add(temp),
         axis: axis
       }
 
@@ -66,7 +71,8 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_info({:tick, _}, %State{core: core} = state) do
-    {temp, last_n} = get_smoothed_temperature(core, state.last_n_temps)
+    smoother = state.smoothed_temp |> Smoother.add(get_temperature(core))
+    temp = Smoother.median(smoother)
 
     case ControlAxis.step(state.axis, state.target, temp) do
       {:changed, axis, new, old} ->
@@ -78,19 +84,8 @@ defmodule AutoNuke.Operator.CoreTemp do
         axis
     end
     |> then(fn axis ->
-      {:noreply, %State{state | axis: axis, last_n_temps: last_n}}
+      {:noreply, %State{state | axis: axis, smoothed_temp: smoother}}
     end)
-  end
-
-  @temp_count 3
-
-  defp get_smoothed_temperature(core, last_n) do
-    temp = get_temperature(core)
-    last_n = [temp | Enum.take(last_n, @temp_count - 1)]
-    middle_index = Enum.count(last_n) |> div(2)
-    median = last_n |> Enum.sort() |> Enum.at(middle_index)
-
-    {median, last_n}
   end
 
   defp get_temperature(core) when core in 1..9 do
