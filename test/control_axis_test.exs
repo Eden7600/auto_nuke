@@ -50,6 +50,29 @@ defmodule AutoNuke.ControlAxisTest do
     assert_in_delta axis.offset, 0.0, 0.0001
   end
 
+  test "scales offset towards zero when positive offset meets max negative output" do
+    axis = CA.new(kp: 1, offset: 0.3)
+
+    assert {:changed, axis, -0.7, nil} = CA.step(axis, 0, 5)
+    assert_in_delta axis.offset, 0.285, 0.0001
+
+    assert {:changed, axis, output, -0.7} = CA.step(axis, 0, 5)
+    assert_in_delta output, -0.715, 0.0001
+    assert_in_delta axis.offset, 0.27075, 0.0001
+  end
+
+  test "scales offset towards zero when negative offset meets max positive output" do
+    axis = CA.new(kp: 1, offset: -0.8)
+
+    assert {:changed, axis, output1, nil} = CA.step(axis, 0, -5)
+    assert_in_delta output1, 0.2, 0.0001
+    assert_in_delta axis.offset, -0.76, 0.0001
+
+    assert {:changed, axis, output2, ^output1} = CA.step(axis, 0, -5)
+    assert_in_delta output2, 0.24, 0.0001
+    assert_in_delta axis.offset, -0.722, 0.0001
+  end
+
   defp settle_loop(_axis, full, full, remaining, overshoots),
     do: {:complete, remaining, overshoots}
 

@@ -47,6 +47,8 @@ defmodule AutoNuke.ControlAxis do
     cond do
       adjusted > 1.0 -> {1.0, offset - (adjusted - 1.0)}
       adjusted < -1.0 -> {-1.0, offset - (adjusted + 1.0)}
+      output == -1.0 && offset > 0 -> {adjusted, offset * 0.95}
+      output == 1.0 && offset < 0 -> {adjusted, offset * 0.95}
       true -> {adjusted, offset}
     end
   end
