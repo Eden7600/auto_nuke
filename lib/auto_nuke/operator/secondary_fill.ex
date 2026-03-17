@@ -9,8 +9,6 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   alias AutoNuke.ControlAxis
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
-
   @tank_size 60000.0
 
   # Use 50% fill level at 60 bars of pressure.
@@ -23,6 +21,15 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # Set speed to ideal speed, plus or minus this much based on fill:
   @max_speed_deviation 10
 
+  def child_spec(opts) do
+    loop = Keyword.fetch!(opts, :loop)
+
+    %{
+      id: __MODULE__ |> Module.concat("L#{loop}"),
+      start: {__MODULE__, :start_link, [opts]}
+    }
+  end
+
   def start_link(opts) do
     {loop, opts} = Keyword.pop!(opts, :loop)
     GenServer.start_link(__MODULE__, loop, opts)
@@ -30,6 +37,15 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   @impl true
   def init(loop) when loop in 1..3 do
+    if is_installed?(loop) do
+      do_init(loop)
+    else
+      Logger.info(log_prefix(loop) <> "Steam generator is not installed.")
+      {:ok, nil}
+    end
+  end
+
+  defp do_init(loop) do
     speed = get_speed(loop)
 
     axis =
@@ -50,7 +66,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
     PubSub.subscribe(self(), :ticker)
 
     fill_level = get_fill_percent(loop) |> Float.round(2)
-    Logger.info(@log_prefix <> "Started with fill level of #{fill_level * 100}%.")
+    Logger.info(log_prefix(loop) <> "Started with fill level of #{fill_level * 100}%.")
 
     {:ok, state}
   end
@@ -59,7 +75,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
   def handle_info({:tick, _}, %State{loop: loop} = state) do
     case ControlAxis.step(state.axis, get_target_percent(loop), get_fill_percent(loop)) do
       {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing loop #{loop} speed from #{old} to #{new}.")
+        Logger.info(log_prefix(loop) <> "Changing speed from #{old} to #{new}.")
         set_speed(loop, new)
         axis
 
@@ -86,6 +102,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
     @reference_level + adjust
   end
 
+  defp is_installed?(loop) do
+    AutoNuke.API.get_integer("STEAM_GEN_#{loop - 1}_STATUS") == 2
+  end
+
   defp get_outlet(loop) do
     AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   end
@@ -109,4 +129,6 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   defp ideal_speed(loop), do: get_outlet(loop) / 2.0
+
+  defp log_prefix(loop), do: "[#{inspect(__MODULE__)}.L#{loop}] "
 end
