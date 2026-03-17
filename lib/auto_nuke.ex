@@ -8,7 +8,7 @@ defmodule AutoNuke do
         [
           PubSub,
           AutoNuke.Ticker,
-          {AutoNuke.Operator.CoreTemp, core: 1, name: :core1},
+          AutoNuke.Operator.CoreTemp,
           {AutoNuke.Operator.SecondaryFill, loop: 3},
           AutoNuke.Operator.VacuumTank,
           AutoNuke.Operator.TurbineBypass

@@ -3,12 +3,13 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:core, :target, :axis, :smoothed_temp]
+    @enforce_keys [:target, :axis, :smoothed_temp]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.Smoother
+  alias AutoNuke.API
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -17,19 +18,19 @@ defmodule AutoNuke.Operator.CoreTemp do
   @temp_smoothing 5
 
   def start_link(opts) do
-    {core, opts} = Keyword.pop!(opts, :core)
     {target, opts} = Keyword.pop(opts, :target)
-    GenServer.start_link(__MODULE__, {core, target}, opts)
+    opts = Keyword.put_new(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, target, opts)
   end
 
-  def set_target(pid, target) do
+  def set_target(target, pid \\ __MODULE__) do
     GenServer.cast(pid, {:target, target})
   end
 
   @impl true
-  def init({core, target}) when (core in 1..9 and is_number(target)) or is_nil(target) do
-    rods = get_rods(core)
-    temp = get_temperature(core)
+  def init(target) when is_number(target) or is_nil(target) do
+    rods = get_rods()
+    temp = get_temperature()
     target = target || temp
 
     axis =
@@ -45,7 +46,6 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     state =
       %State{
-        core: core,
         target: target,
         smoothed_temp: Smoother.new(@temp_smoothing) |> Smoother.add(temp),
         axis: axis
@@ -62,22 +62,20 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_cast({:target, t}, %State{} = state) do
-    Logger.info(
-      @log_prefix <> "Core #{state.core} target changed from #{state.target}°C to #{t}°C."
-    )
+    Logger.info(@log_prefix <> "Core target changed from #{state.target}°C to #{t}°C.")
 
     {:noreply, %State{state | target: t}}
   end
 
   @impl true
-  def handle_info({:tick, _}, %State{core: core} = state) do
-    smoother = state.smoothed_temp |> Smoother.add(get_temperature(core))
+  def handle_info({:tick, _}, %State{} = state) do
+    smoother = state.smoothed_temp |> Smoother.add(get_temperature())
     temp = Smoother.median(smoother)
 
     case ControlAxis.step(state.axis, state.target, temp) do
       {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing core #{core} rods from #{old} to #{new}.")
-        set_rods(core, new)
+        Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
+        set_rods(new)
         axis
 
       {:unchanged, axis, _old_value} ->
@@ -88,17 +86,25 @@ defmodule AutoNuke.Operator.CoreTemp do
     end)
   end
 
-  defp get_temperature(core) when core in 1..9 do
-    AutoNuke.API.get_float("CORE_FUEL_#{core}_TEMPERATURE")
+  defp get_temperature, do: API.get_float("CORE_TEMP")
+
+  # Assumption: Any core with an installed fuel cell will have control rods.
+  defp get_rods do
+    all_rods =
+      1..9
+      |> Enum.map(fn core ->
+        case API.get_string("CORE_BAY_#{core}_STATE") do
+          "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
+          _ -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    Enum.sum(all_rods) / Enum.count(all_rods)
   end
 
-  defp get_rods(core) do
-    AutoNuke.API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
-    |> Float.round(1)
-  end
-
-  defp set_rods(core, value) when value >= 0.0 and value <= 100.0 do
-    AutoNuke.API.put("ROD_BANK_POS_#{core - 1}_ORDERED", value)
+  defp set_rods(value) when value >= 0.0 and value <= 100.0 do
+    AutoNuke.API.put("RODS_ALL_POS_ORDERED", value)
   end
 
   defp axis_to_rods(output), do: (50 - output * 50) |> Float.round(1)
