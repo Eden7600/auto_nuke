@@ -2,16 +2,17 @@ defmodule AutoNuke.Operator.TurbineBypass do
   use GenServer
   require Logger
 
+  alias AutoNuke.API
   alias AutoNuke.Smoother
 
   defmodule State do
     # Give us the average of the last 5 ticks (1 sec) of generation:
     @generator_smoothing 5
 
-    @enforce_keys [:axis, :limiter]
+    @enforce_keys [:axis, :limiters]
     defstruct(
       axis: nil,
-      limiter: nil,
+      limiters: nil,
       smoothed_generation: Smoother.new(@generator_smoothing)
     )
   end
@@ -30,8 +31,13 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @impl true
   def init(nil) do
-    limiter = TorqueLimiter.new(2)
-    bypass = limiter.bypass_wanted
+    loops = get_connected_loops()
+    limiters = loops |> Enum.map(&TorqueLimiter.new/1)
+
+    bypass =
+      limiters
+      |> Enum.map(& &1.bypass_wanted)
+      |> Statistex.average()
 
     axis =
       ControlAxis.new(
@@ -44,12 +50,12 @@ defmodule AutoNuke.Operator.TurbineBypass do
       )
 
     state = %State{
-      limiter: limiter,
+      limiters: limiters,
       axis: axis
     }
 
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Started with bypass #{bypass}%.")
+    Logger.info(@log_prefix <> "Started with loops #{inspect(loops)} at bypass #{bypass}%.")
     {:ok, state}
   end
 
@@ -60,12 +66,12 @@ defmodule AutoNuke.Operator.TurbineBypass do
     case ControlAxis.step(axis, @target_percent, ratio) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing bypass from #{old} to #{new}.")
-        limiter = TorqueLimiter.set_bypass(state.limiter, new)
-        %State{state | axis: axis, limiter: limiter}
+        limiters = state.limiters |> Enum.map(&TorqueLimiter.set_bypass(&1, new))
+        %State{state | axis: axis, limiters: limiters}
 
       {:unchanged, axis, _old_value} ->
-        limiter = TorqueLimiter.check_torque(state.limiter)
-        %State{state | axis: axis, limiter: limiter}
+        limiters = state.limiters |> Enum.map(&TorqueLimiter.check_torque(&1))
+        %State{state | axis: axis, limiters: limiters}
     end
     |> then(fn %State{} = new_state ->
       {:noreply, new_state}
@@ -73,19 +79,30 @@ defmodule AutoNuke.Operator.TurbineBypass do
   end
 
   defp get_demand_ratio(%State{smoothed_generation: smoothed} = state) do
-    smoothed = smoothed |> Smoother.add(get_generation_kw())
+    smoothed = smoothed |> Smoother.add(get_generation_kw(state))
 
     generated_kw = Smoother.average(smoothed)
-    used_kw = AutoNuke.API.get_float("POWER_FROM_TURBINE_KW")
-    demand_kw = AutoNuke.API.get_float("POWER_DEMAND_MW") * 1000
+    used_kw = API.get_float("POWER_FROM_TURBINE_KW")
+    demand_kw = API.get_float("POWER_DEMAND_MW") * 1000
     ratio = (generated_kw - used_kw) / demand_kw
 
     {ratio, %State{state | smoothed_generation: smoothed}}
   end
 
-  defp get_generation_kw do
-    # TODO: add other generators
-    AutoNuke.API.get_float("GENERATOR_2_KW")
+  defp get_connected_loops do
+    1..3
+    |> Enum.reject(fn loop ->
+      # True if breaker open, i.e. disconnected.
+      API.get_boolean("GENERATOR_#{loop - 1}_BREAKER")
+    end)
+  end
+
+  defp get_generation_kw(%State{limiters: limiters}) do
+    limiters
+    |> Enum.map(fn %TorqueLimiter{loop: loop} ->
+      API.get_float("GENERATOR_#{loop - 1}_KW")
+    end)
+    |> Enum.sum()
   end
 
   def axis_to_bypass(output), do: round(50 - output * 50)

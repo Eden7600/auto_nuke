@@ -71,9 +71,11 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
     end
   end
 
-  defp get_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop}_TORQUE") |> Float.floor(2)
-  defp get_actual_bypass(loop), do: API.get_integer("STEAM_TURBINE_#{loop}_BYPASS_ACTUAL")
-  defp set_ordered_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop}_BYPASS_ORDERED", value)
+  defp get_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_TORQUE") |> Float.floor(2)
+  defp get_actual_bypass(loop), do: API.get_integer("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
+
+  defp set_ordered_bypass(loop, value),
+    do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
 
   defp emergency_backoff(%TL{loop: loop} = limiter, torque) do
     new_max = get_actual_bypass(loop) - 1
