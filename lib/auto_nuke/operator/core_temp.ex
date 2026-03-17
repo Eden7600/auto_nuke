@@ -90,17 +90,15 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   # Assumption: Any core with an installed fuel cell will have control rods.
   defp get_rods do
-    all_rods =
-      1..9
-      |> Enum.map(fn core ->
-        case API.get_string("CORE_BAY_#{core}_STATE") do
-          "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
-          _ -> nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    Enum.sum(all_rods) / Enum.count(all_rods)
+    1..9
+    |> Enum.map(fn core ->
+      case API.get_string("CORE_BAY_#{core}_STATE") do
+        "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
+        _ -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Statistex.average()
   end
 
   defp set_rods(value) when value >= 0.0 and value <= 100.0 do

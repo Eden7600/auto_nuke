@@ -31,24 +31,12 @@ defmodule AutoNuke.Smoother do
   def average(%Smoother{data: data, size: size}) when size > 0 do
     data
     |> :queue.to_list()
-    |> Enum.sum()
-    |> Kernel./(size)
+    |> Statistex.average()
   end
 
-  def median(%Smoother{data: data, size: size}) when Integer.is_odd(size) and size > 0 do
+  def median(%Smoother{data: data, size: size}) when size > 0 do
     data
     |> :queue.to_list()
-    |> Enum.sort()
-    |> Enum.at(div(size, 2))
-  end
-
-  def median(%Smoother{data: data, size: size}) when Integer.is_even(size) and size > 0 do
-    [a, b] =
-      data
-      |> :queue.to_list()
-      |> Enum.sort()
-      |> Enum.slice(div(size, 2) - 1, 2)
-
-    (a + b) / 2
+    |> Statistex.median()
   end
 end
