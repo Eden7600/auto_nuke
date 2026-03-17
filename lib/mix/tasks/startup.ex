@@ -43,8 +43,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     open_steam_valves()
     enable_resistor_bank()
 
-    request_connection()
-
     wait_before_load_fuel()
     load_fuel()
 
@@ -54,6 +52,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
     start_vacuum_pump()
+    request_connection()
     start_turbine()
     connect_to_grid()
     {:ok, _} = AutoNuke.Operator.TurbineBypass.start_link()
@@ -292,15 +291,28 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.put("CORE_OPERATION_MODE", "NOMINAL") end
     )
 
-    UI.set_wait(
-      "Lower Piston",
-      "PRESS",
-      fn -> API.get_float("CORE_FUEL_1_FISSIONABLE") > 0 end,
-      fn -> API.put("CORE_BAY_1_FUEL_LOADING", "LOAD") end
-    )
+    lowered =
+      1..9
+      |> Enum.filter(fn core ->
+        if API.get_string("CORE_BAY_#{core}_STATE") == "EXTERIOR" do
+          UI.set_wait(
+            "BAY #{core}: Lower Piston",
+            "PRESS",
+            fn -> API.get_float("CORE_FUEL_#{core}_FISSIONABLE") > 0 end,
+            fn -> API.put("CORE_BAY_#{core}_FUEL_LOADING", "LOAD") end
+          )
 
-    UI.wait("Fuel Temperature Gauge", "CONFIRM ACTIVE", fn ->
-      API.get_float("CORE_FUEL_1_TEMPERATURE") > 20
+          true
+        else
+          false
+        end
+      end)
+
+    lowered
+    |> Enum.each(fn core ->
+      UI.wait("BAY #{core}: Fuel Temperature Gauge", "CONFIRM ACTIVE", fn ->
+        API.get_float("CORE_FUEL_#{core}_TEMPERATURE") > 20
+      end)
     end)
   end
 
@@ -311,7 +323,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       "Control Rod Height",
       "SET TO #{@startup_rods}%",
       fn -> API.get_float("ROD_BANK_POS_0_ORDERED") == @startup_rods end,
-      fn -> API.put("ROD_BANK_POS_0_ORDERED", @startup_rods) end
+      fn -> API.put("RODS_ALL_POS_ORDERED", @startup_rods) end
     )
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
