@@ -17,9 +17,9 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
   @minimum_torque 3.0
   @critical_torque 2.5
 
-  # Wait at least 25 ticks between gentle adjustments.
+  # Wait at least 10 ticks between gentle adjustments.
   # At normal speed, this should be 5 seconds.
-  @maybe_wait 25
+  @maybe_wait 10
 
   def new(loop) do
     %TL{
@@ -69,6 +69,9 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
       {:okay, :decreasing} -> reset_timer(limiter)
       {:okay, _} -> maybe_relax(limiter, torque)
     end
+    |> then(fn %TL{} = limiter ->
+      %TL{limiter | last_torque: torque}
+    end)
   end
 
   defp get_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_TORQUE") |> Float.floor(2)
