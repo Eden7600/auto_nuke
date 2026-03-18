@@ -21,6 +21,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # If fill level is within 1% of target,
   # just try to balance inlet and outlet.
   @fill_level_deadzone 0.01
+  # If fill level is >= 80%, stop pumps immediately.
+  @fill_max 0.8
 
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
@@ -54,7 +56,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
         kp: 0.1,
         ki: 0.01,
         kd: 0.005,
-        deadzone: 0.01,
+        deadzone: 0.02,
         to_value_fn: &axis_to_speed/1,
         offset: speed |> speed_to_axis(),
         initial_value: speed
@@ -75,7 +77,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   @impl true
   def handle_info({:tick, _}, %State{loop: loop} = state) do
-    case ControlAxis.step(state.axis, get_target_ratio(loop), get_current_ratio(loop)) do
+    current = get_current_ratio(loop)
+    target = get_target_ratio(loop)
+
+    case ControlAxis.step(state.axis, target, current) do
       {:changed, axis, new, old} ->
         Logger.info(log_prefix(loop) <> "Changing speed from #{old} to #{new}.")
         set_speed(loop, new)
@@ -131,10 +136,15 @@ defmodule AutoNuke.Operator.SecondaryFill do
     fill_ratio = current_fill / target_fill
     delta = abs(1.0 - fill_ratio)
 
-    if delta < @fill_level_deadzone do
-      1.0
-    else
-      1 / fill_ratio
+    cond do
+      # Too full, stop pumps!
+      current_fill >= @fill_max -> -1
+      # Avoids divide-by-zero and sets pumps to max.
+      fill_ratio < 0.5 -> 10.0
+      # Within deadzone, just balance inlet/outlet.
+      delta < @fill_level_deadzone -> 1.0
+      # Adjust inlet/outlet to reach target.
+      true -> 1 / fill_ratio
     end
   end
 
