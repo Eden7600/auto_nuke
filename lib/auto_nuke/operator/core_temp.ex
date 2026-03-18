@@ -36,9 +36,9 @@ defmodule AutoNuke.Operator.CoreTemp do
     axis =
       ControlAxis.new(
         kp: 0.02,
-        kd: 0.01,
-        ki: 0.0001,
-        deadzone: 0.2,
+        kd: 0.0005,
+        ki: 0.001,
+        deadzone: 0.1,
         to_value_fn: &axis_to_rods/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods

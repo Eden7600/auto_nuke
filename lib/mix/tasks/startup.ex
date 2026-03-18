@@ -18,7 +18,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Set rods to this (%) to begin reaction:
   @startup_rods 78
   # Stop and maintain this temperature (°C):
-  @startup_temp 300
+  @startup_temp 280
   # Open or close MSCV to this (%):
   @startup_mscv 5
 
