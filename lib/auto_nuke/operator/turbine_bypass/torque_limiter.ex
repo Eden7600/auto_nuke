@@ -17,9 +17,12 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
   @minimum_torque 3.0
   @critical_torque 2.5
 
-  # Wait at least 10 ticks between gentle adjustments.
+  # When torque is above minimum, wait at least 10 ticks between each 1% relaxation.
   # At normal speed, this should be 5 seconds.
-  @maybe_wait 10
+  @relax_wait 10
+  # When torque is below critical, wait only 4 ticks between each 1% backoff.
+  # At normal speed, this should be 2 seconds.
+  @backoff_wait 4
 
   def new(loop) do
     %TL{
@@ -48,16 +51,16 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
 
     state =
       cond do
-        torque <= @critical_torque -> :critical
+        torque < @critical_torque -> :critical
         torque < @minimum_torque -> :minimum
-        torque > @minimum_torque -> :okay
+        true -> :okay
       end
 
     direction =
       cond do
         torque < limiter.last_torque -> :decreasing
         torque > limiter.last_torque -> :increasing
-        torque == limiter.last_torque -> :stable
+        true -> :stable
       end
 
     case {state, direction} do
@@ -84,7 +87,7 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
     new_max = get_actual_bypass(loop) - 1
 
     Logger.error(
-      @log_prefix <> "Loop #{loop} torque at #{torque}%, backing off to #{new_max}% bypass."
+      @log_prefix <> "Loop #{loop} torque at #{torque}, backing off to #{new_max}% bypass."
     )
 
     limiter |> set_bypass_max(new_max)
@@ -95,7 +98,7 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
 
     if new_max != limiter.bypass_max do
       Logger.warning(
-        @log_prefix <> "Loop #{loop} torque at #{torque}%, holding at #{new_max}% bypass."
+        @log_prefix <> "Loop #{loop} torque at #{torque}, holding at #{new_max}% bypass."
       )
 
       limiter |> set_bypass_max(new_max)
@@ -135,25 +138,34 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
   defp reset_timer(%TL{} = tl), do: %TL{tl | timer: 0}
 
   defp maybe_relax(%TL{bypass_max: 100} = lim, _), do: lim
-  defp maybe_relax(%TL{timer: t} = lim, _) when t <= @maybe_wait, do: %TL{lim | timer: t + 1}
+  defp maybe_relax(%TL{timer: t} = lim, _) when t < @relax_wait, do: %TL{lim | timer: t + 1}
 
   defp maybe_relax(%TL{loop: loop} = limiter, torque) do
     new_max = limiter.bypass_max + 1
 
-    Logger.info(
-      @log_prefix <> "Loop #{loop} torque at #{torque}%, relaxing to #{new_max}% bypass."
-    )
+    cond do
+      new_max == 100 ->
+        Logger.info(@log_prefix <> "Loop #{loop} torque at #{torque}, now fully relaxed.")
+
+      limiter.bypass_wanted >= new_max ->
+        Logger.info(
+          @log_prefix <> "Loop #{loop} torque at #{torque}, relaxing to #{new_max}% bypass."
+        )
+
+      true ->
+        :silent
+    end
 
     limiter |> set_bypass_max(new_max)
   end
 
-  defp maybe_backoff(%TL{timer: t} = lim, _) when t <= @maybe_wait, do: %TL{lim | timer: t + 1}
+  defp maybe_backoff(%TL{timer: t} = lim, _) when t < @backoff_wait, do: %TL{lim | timer: t + 1}
 
   defp maybe_backoff(%TL{loop: loop} = limiter, torque) do
     new_max = limiter.bypass_max - 1
 
     Logger.info(
-      @log_prefix <> "Loop #{loop} torque at #{torque}%, backing off to #{new_max}% bypass."
+      @log_prefix <> "Loop #{loop} torque at #{torque}, backing off to #{new_max}% bypass."
     )
 
     limiter |> set_bypass_max(new_max)
