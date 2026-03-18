@@ -32,7 +32,7 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
   def set_bypass(%TL{loop: loop} = limiter, wanted) do
     max = limiter.bypass_max
 
-    if wanted >= max do
+    if wanted > max do
       Logger.info(@log_prefix <> "Loop #{loop} wants #{wanted}% bypass but limited to #{max}%.")
     end
 
