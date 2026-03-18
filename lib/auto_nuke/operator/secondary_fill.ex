@@ -18,9 +18,6 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @adjust_pressure 10
   @adjust_level 0.05
 
-  # Set speed to ideal speed, plus or minus this much based on fill:
-  @max_speed_deviation 10
-
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
 
@@ -50,11 +47,12 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     axis =
       ControlAxis.new(
-        kp: 1,
-        ki: 0.1,
+        kp: 0.1,
+        ki: 0.01,
+        kd: 0.005,
         deadzone: 0.01,
-        to_value_fn: &axis_to_speed(&1, loop),
-        offset: speed |> speed_to_axis(loop),
+        to_value_fn: &axis_to_speed/1,
+        offset: speed |> speed_to_axis(),
         initial_value: speed
       )
 
@@ -65,7 +63,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     PubSub.subscribe(self(), :ticker)
 
-    fill_level = get_fill_percent(loop) |> Float.round(2)
+    fill_level = get_current_fill_percent(loop) |> Float.round(2)
     Logger.info(log_prefix(loop) <> "Started with fill level of #{fill_level * 100}%.")
 
     {:ok, state}
@@ -73,7 +71,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
   @impl true
   def handle_info({:tick, _}, %State{loop: loop} = state) do
-    case ControlAxis.step(state.axis, get_target_percent(loop), get_fill_percent(loop)) do
+    case ControlAxis.step(state.axis, get_target_ratio(loop), get_current_ratio(loop)) do
       {:changed, axis, new, old} ->
         Logger.info(log_prefix(loop) <> "Changing speed from #{old} to #{new}.")
         set_speed(loop, new)
@@ -87,11 +85,11 @@ defmodule AutoNuke.Operator.SecondaryFill do
     end)
   end
 
-  defp get_fill_percent(loop) do
+  defp get_current_fill_percent(loop) do
     AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
   end
 
-  defp get_target_percent(loop) do
+  defp get_target_fill_percent(loop) do
     pressure = AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
 
     # Both of these are positive if pressure is low, negative if high.
@@ -106,8 +104,28 @@ defmodule AutoNuke.Operator.SecondaryFill do
     AutoNuke.API.get_integer("STEAM_GEN_#{loop - 1}_STATUS") == 2
   end
 
-  defp get_outlet(loop) do
-    AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+  defp get_current_ratio(loop) do
+    inlet = AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_INLET")
+    outlet = AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+
+    cond do
+      outlet > 0 -> inlet / outlet
+      # If we have zero outlet, any inlet is too high.
+      # We return a conservatively high value that should
+      # gently convince the PID controller to reduce input to 0.
+      # But we keep this low enough that a very low fill level
+      # can still override it and start filling an empty tank.
+      inlet > 0 -> 1.5
+      # Consider the ratio satisfied.
+      true -> 1.0
+    end
+  end
+
+  defp get_target_ratio(loop) do
+    current_fill = get_current_fill_percent(loop)
+    target_fill = get_target_fill_percent(loop)
+    fill_ratio = current_fill / target_fill
+    1 / fill_ratio
   end
 
   defp get_speed(loop) do
@@ -118,17 +136,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
     AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
   end
 
-  defp axis_to_speed(output, loop) do
-    round(ideal_speed(loop) + output * @max_speed_deviation)
-  end
-
-  defp speed_to_axis(speed, loop) do
-    ((speed - ideal_speed(loop)) / @max_speed_deviation)
-    |> max(-1.0)
-    |> min(1.0)
-  end
-
-  defp ideal_speed(loop), do: get_outlet(loop) / 2.0
+  def axis_to_speed(output), do: round(50 + output * 50)
+  def speed_to_axis(speed), do: (speed - 50) / 50
 
   defp log_prefix(loop), do: "[#{inspect(__MODULE__)}.L#{loop}] "
 end
