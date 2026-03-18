@@ -18,6 +18,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @adjust_pressure 10
   @adjust_level 0.05
 
+  # If fill level is within 1% of target,
+  # just try to balance inlet and outlet.
+  @fill_level_deadzone 0.01
+
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
 
@@ -63,8 +67,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     PubSub.subscribe(self(), :ticker)
 
-    fill_level = get_current_fill_percent(loop) |> Float.round(2)
-    Logger.info(log_prefix(loop) <> "Started with fill level of #{fill_level * 100}%.")
+    fill_level = (get_current_fill_percent(loop) * 100) |> Float.round(2)
+    Logger.info(log_prefix(loop) <> "Started with fill level of #{fill_level}%.")
 
     {:ok, state}
   end
@@ -125,7 +129,13 @@ defmodule AutoNuke.Operator.SecondaryFill do
     current_fill = get_current_fill_percent(loop)
     target_fill = get_target_fill_percent(loop)
     fill_ratio = current_fill / target_fill
-    1 / fill_ratio
+    delta = abs(1.0 - fill_ratio)
+
+    if delta < @fill_level_deadzone do
+      1.0
+    else
+      1 / fill_ratio
+    end
   end
 
   defp get_speed(loop) do
