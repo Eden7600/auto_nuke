@@ -22,8 +22,11 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
-  @target_percent 0.975
+  # Target 100% demand, plus or minus 2.5%.
+  @target_percent 1.0
   @deadzone 0.025
+  # But if resistor banks are on, drop that down to 97.5%, to try to avoid using them.
+  @resistors_offset -0.025
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
@@ -71,8 +74,9 @@ defmodule AutoNuke.Operator.TurbineBypass do
   @impl true
   def handle_info({:tick, _}, %State{axis: axis} = state) do
     {ratio, %State{} = state} = get_demand_ratio(state)
+    target = get_target_ratio()
 
-    case ControlAxis.step(axis, @target_percent, ratio) do
+    case ControlAxis.step(axis, target, ratio) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing bypass from #{old} to #{new}.")
         limiters = state.limiters |> Enum.map(&TorqueLimiter.set_bypass(&1, new))
@@ -96,6 +100,13 @@ defmodule AutoNuke.Operator.TurbineBypass do
     ratio = (generated_kw - used_kw) / demand_kw
 
     {ratio, %State{state | smoothed_generation: smoothed}}
+  end
+
+  defp get_target_ratio do
+    case API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH") do
+      true -> @target_percent + @resistors_offset
+      false -> @target_percent
+    end
   end
 
   defp get_connected_loops do
