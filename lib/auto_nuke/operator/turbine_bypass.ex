@@ -31,7 +31,16 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @impl true
   def init(nil) do
-    loops = get_connected_loops()
+    get_connected_loops()
+    |> do_init()
+  end
+
+  defp do_init([]) do
+    Logger.info(@log_prefix <> "No loops connected, started in sleep mode.")
+    {:ok, %State{limiters: [], axis: nil}}
+  end
+
+  defp do_init(loops) when is_list(loops) do
     limiters = loops |> Enum.map(&TorqueLimiter.new/1)
 
     bypass =
