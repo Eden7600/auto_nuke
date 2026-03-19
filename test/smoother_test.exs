@@ -73,4 +73,46 @@ defmodule AutoNuke.SmootherTest do
     smoother = smoother |> Smoother.add(400)
     assert Smoother.median(smoother) == 250
   end
+
+  test "Smoother.rate_of_change/1 returns last entry minus first entry" do
+    smoother =
+      Smoother.new(5)
+      |> Smoother.add(100)
+      |> Smoother.add(200)
+      |> Smoother.add(300)
+      |> Smoother.add(400)
+      |> Smoother.add(500)
+
+    assert Smoother.rate_of_change(smoother) == 400
+
+    smoother = smoother |> Smoother.add(0)
+    # Now first is 200, last is 0, rate is -200.
+    assert Smoother.rate_of_change(smoother) == -200
+
+    smoother = smoother |> Smoother.add(300)
+    # Now first is 300, last is 300, rate is 0.
+    assert Smoother.rate_of_change(smoother) == 0
+  end
+
+  test "Smoother.rate_of_change/1 with incomplete data scales answer to the expected value" do
+    smoother =
+      Smoother.new(5)
+      |> Smoother.add(100)
+      |> Smoother.add(200)
+
+    # Same as the last test, so the rate should be the same.
+    assert Smoother.rate_of_change(smoother) == 400
+
+    # Still the same.
+    smoother = smoother |> Smoother.add(300)
+    assert Smoother.rate_of_change(smoother) == 400
+    # Still the same.
+    smoother = smoother |> Smoother.add(400)
+    assert Smoother.rate_of_change(smoother) == 400
+  end
+
+  test "Smoother.rate_of_change/1 with only a single value returns zero" do
+    smoother = Smoother.new(5) |> Smoother.add(:rand.uniform())
+    assert Smoother.rate_of_change(smoother) == 0
+  end
 end

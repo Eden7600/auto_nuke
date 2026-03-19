@@ -39,4 +39,19 @@ defmodule AutoNuke.Smoother do
     |> :queue.to_list()
     |> Statistex.median()
   end
+
+  def rate_of_change(%Smoother{size: 1}), do: 0.0
+
+  def rate_of_change(%Smoother{data: data, size: max, max: max}) do
+    {:value, first} = :queue.peek(data)
+    {:value, last} = :queue.peek_r(data)
+    last - first
+  end
+
+  def rate_of_change(%Smoother{data: data, size: size, max: max}) when size > 0 do
+    {:value, first} = :queue.peek(data)
+    {:value, last} = :queue.peek_r(data)
+    scale_factor = (size - 1) / (max - 1)
+    (last - first) / scale_factor
+  end
 end

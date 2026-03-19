@@ -11,6 +11,10 @@ defmodule AutoNuke.Ticker do
   # If paused, wait 50ms to check if unpaused:
   @pause_wait 50
 
+  # Net result: Eight ticks per in-game minute.
+  # (Knowing this may be important for some rate-of-change controllers.)
+  def ticks_per_minute, do: 8
+
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
   end

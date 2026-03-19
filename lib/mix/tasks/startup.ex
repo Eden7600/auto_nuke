@@ -16,7 +16,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # and still safely stop at the target.
 
   # Set rods to this (%) to begin reaction:
-  @startup_rods 78
+  @startup_rods 90
   # Stop and maintain this temperature (°C):
   @startup_temp 280
   # Open or close MSCV to this (%):
@@ -49,8 +49,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     start_secondary_circulation()
     {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: 3)
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
+
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
+    wait_for_temperature(@startup_temp - 5)
+
     start_vacuum_pump()
     request_connection()
     start_turbine()
@@ -329,11 +332,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
     end)
+  end
 
+  defp wait_for_temperature(temp) do
     UI.progress_loop(
       label: "Primary Temperature",
-      fetch: fn -> API.get_float("CORE_TEMP") |> floor() end,
-      max: @startup_temp
+      fetch: fn -> API.get_float("CORE_TEMP") |> round() end,
+      max: temp
     )
   end
 
