@@ -17,11 +17,19 @@ defmodule AutoNuke.API do
   end
 
   def get_string(key), do: get(key)
-  def get_integer(key), do: get(key) |> String.to_integer()
+  def get_integer(key), do: get(key) |> to_integer()
+  def get_float(key), do: get(key) |> to_float()
+  def get_integer_or_nil(key, default \\ nil), do: get(key) |> or_nil(&to_integer/1, default)
+  def get_float_or_nil(key, default \\ nil), do: get(key) |> or_nil(&to_float/1, default)
+
+  def or_nil("null", _, default), do: default
+  def or_nil(str, fun, _), do: fun.(str)
+
+  defp to_integer(str), do: String.to_integer(str)
 
   # Handles either `62.3` or just `62`.
-  def get_float(key) do
-    {float, ""} = get(key) |> Float.parse()
+  defp to_float(str) do
+    {float, ""} = Float.parse(str)
     float
   end
 
