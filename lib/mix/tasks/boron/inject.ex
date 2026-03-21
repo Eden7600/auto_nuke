@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.AutoNuke.InjectBoron do
+defmodule Mix.Tasks.AutoNuke.Boron.Inject do
   @moduledoc "Inject boron into the core"
   @shortdoc "Inject boron"
 
