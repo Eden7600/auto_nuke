@@ -29,23 +29,17 @@ defmodule Mix.Tasks.AutoNuke.Refill.PrimaryCst do
   end
 
   defp check_valves do
-    UI.wait(
-      "Valve M01",
-      "CLOSE",
-      fn -> get_valve("M01") == 0 end
-    )
+    [M01: false, M02: false, M03: true]
+    |> Enum.each(fn {key, open} ->
+      verb = if open, do: "OPEN", else: "CLOSE"
+      setting = if open, do: 100, else: 0
 
-    UI.wait(
-      "Valve M02",
-      "CLOSE",
-      fn -> get_valve("M02") == 0 end
-    )
-
-    UI.wait(
-      "Valve M03",
-      "OPEN",
-      fn -> get_valve("M03") == 100 end
-    )
+      UI.wait(
+        "Valve #{key}",
+        verb,
+        fn -> get_valve(key) == setting end
+      )
+    end)
   end
 
   @switch "FREIGHT_PUMP_INTERNAL_SWITCH"
