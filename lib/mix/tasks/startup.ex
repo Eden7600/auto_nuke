@@ -48,13 +48,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     start_secondary_circulation()
     {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: 3)
-    {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
 
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
     wait_for_temperature(@startup_temp - 5)
 
     start_vacuum_pump()
+    {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
     request_connection()
     start_turbine()
     connect_to_grid()
