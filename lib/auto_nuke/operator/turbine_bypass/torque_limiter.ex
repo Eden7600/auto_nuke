@@ -42,7 +42,7 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
     new_bypass = min(wanted, max)
     set_ordered_bypass(loop, new_bypass)
 
-    %TL{limiter | bypass_wanted: new_bypass}
+    %TL{limiter | bypass_wanted: wanted}
     |> check_torque()
   end
 
