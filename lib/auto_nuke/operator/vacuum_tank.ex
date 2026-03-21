@@ -28,9 +28,9 @@ defmodule AutoNuke.Operator.VacuumTank do
   @crv_target_factor 10
 
   # If running in pump mode and steam climbs past this (kg/min), switch to CRV mode.
-  @steam_high_mark 110
+  @steam_high_mark 130
   # If running in CRV mode and steam drops below this (kg/min), switch to pump mode.
-  @steam_low_mark 90
+  @steam_low_mark 110
 
   def tank_size, do: @tank_size
 

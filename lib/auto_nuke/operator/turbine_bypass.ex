@@ -25,11 +25,11 @@ defmodule AutoNuke.Operator.TurbineBypass do
   # Valid loop numbers:
   @all_loops 1..3
 
-  # Target 100% demand, plus or minus 2.5%.
-  @target_percent 1.0
+  # Target 105% demand, plus or minus 2.5%.
+  @target_percent 1.05
   @deadzone 0.025
   # But if resistor banks are on, drop that down to 97.5%, to try to avoid using them.
-  @resistors_offset -0.025
+  @resistors_offset -0.525
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
