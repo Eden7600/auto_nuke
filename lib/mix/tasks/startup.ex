@@ -136,10 +136,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     UI.set_wait_unless(
       "Main Steam Control Valve",
-      "REDUCED (#{@startup_mscv}%)",
-      fn -> init_mscv == @startup_mscv end,
+      "CLOSED (0%)",
+      fn -> init_mscv == 0 end,
       fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
-      fn -> API.put("MSCV_2_OPENING_ORDERED", @startup_mscv) end
+      fn -> API.put("MSCV_2_OPENING_ORDERED", 0) end
     )
 
     UI.console("Generation & Distribution")
@@ -235,8 +235,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       label: "MSCV",
       fetch: fn ->
         # Hack to support the fact that progress bars must be ascending:
-        delta = abs(@startup_mscv - API.get_float("MSCV_2_OPENING_ACTUAL")) |> ceil()
-        100 - delta
+        (100 - API.get_float("MSCV_2_OPENING_ACTUAL"))
+        |> ceil()
       end,
       max: 100
     )
@@ -416,6 +416,18 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp start_turbine do
+    UI.console("Steam Generator")
+
+    init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
+
+    UI.set_wait_unless(
+      "Main Steam Control Valve",
+      "LIMITED (#{@startup_mscv}%)",
+      fn -> init_mscv == @startup_mscv end,
+      fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
+      fn -> API.put("MSCV_2_OPENING_ORDERED", @startup_mscv) end
+    )
+
     UI.console("Generation & Distribution")
 
     init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
