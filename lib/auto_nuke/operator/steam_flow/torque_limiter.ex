@@ -1,4 +1,4 @@
-defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
+defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
   @enforce_keys [:loop, :last_torque, :bypass_wanted]
   defstruct(
     loop: nil,

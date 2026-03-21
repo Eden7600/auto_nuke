@@ -13,7 +13,7 @@ defmodule AutoNuke do
           {AutoNuke.Operator.SecondaryFill, loop: 2},
           {AutoNuke.Operator.SecondaryFill, loop: 3},
           AutoNuke.Operator.VacuumTank,
-          AutoNuke.Operator.TurbineBypass
+          AutoNuke.Operator.SteamFlow
         ]
       else
         []

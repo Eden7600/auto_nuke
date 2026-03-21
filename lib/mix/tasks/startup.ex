@@ -58,7 +58,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     request_connection()
     start_turbine()
     connect_to_grid()
-    {:ok, _} = AutoNuke.Operator.TurbineBypass.start_link()
+    {:ok, _} = AutoNuke.Operator.SteamFlow.start_link()
 
     UI.console("ALL")
     UI.wait("Operator", "TAKE OVER", fn -> false end)

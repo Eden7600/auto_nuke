@@ -1,4 +1,4 @@
-defmodule AutoNuke.Operator.TurbineBypass do
+defmodule AutoNuke.Operator.SteamFlow do
   use GenServer
   require Logger
 
@@ -13,12 +13,13 @@ defmodule AutoNuke.Operator.TurbineBypass do
     defstruct(
       axis: nil,
       limiters: nil,
-      smoothed_generation: Smoother.new(@generator_smoothing)
+      smoothed_generation: Smoother.new(@generator_smoothing),
+      target_override: nil
     )
   end
 
   alias AutoNuke.ControlAxis
-  alias AutoNuke.Operator.TurbineBypass.TorqueLimiter
+  alias AutoNuke.Operator.SteamFlow.TorqueLimiter
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -42,6 +43,14 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   def remove_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
     GenServer.call(pid, {:remove, loop})
+  end
+
+  def set_target_override(target, pid \\ __MODULE__) when is_number(target) and target < 10 do
+    GenServer.cast(pid, {:override, target * 1.0})
+  end
+
+  def clear_target_override(pid \\ __MODULE__) do
+    GenServer.cast(pid, {:override, nil})
   end
 
   @impl true
@@ -114,9 +123,21 @@ defmodule AutoNuke.Operator.TurbineBypass do
   end
 
   @impl true
+  def handle_cast({:override, nil}, %State{} = state) do
+    Logger.notice(@log_prefix <> "Target override cleared.")
+    {:reply, :ok, %State{state | target_override: nil}}
+  end
+
+  @impl true
+  def handle_cast({:override, new}, %State{} = state) when is_float(new) do
+    Logger.notice(@log_prefix <> "Target override set: #{percent(new)}")
+    {:reply, :ok, %State{state | target_override: new}}
+  end
+
+  @impl true
   def handle_info({:tick, _}, %State{axis: axis} = state) do
     {ratio, %State{} = state} = get_demand_ratio(state)
-    target = get_target_ratio()
+    target = state.target_override || get_target_ratio()
 
     case ControlAxis.step(axis, target, ratio) do
       {:changed, axis, new, old} ->
@@ -167,6 +188,8 @@ defmodule AutoNuke.Operator.TurbineBypass do
     |> Enum.sum()
   end
 
-  def axis_to_bypass(output), do: round(50 - output * 50)
-  def bypass_to_axis(bypass), do: (50 - bypass) / 50
+  defp axis_to_bypass(output), do: round(50 - output * 50)
+  defp bypass_to_axis(bypass), do: (50 - bypass) / 50
+
+  defp percent(float), do: "#{float * 100}%"
 end
