@@ -94,7 +94,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
           [TorqueLimiter.new(loop) | old_limiters]
           |> Enum.sort_by(& &1.loop)
 
-        {:reply, :ok, new_limiters}
+        {:reply, :ok, %State{state | limiters: new_limiters}}
     end
   end
 
@@ -109,7 +109,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
           old_limiters
           |> Enum.reject(&(&1.loop == loop))
 
-        {:reply, :ok, new_limiters}
+        {:reply, :ok, %State{state | limiters: new_limiters}}
     end
   end
 
