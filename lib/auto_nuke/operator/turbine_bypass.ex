@@ -22,6 +22,9 @@ defmodule AutoNuke.Operator.TurbineBypass do
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
+  # Valid loop numbers:
+  @all_loops 1..3
+
   # Target 100% demand, plus or minus 2.5%.
   @target_percent 1.0
   @deadzone 0.025
@@ -29,7 +32,16 @@ defmodule AutoNuke.Operator.TurbineBypass do
   @resistors_offset -0.025
 
   def start_link(opts \\ []) do
+    opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
+  end
+
+  def add_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
+    GenServer.call(pid, {:add, loop})
+  end
+
+  def remove_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
+    GenServer.call(pid, {:remove, loop})
   end
 
   @impl true
@@ -72,6 +84,36 @@ defmodule AutoNuke.Operator.TurbineBypass do
   end
 
   @impl true
+  def handle_call({:add, loop}, _from, %State{limiters: old_limiters} = state) do
+    case old_limiters |> Enum.any?(&(&1.loop == loop)) do
+      true ->
+        {:reply, {:error, :already_active}, state}
+
+      false ->
+        new_limiters =
+          [TorqueLimiter.new(loop) | old_limiters]
+          |> Enum.sort_by(& &1.loop)
+
+        {:reply, :ok, new_limiters}
+    end
+  end
+
+  @impl true
+  def handle_call({:remove, loop}, _from, %State{limiters: old_limiters} = state) do
+    case old_limiters |> Enum.any?(&(&1.loop == loop)) do
+      false ->
+        {:reply, {:error, :not_active}, state}
+
+      true ->
+        new_limiters =
+          old_limiters
+          |> Enum.reject(&(&1.loop == loop))
+
+        {:reply, :ok, new_limiters}
+    end
+  end
+
+  @impl true
   def handle_info({:tick, _}, %State{axis: axis} = state) do
     {ratio, %State{} = state} = get_demand_ratio(state)
     target = get_target_ratio()
@@ -110,7 +152,7 @@ defmodule AutoNuke.Operator.TurbineBypass do
   end
 
   defp get_connected_loops do
-    1..3
+    @all_loops
     |> Enum.reject(fn loop ->
       # True if breaker open, i.e. disconnected.
       API.get_boolean("GENERATOR_#{loop - 1}_BREAKER")

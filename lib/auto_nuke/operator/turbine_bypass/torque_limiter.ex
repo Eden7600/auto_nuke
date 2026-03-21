@@ -24,7 +24,7 @@ defmodule AutoNuke.Operator.TurbineBypass.TorqueLimiter do
   # At normal speed, this should be 2 seconds.
   @backoff_wait 4
 
-  def new(loop) do
+  def new(loop) when loop in 1..3 do
     %TL{
       loop: loop,
       last_torque: get_torque(loop),
