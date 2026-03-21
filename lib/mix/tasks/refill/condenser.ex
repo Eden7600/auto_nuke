@@ -15,7 +15,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Condenser do
     |> refill()
   end
 
-  def refill(target) when target >= 0 and target <= @max do
+  def refill(target) when target >= 0 and target < @max do
     AutoNuke.Tasks.Refill.refill(
       pump_name: "Secondary Circuit Freight Pump",
       tank_description: "Condenser Level",

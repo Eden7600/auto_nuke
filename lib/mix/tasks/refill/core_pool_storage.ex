@@ -16,7 +16,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePoolStorage do
     |> refill()
   end
 
-  def refill(target) when target >= 0 and target <= @max do
+  def refill(target) when target >= 0 and target < @max do
     AutoNuke.Tasks.Refill.refill(
       pre_check: &check_valves/0,
       pump_name: "Internal Freight Pump",

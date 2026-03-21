@@ -17,7 +17,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CoreVessel do
     |> refill()
   end
 
-  def refill(target) when target >= 0 and target <= @tank_size do
+  def refill(target) when target >= 0 and target < @tank_size do
     AutoNuke.Tasks.Refill.refill(
       pre_check: fn -> check_primary_cst_level(target) end,
       pump_name: "Primary Circuit Pump",

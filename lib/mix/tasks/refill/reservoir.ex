@@ -15,7 +15,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Reservoir do
     |> refill()
   end
 
-  def refill(target) when target >= 0 and target <= @max do
+  def refill(target) when target >= 0 and target < @max do
     AutoNuke.Tasks.Refill.refill(
       pump_name: "External Freight Pump",
       tank_description: "Reservoir Level",

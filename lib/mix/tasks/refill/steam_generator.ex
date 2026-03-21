@@ -16,7 +16,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
     refill(loop, target)
   end
 
-  def refill(loop, target) when target >= 0 and target <= @max do
+  def refill(loop, target) when target >= 0 and target < @max do
     AutoNuke.Tasks.Refill.refill(
       pump_name: "L#{loop} Secondary Pump",
       tank_description: "L#{loop} Coolant Volume",
