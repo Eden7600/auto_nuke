@@ -1,10 +1,12 @@
 defmodule AutoNuke.Operator.SteamFlow.Limiter do
-  @enforce_keys [:loop, :last_torque, :bypass_wanted]
+  @enforce_keys [:loop, :last_torque, :bypass_wanted, :mscv_wanted]
   defstruct(
     loop: nil,
     last_torque: nil,
     bypass_wanted: nil,
     bypass_max: 100,
+    mscv_wanted: nil,
+    mscv_max: 100,
     timer: 0
   )
 
@@ -24,34 +26,70 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
   # At normal speed, this should be 2 seconds.
   @backoff_wait 4
 
+  # Every 10 kg/min, allow one extra MSCV.
+  @mscv_factor 10
+  # Add +8 kg/min to steam to determine the next threshold.
+  @mscv_margin 8
+  # Always allow MSCV this low, no matter how much steam.
+  @mscv_minimum 3
+
   def new(loop) when loop in 1..3 do
     %Limiter{
       loop: loop,
       last_torque: get_torque(loop),
-      bypass_wanted: get_actual_bypass(loop)
+      bypass_wanted: get_actual_bypass(loop),
+      mscv_wanted: get_actual_mscv(loop)
     }
   end
 
   def set_valves(%Limiter{loop: loop} = limiter, {new_bypass, new_mscv}) do
-    max = limiter.bypass_max
+    old_bypass = limiter.bypass_wanted
+    old_mscv = limiter.mscv_wanted
+    max_bypass = limiter.bypass_max
+    max_mscv = limiter.mscv_max
 
-    if new_bypass > max do
-      Logger.info(
-        @log_prefix <> "Loop #{loop} wants #{new_bypass}% bypass but limited to #{max}%."
-      )
+    check = fn what, old, new, max ->
+      if new < old do
+        # Value going downwards, don't consider this a failure.
+        false
+      else
+        Logger.info(@log_prefix <> "Loop #{loop} wants #{new}% #{what} but limited to #{max}%.")
+        true
+      end
     end
 
-    new_bypass = min(new_bypass, max)
+    exceeded =
+      cond do
+        new_bypass > max_bypass -> check.("bypass", old_bypass, new_bypass, max_bypass)
+        new_mscv > max_mscv -> check.("MSCV", old_mscv, new_mscv, max_mscv)
+        true -> false
+      end
+
+    new_bypass = min(new_bypass, max_bypass)
+    new_mscv = min(new_mscv, max_mscv)
     set_ordered_bypass(loop, new_bypass)
     set_ordered_mscv(loop, new_mscv)
 
-    %Limiter{limiter | bypass_wanted: new_bypass}
+    %Limiter{limiter | bypass_wanted: new_bypass, mscv_wanted: new_mscv}
     |> check()
+    |> then(fn %Limiter{} = lim ->
+      if exceeded do
+        {:limit_exceeded, lim}
+      else
+        {:ok, lim}
+      end
+    end)
   end
 
   def check(nil), do: nil
 
   def check(%Limiter{} = limiter) do
+    limiter
+    |> check_torque()
+    |> check_steam()
+  end
+
+  defp check_torque(%Limiter{} = limiter) do
     torque = get_torque(limiter.loop)
 
     state =
@@ -82,8 +120,24 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
     end)
   end
 
+  defp check_steam(%Limiter{} = limiter) do
+    steam = get_steam_outlet(limiter.loop)
+
+    max =
+      steam
+      |> Kernel.+(@mscv_margin)
+      |> Kernel./(@mscv_factor)
+      |> ceil()
+      |> max(@mscv_minimum)
+
+    %Limiter{limiter | mscv_max: max}
+  end
+
   defp get_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_TORQUE") |> Float.floor(2)
   defp get_actual_bypass(loop), do: API.get_integer("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
+  defp get_actual_mscv(loop), do: API.get_integer("MSCV_#{loop - 1}_OPENING_ACTUAL")
+
+  defp get_steam_outlet(loop), do: API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
 
   defp set_ordered_bypass(loop, value),
     do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)

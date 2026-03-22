@@ -151,8 +151,13 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     case ControlAxis.step(axis, target, ratio) do
       {:changed, axis, new, old} ->
-        limiters = change_active_valves(state.limiters, old, new)
-        %State{state | axis: axis, limiters: limiters}
+        case change_active_valves(state.limiters, old, new) do
+          {:ok, limiters} -> %State{state | axis: axis, limiters: limiters}
+          # If all limiters exceed their max, then we don't update the axis at all.
+          # This prevents the axis from wandering way past the limit
+          # and taking forever to come back down.
+          {:all_exceeded, limiters} -> %State{state | limiters: limiters}
+        end
 
       {:unchanged, axis, _old_value} ->
         limiters = state.limiters |> Enum.map(&Limiter.check(&1))
@@ -286,8 +291,25 @@ defmodule AutoNuke.Operator.SteamFlow do
         nil
 
       [%Limiter{} = limiter, old, new] ->
-        Logger.info(@log_prefix <> "Changing valves from #{inspect(old)} to #{inspect(new)}.")
+        if old != new do
+          Logger.info(
+            @log_prefix <>
+              "Changing loop #{limiter.loop} valves from #{inspect(old)} to #{inspect(new)}."
+          )
+        end
+
         limiter |> Limiter.set_valves(new)
+    end)
+    |> then(fn results ->
+      {codes, new_limiters} = Enum.unzip(results)
+
+      case Enum.all?(codes, fn
+             :limit_exceeded -> true
+             :ok -> false
+           end) do
+        true -> {:all_exceeded, new_limiters}
+        false -> {:ok, new_limiters}
+      end
     end)
   end
 end
