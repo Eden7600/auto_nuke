@@ -48,9 +48,9 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
     max_bypass = limiter.bypass_max
     max_mscv = limiter.mscv_max
 
-    check = fn what, old, new, max ->
+    report = fn what, old, new, max ->
       if new < old do
-        # Value going downwards, don't consider this a failure.
+        # Value going downwards, don't consider this noteworthy.
         false
       else
         Logger.info(@log_prefix <> "Loop #{loop} wants #{new}% #{what} but limited to #{max}%.")
@@ -58,12 +58,11 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
       end
     end
 
-    exceeded =
-      cond do
-        new_bypass > max_bypass -> check.("bypass", old_bypass, new_bypass, max_bypass)
-        new_mscv > max_mscv -> check.("MSCV", old_mscv, new_mscv, max_mscv)
-        true -> false
-      end
+    cond do
+      new_bypass > max_bypass -> report.("bypass", old_bypass, new_bypass, max_bypass)
+      new_mscv > max_mscv -> report.("MSCV", old_mscv, new_mscv, max_mscv)
+      true -> nil
+    end
 
     new_bypass = min(new_bypass, max_bypass)
     new_mscv = min(new_mscv, max_mscv)
@@ -72,13 +71,6 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
 
     %Limiter{limiter | bypass_wanted: new_bypass, mscv_wanted: new_mscv}
     |> check()
-    |> then(fn %Limiter{} = lim ->
-      if exceeded do
-        {:limit_exceeded, lim}
-      else
-        {:ok, lim}
-      end
-    end)
   end
 
   def check(nil), do: nil
@@ -88,6 +80,10 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
     |> check_torque()
     |> check_steam()
   end
+
+  def at_limit(%Limiter{mscv_wanted: set, mscv_max: max}) when set >= max, do: :high
+  def at_limit(%Limiter{bypass_wanted: set, bypass_max: max}) when set >= max, do: :low
+  def at_limit(%Limiter{}), do: nil
 
   defp check_torque(%Limiter{} = limiter) do
     torque = get_torque(limiter.loop)
@@ -121,16 +117,14 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
   end
 
   defp check_steam(%Limiter{} = limiter) do
-    steam = get_steam_outlet(limiter.loop)
-
-    max =
-      steam
+    limiter
+    |> set_mscv_max(
+      get_steam_outlet(limiter.loop)
       |> Kernel.+(@mscv_margin)
       |> Kernel./(@mscv_factor)
       |> ceil()
       |> max(@mscv_minimum)
-
-    %Limiter{limiter | mscv_max: max}
+    )
   end
 
   defp get_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_TORQUE") |> Float.floor(2)
@@ -178,6 +172,15 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
     |> reset_timer()
   end
 
+  defp set_mscv_max(%Limiter{} = limiter, max) do
+    cond do
+      max > limiter.mscv_max -> increase_max_mscv(limiter, max)
+      max < limiter.mscv_max -> decrease_max_mscv(limiter, max)
+      max == limiter.mscv_max -> limiter
+    end
+    |> reset_timer()
+  end
+
   defp increase_max_bypass(%Limiter{loop: loop} = limiter, new_max) do
     if limiter.bypass_wanted >= limiter.bypass_max do
       order = min(limiter.bypass_wanted, new_max)
@@ -190,11 +193,30 @@ defmodule AutoNuke.Operator.SteamFlow.Limiter do
 
   defp decrease_max_bypass(%Limiter{loop: loop} = limiter, new_max) do
     if limiter.bypass_wanted > new_max do
-      Logger.debug(@log_prefix <> "Loop #{loop} backing off to #{new_max}%.")
+      Logger.debug(@log_prefix <> "Loop #{loop} bypass backing off to #{new_max}%.")
       set_ordered_bypass(loop, new_max)
     end
 
     %Limiter{limiter | bypass_max: new_max}
+  end
+
+  defp increase_max_mscv(%Limiter{loop: loop} = limiter, new_max) do
+    if limiter.mscv_wanted >= limiter.mscv_max do
+      order = min(limiter.mscv_wanted, new_max)
+      Logger.debug(@log_prefix <> "Loop #{loop} following MSCV increase to #{order}%.")
+      set_ordered_mscv(loop, order)
+    end
+
+    %Limiter{limiter | mscv_max: new_max}
+  end
+
+  defp decrease_max_mscv(%Limiter{loop: loop} = limiter, new_max) do
+    if limiter.mscv_wanted > new_max do
+      Logger.debug(@log_prefix <> "Loop #{loop} MSCV backing off to #{new_max}%.")
+      set_ordered_mscv(loop, new_max)
+    end
+
+    %Limiter{limiter | mscv_max: new_max}
   end
 
   defp reset_timer(%Limiter{} = tl), do: %Limiter{tl | timer: 0}
