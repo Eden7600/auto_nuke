@@ -19,7 +19,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   alias AutoNuke.ControlAxis
-  alias AutoNuke.Operator.SteamFlow.TorqueLimiter
+  alias AutoNuke.Operator.SteamFlow.Limiter
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -80,7 +80,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       breakers
       |> Enum.map(fn
         {:open, _} -> nil
-        {:closed, loop} -> TorqueLimiter.new(loop)
+        {:closed, loop} -> Limiter.new(loop)
       end)
 
     axis =
@@ -109,11 +109,11 @@ defmodule AutoNuke.Operator.SteamFlow do
     index = loop - 1
 
     case old_limiters |> Enum.at(index) do
-      %TorqueLimiter{loop: ^loop} ->
+      %Limiter{loop: ^loop} ->
         {:reply, {:error, :already_active}, state}
 
       nil ->
-        new_limiters = old_limiters |> List.replace_at(index, TorqueLimiter.new(loop))
+        new_limiters = old_limiters |> List.replace_at(index, Limiter.new(loop))
         {:reply, :ok, %State{state | limiters: new_limiters}}
     end
   end
@@ -126,7 +126,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       nil ->
         {:reply, {:error, :already_active}, state}
 
-      %TorqueLimiter{loop: ^loop} ->
+      %Limiter{loop: ^loop} ->
         new_limiters = old_limiters |> List.replace_at(index, nil)
         {:reply, :ok, %State{state | limiters: new_limiters}}
     end
@@ -155,7 +155,7 @@ defmodule AutoNuke.Operator.SteamFlow do
         %State{state | axis: axis, limiters: limiters}
 
       {:unchanged, axis, _old_value} ->
-        limiters = state.limiters |> Enum.map(&TorqueLimiter.check_torque(&1))
+        limiters = state.limiters |> Enum.map(&Limiter.check(&1))
         %State{state | axis: axis, limiters: limiters}
     end
     |> then(fn %State{} = new_state ->
@@ -193,7 +193,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   defp get_generation_kw(%State{limiters: limiters}) do
     limiters
-    |> Enum.map(fn %TorqueLimiter{loop: loop} ->
+    |> Enum.map(fn %Limiter{loop: loop} ->
       API.get_float("GENERATOR_#{loop - 1}_KW")
     end)
     |> Enum.sum()
@@ -285,9 +285,9 @@ defmodule AutoNuke.Operator.SteamFlow do
       [nil, _, _] ->
         nil
 
-      [%TorqueLimiter{} = limiter, old, new] ->
+      [%Limiter{} = limiter, old, new] ->
         Logger.info(@log_prefix <> "Changing valves from #{inspect(old)} to #{inspect(new)}.")
-        limiter |> TorqueLimiter.set_valves(new)
+        limiter |> Limiter.set_valves(new)
     end)
   end
 end

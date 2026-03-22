@@ -1,4 +1,4 @@
-defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
+defmodule AutoNuke.Operator.SteamFlow.Limiter do
   @enforce_keys [:loop, :last_torque, :bypass_wanted]
   defstruct(
     loop: nil,
@@ -9,7 +9,7 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
   )
 
   require Logger
-  alias __MODULE__, as: TL
+  alias __MODULE__
   alias AutoNuke.API
 
   @log_prefix "[#{inspect(__MODULE__)}] "
@@ -25,28 +25,33 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
   @backoff_wait 4
 
   def new(loop) when loop in 1..3 do
-    %TL{
+    %Limiter{
       loop: loop,
       last_torque: get_torque(loop),
       bypass_wanted: get_actual_bypass(loop)
     }
   end
 
-  def set_bypass(%TL{loop: loop} = limiter, wanted) do
+  def set_valves(%Limiter{loop: loop} = limiter, {new_bypass, new_mscv}) do
     max = limiter.bypass_max
 
-    if wanted > max do
-      Logger.info(@log_prefix <> "Loop #{loop} wants #{wanted}% bypass but limited to #{max}%.")
+    if new_bypass > max do
+      Logger.info(
+        @log_prefix <> "Loop #{loop} wants #{new_bypass}% bypass but limited to #{max}%."
+      )
     end
 
-    new_bypass = min(wanted, max)
+    new_bypass = min(new_bypass, max)
     set_ordered_bypass(loop, new_bypass)
+    set_ordered_mscv(loop, new_mscv)
 
-    %TL{limiter | bypass_wanted: wanted}
-    |> check_torque()
+    %Limiter{limiter | bypass_wanted: new_bypass}
+    |> check()
   end
 
-  def check_torque(%TL{} = limiter) do
+  def check(nil), do: nil
+
+  def check(%Limiter{} = limiter) do
     torque = get_torque(limiter.loop)
 
     state =
@@ -72,8 +77,8 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
       {:okay, :decreasing} -> reset_timer(limiter)
       {:okay, _} -> maybe_relax(limiter, torque)
     end
-    |> then(fn %TL{} = limiter ->
-      %TL{limiter | last_torque: torque}
+    |> then(fn %Limiter{} = limiter ->
+      %Limiter{limiter | last_torque: torque}
     end)
   end
 
@@ -83,7 +88,10 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
   defp set_ordered_bypass(loop, value),
     do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
 
-  defp emergency_backoff(%TL{loop: loop} = limiter, torque) do
+  defp set_ordered_mscv(loop, value),
+    do: API.put("MSCV_#{loop - 1}_OPENING_ORDERED", value)
+
+  defp emergency_backoff(%Limiter{loop: loop} = limiter, torque) do
     new_max = get_actual_bypass(loop) - 1
 
     Logger.error(
@@ -93,7 +101,7 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
     limiter |> set_bypass_max(new_max)
   end
 
-  defp hold_current_bypass(%TL{loop: loop} = limiter, torque) do
+  defp hold_current_bypass(%Limiter{loop: loop} = limiter, torque) do
     new_max = get_actual_bypass(loop)
 
     if new_max != limiter.bypass_max do
@@ -107,7 +115,7 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
     end
   end
 
-  defp set_bypass_max(%TL{} = limiter, max) do
+  defp set_bypass_max(%Limiter{} = limiter, max) do
     cond do
       max > limiter.bypass_max -> increase_max_bypass(limiter, max)
       max < limiter.bypass_max -> decrease_max_bypass(limiter, max)
@@ -116,31 +124,33 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
     |> reset_timer()
   end
 
-  defp increase_max_bypass(%TL{loop: loop} = limiter, new_max) do
+  defp increase_max_bypass(%Limiter{loop: loop} = limiter, new_max) do
     if limiter.bypass_wanted >= limiter.bypass_max do
       order = min(limiter.bypass_wanted, new_max)
       Logger.debug(@log_prefix <> "Loop #{loop} following bypass increase to #{order}%.")
       set_ordered_bypass(loop, order)
     end
 
-    %TL{limiter | bypass_max: new_max}
+    %Limiter{limiter | bypass_max: new_max}
   end
 
-  defp decrease_max_bypass(%TL{loop: loop} = limiter, new_max) do
+  defp decrease_max_bypass(%Limiter{loop: loop} = limiter, new_max) do
     if limiter.bypass_wanted > new_max do
       Logger.debug(@log_prefix <> "Loop #{loop} backing off to #{new_max}%.")
       set_ordered_bypass(loop, new_max)
     end
 
-    %TL{limiter | bypass_max: new_max}
+    %Limiter{limiter | bypass_max: new_max}
   end
 
-  defp reset_timer(%TL{} = tl), do: %TL{tl | timer: 0}
+  defp reset_timer(%Limiter{} = tl), do: %Limiter{tl | timer: 0}
 
-  defp maybe_relax(%TL{bypass_max: 100} = lim, _), do: lim
-  defp maybe_relax(%TL{timer: t} = lim, _) when t < @relax_wait, do: %TL{lim | timer: t + 1}
+  defp maybe_relax(%Limiter{bypass_max: 100} = lim, _), do: lim
 
-  defp maybe_relax(%TL{loop: loop} = limiter, torque) do
+  defp maybe_relax(%Limiter{timer: t} = lim, _) when t < @relax_wait,
+    do: %Limiter{lim | timer: t + 1}
+
+  defp maybe_relax(%Limiter{loop: loop} = limiter, torque) do
     new_max = limiter.bypass_max + 1
 
     cond do
@@ -159,9 +169,10 @@ defmodule AutoNuke.Operator.SteamFlow.TorqueLimiter do
     limiter |> set_bypass_max(new_max)
   end
 
-  defp maybe_backoff(%TL{timer: t} = lim, _) when t < @backoff_wait, do: %TL{lim | timer: t + 1}
+  defp maybe_backoff(%Limiter{timer: t} = lim, _) when t < @backoff_wait,
+    do: %Limiter{lim | timer: t + 1}
 
-  defp maybe_backoff(%TL{loop: loop} = limiter, torque) do
+  defp maybe_backoff(%Limiter{loop: loop} = limiter, torque) do
     new_max = limiter.bypass_max - 1
 
     Logger.info(
