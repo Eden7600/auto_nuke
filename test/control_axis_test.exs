@@ -1,5 +1,5 @@
 defmodule AutoNuke.ControlAxisTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias AutoNuke.ControlAxis, as: CA
 

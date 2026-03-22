@@ -26,11 +26,28 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Valid loop numbers:
   @all_loops 1..3
 
-  # Target 105% demand, plus or minus 2.5%.
+  # Target 105% demand, plus or minus 5%.
   @target_percent 1.05
-  @deadzone 0.025
-  # But if resistor banks are on, drop that down to 97.5%, to try to avoid using them.
-  @resistors_offset -0.525
+  @deadzone 0.05
+  # But if resistor banks are on, drop that down to 95%, to try to avoid using them.
+  @resistors_offset -0.10
+
+  # When more power is needed, control MSCV between these values, using a
+  # round-robin-increase distribution:
+  @mscv_range 3..50
+  @mscv_size (Range.size(@mscv_range) - 1) * Range.size(@all_loops)
+  # When less power is needed, control turbine bypass between these values,
+  # using raw control of all turbines at the same time:
+  @bypass_range 0..80
+  @bypass_size Range.size(@bypass_range) - 1
+  # Assume that every 1 point of MSCV change is about 10 points of bypass:
+  @mscv_bypass_ratio 10
+  # Therefore, the transition point between bypass (low) and MSCV (high) is ...
+  cutover_percent = @bypass_size / (@bypass_size + @mscv_size * @mscv_bypass_ratio)
+  @axis_cutover_point cutover_percent * 2 - 1
+  # Derived values for convenience:
+  @axis_above_cutover 1.0 - @axis_cutover_point
+  @axis_below_cutover @axis_cutover_point - -1.0
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -55,31 +72,26 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   @impl true
   def init(nil) do
-    get_connected_loops()
-    |> do_init()
-  end
+    breakers = get_loop_breakers()
+    connected = breakers |> Keyword.get_values(:closed)
+    valves = get_valves()
 
-  defp do_init([]) do
-    Logger.info(@log_prefix <> "No loops connected, started in sleep mode.")
-    {:ok, %State{limiters: [], axis: nil}}
-  end
-
-  defp do_init(loops) when is_list(loops) do
-    limiters = loops |> Enum.map(&TorqueLimiter.new/1)
-
-    bypass =
-      limiters
-      |> Enum.map(& &1.bypass_wanted)
-      |> Statistex.average()
+    limiters =
+      breakers
+      |> Enum.map(fn
+        {:open, _} -> nil
+        {:closed, loop} -> TorqueLimiter.new(loop)
+      end)
 
     axis =
       ControlAxis.new(
-        kp: 1,
-        ki: 0.1,
+        kp: 0.1,
+        ki: 0.01,
+        kd: 0.005,
         deadzone: @deadzone,
-        to_value_fn: &axis_to_bypass/1,
-        offset: bypass |> bypass_to_axis(),
-        initial_value: bypass
+        to_value_fn: &axis_to_valves/1,
+        offset: valves |> valves_to_axis(connected),
+        initial_value: valves
       )
 
     state = %State{
@@ -88,36 +100,34 @@ defmodule AutoNuke.Operator.SteamFlow do
     }
 
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Started with loops #{inspect(loops)} at bypass #{bypass}%.")
+    Logger.info(@log_prefix <> "Started with loops #{inspect(connected)}.")
     {:ok, state}
   end
 
   @impl true
   def handle_call({:add, loop}, _from, %State{limiters: old_limiters} = state) do
-    case old_limiters |> Enum.any?(&(&1.loop == loop)) do
-      true ->
+    index = loop - 1
+
+    case old_limiters |> Enum.at(index) do
+      %TorqueLimiter{loop: ^loop} ->
         {:reply, {:error, :already_active}, state}
 
-      false ->
-        new_limiters =
-          [TorqueLimiter.new(loop) | old_limiters]
-          |> Enum.sort_by(& &1.loop)
-
+      nil ->
+        new_limiters = old_limiters |> List.replace_at(index, TorqueLimiter.new(loop))
         {:reply, :ok, %State{state | limiters: new_limiters}}
     end
   end
 
   @impl true
   def handle_call({:remove, loop}, _from, %State{limiters: old_limiters} = state) do
-    case old_limiters |> Enum.any?(&(&1.loop == loop)) do
-      false ->
-        {:reply, {:error, :not_active}, state}
+    index = loop - 1
 
-      true ->
-        new_limiters =
-          old_limiters
-          |> Enum.reject(&(&1.loop == loop))
+    case old_limiters |> Enum.at(index) do
+      nil ->
+        {:reply, {:error, :already_active}, state}
 
+      %TorqueLimiter{loop: ^loop} ->
+        new_limiters = old_limiters |> List.replace_at(index, nil)
         {:reply, :ok, %State{state | limiters: new_limiters}}
     end
   end
@@ -141,8 +151,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     case ControlAxis.step(axis, target, ratio) do
       {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing bypass from #{old} to #{new}.")
-        limiters = state.limiters |> Enum.map(&TorqueLimiter.set_bypass(&1, new))
+        limiters = change_active_valves(state.limiters, old, new)
         %State{state | axis: axis, limiters: limiters}
 
       {:unchanged, axis, _old_value} ->
@@ -172,11 +181,13 @@ defmodule AutoNuke.Operator.SteamFlow do
     end
   end
 
-  defp get_connected_loops do
+  defp get_loop_breakers do
     @all_loops
-    |> Enum.reject(fn loop ->
-      # True if breaker open, i.e. disconnected.
-      API.get_boolean("GENERATOR_#{loop - 1}_BREAKER")
+    |> Enum.map(fn loop ->
+      case API.get_boolean("GENERATOR_#{loop - 1}_BREAKER") do
+        true -> {:open, loop}
+        false -> {:closed, loop}
+      end
     end)
   end
 
@@ -188,8 +199,95 @@ defmodule AutoNuke.Operator.SteamFlow do
     |> Enum.sum()
   end
 
-  defp axis_to_bypass(output), do: round(50 - output * 50)
-  defp bypass_to_axis(bypass), do: (50 - bypass) / 50
+  defp get_valves do
+    @all_loops
+    |> Enum.map(fn loop ->
+      {get_bypass(loop), get_mscv(loop)}
+    end)
+  end
+
+  defp get_bypass(loop), do: API.get_integer("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
+  defp get_mscv(loop), do: API.get_integer("MSCV_#{loop - 1}_OPENING_ACTUAL")
+
+  # Axis high: Bypass to zero, MSCV proportional within range.
+  def axis_to_valves(output) when output >= @axis_cutover_point and output <= 1.0 do
+    value = output - @axis_cutover_point
+    percent = value / @axis_above_cutover
+
+    @all_loops
+    |> distribute(@mscv_size, percent)
+    |> Enum.map(fn mscv -> {0, @mscv_range |> Enum.at(mscv)} end)
+  end
+
+  # Axis low: MSCV to minimum, bypass proportional within range.
+  def axis_to_valves(output) when output >= -1.0 and output <= @axis_cutover_point do
+    value = @axis_cutover_point - output
+    bypass = (value / @axis_below_cutover * @bypass_size) |> round()
+
+    min_mscv.._//1 = @mscv_range
+
+    @all_loops
+    |> Enum.map(fn _ -> {@bypass_range |> Enum.at(bypass), min_mscv} end)
+  end
+
+  # For n `items`, returns a list of length n where each value is between 0 and `size - 1`, based on `percent`.
+  defp distribute(items, size, percent) do
+    notches = round(size * percent)
+    item_count = Enum.count(items)
+    base = div(notches, item_count)
+    remain = rem(notches, item_count)
+
+    items
+    |> Enum.with_index()
+    |> Enum.map(fn {_, index} ->
+      case index < remain do
+        true -> base + 1
+        false -> base
+      end
+    end)
+  end
+
+  def valves_to_axis(valves, connected_loops) do
+    connected =
+      valves
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {_, index} -> index in connected_loops end)
+      |> Enum.map(&elem(&1, 0))
+
+    bypass =
+      connected
+      |> Enum.map(fn {b, _} -> b end)
+      |> Statistex.average()
+      |> percent_of_range(@bypass_range)
+
+    mscv =
+      connected
+      |> Enum.map(fn {_, m} -> m end)
+      |> Statistex.average()
+      |> percent_of_range(@mscv_range)
+
+    @axis_cutover_point - bypass * @axis_below_cutover + mscv * @axis_above_cutover
+  end
+
+  defp percent_of_range(value, rmin..rmax//1) do
+    inside = value - rmin
+    size = rmax - rmin
+
+    (inside / size)
+    |> max(0.0)
+    |> min(1.0)
+  end
 
   defp percent(float), do: "#{float * 100}%"
+
+  defp change_active_valves(old_limiters, old_valves, new_valves) do
+    Enum.zip_with([old_limiters, old_valves, new_valves], fn
+      [nil, _, _] ->
+        nil
+
+      [%TorqueLimiter{} = limiter, old, new] ->
+        Logger.info(@log_prefix <> "Changing valves from #{inspect(old)} to #{inspect(new)}.")
+        limiter |> TorqueLimiter.set_valves(new)
+    end)
+  end
 end

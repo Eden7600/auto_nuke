@@ -1,5 +1,5 @@
 defmodule AutoNuke.SmootherTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias AutoNuke.Smoother
 
   test "Smoother.add/2 adds data values" do
