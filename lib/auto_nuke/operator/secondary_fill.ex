@@ -140,7 +140,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
       # Too full, stop pumps!
       current_fill >= @fill_max -> -1
       # Avoids divide-by-zero and sets pumps to max.
-      fill_ratio < 0.5 -> 10.0
+      fill_ratio < 0.05 -> 10.0
       # Within deadzone, just balance inlet/outlet.
       delta < @fill_level_deadzone -> 1.0
       # Adjust inlet/outlet to reach target.
