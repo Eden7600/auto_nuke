@@ -322,10 +322,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp achieve_criticality do
     UI.console("Reactor Core")
 
+    bank = 0..8 |> Enum.find(fn c -> API.get_float_or_nil("ROD_BANK_POS_#{c}_ACTUAL") end)
+
     UI.set_wait(
       "Control Rod Height",
       "SET TO #{@startup_rods}%",
-      fn -> API.get_float("ROD_BANK_POS_0_ORDERED") == @startup_rods end,
+      fn -> API.get_float("ROD_BANK_POS_#{bank}_ORDERED") == @startup_rods end,
       fn -> API.put("RODS_ALL_POS_ORDERED", @startup_rods) end
     )
 
