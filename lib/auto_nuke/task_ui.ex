@@ -126,4 +126,16 @@ defmodule AutoNuke.TaskUI do
       }
     )
   end
+
+  def parse_loop("1"), do: 1
+  def parse_loop("A"), do: 1
+  def parse_loop("a"), do: 1
+
+  def parse_loop("2"), do: 2
+  def parse_loop("B"), do: 2
+  def parse_loop("b"), do: 2
+
+  def parse_loop("3"), do: 3
+  def parse_loop("C"), do: 3
+  def parse_loop("c"), do: 3
 end

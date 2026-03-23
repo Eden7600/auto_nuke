@@ -30,14 +30,26 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # process running and targeting 50%, and it might linger around 49%.
 
   def run([]) do
+    startup(&get_installed_secondary_loops/0)
+  end
+
+  def run(args) do
+    loops = args |> Enum.map(&UI.parse_loop/1)
+    startup(fn -> loops end)
+  end
+
+  @loop_emoji "\u{1F501}"
+
+  def startup(loops_fun) do
     Application.put_env(:auto_nuke, :start, false)
     {:ok, _} = Application.ensure_all_started([:auto_nuke, :logger, :pubsub])
     UI.log_to_file("startup.log")
 
+    loops = loops_fun.()
+    IO.puts("#{@loop_emoji} Starting using loops: #{inspect(loops)} #{@loop_emoji}")
+
     {:ok, _} = PubSub.start_link()
     {:ok, _} = AutoNuke.Ticker.start_link()
-
-    loops = get_installed_secondary_loops()
 
     check_power_source()
     start_pressurizer()
@@ -556,7 +568,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         String.to_integer(loop) + 1
 
       {_, %{}} ->
-        false
+        nil
     end)
     |> Enum.reject(&is_nil/1)
   end

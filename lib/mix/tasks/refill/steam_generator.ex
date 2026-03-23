@@ -4,6 +4,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
 
   use Mix.Task
   alias AutoNuke.API
+  alias AutoNuke.TaskUI, as: UI
 
   @tank_size 600_000
   @gauge_factor 100
@@ -11,7 +12,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
 
   def run([loop, target]) do
     target = target |> String.to_integer()
-    loop = parse_loop(loop)
+    loop = UI.parse_loop(loop)
 
     refill(loop, target)
   end
@@ -54,16 +55,4 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
     set_speed(loop, pump_speed)
     volume
   end
-
-  defp parse_loop("1"), do: 1
-  defp parse_loop("A"), do: 1
-  defp parse_loop("a"), do: 1
-
-  defp parse_loop("2"), do: 2
-  defp parse_loop("B"), do: 2
-  defp parse_loop("b"), do: 2
-
-  defp parse_loop("3"), do: 3
-  defp parse_loop("C"), do: 3
-  defp parse_loop("c"), do: 3
 end
