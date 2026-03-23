@@ -19,6 +19,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @startup_rods 90
   # Stop and maintain this temperature (°C):
   @startup_temp 280
+  # Wait for this temperature before starting turbines:
+  @min_temp 270
   # Open or close MSCV to this (%):
   @startup_mscv 5
 
@@ -35,29 +37,37 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     {:ok, _} = PubSub.start_link()
     {:ok, _} = AutoNuke.Ticker.start_link()
 
+    loops = get_installed_secondary_loops()
+
     check_power_source()
     start_pressurizer()
-    start_primary_circulation()
+    start_primary_circulation(loops)
     begin_injecting_boron()
     start_condenser()
-    open_steam_valves()
+    open_steam_valves(loops)
     enable_resistor_bank()
 
-    wait_before_load_fuel()
+    wait_before_load_fuel(loops)
     load_fuel()
 
-    start_secondary_circulation()
-    {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: 3)
+    start_secondary_circulation(loops)
+
+    loops
+    |> Enum.each(fn loop ->
+      {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: loop)
+    end)
 
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
-    wait_for_temperature(@startup_temp - 5)
 
     start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
+
+    wait_for_temperature(@min_temp)
+
     request_connection()
-    start_turbine()
-    connect_to_grid()
+    start_turbine(loops)
+    connect_to_grid(loops)
     {:ok, _} = AutoNuke.Operator.SteamFlow.start_link()
 
     UI.console("ALL")
@@ -94,20 +104,50 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
   end
 
-  defp start_primary_circulation do
+  defp start_primary_circulation(loops) do
     UI.console("Coolant System")
 
-    # This has to come before "pump on" because we can't tell the difference
-    # between a pump that is off, and a pump that is on but set to zero.
+    start_pumps("CORE", "Circulation Pump", loops)
+
+    key = fn loop -> "COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED" end
+    get = fn loop -> key.(loop) |> API.get_float() |> round() end
+    put = fn value, loop -> key.(loop) |> API.put(value) end
+
     UI.set_wait(
       "Primary Pump Speed",
       "MEDIUM (50%)",
-      fn -> API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_ORDERED_SPEED") >= 50 end,
-      fn -> API.put("COOLANT_CORE_CIRCULATION_PUMP_2_ORDERED_SPEED", 50) end
+      fn ->
+        loops
+        |> Enum.map(get)
+        |> Enum.all?(&(&1 == 50))
+      end,
+      fn ->
+        loops
+        |> Enum.map(&put.(50, &1))
+      end
     )
+  end
 
-    UI.wait("Circulation Pump 3", "ON", fn ->
-      API.get_integer("COOLANT_CORE_CIRCULATION_PUMP_2_STATUS") in 1..2
+  defp start_pumps(key, title, loops) do
+    ordered_key = fn loop -> "COOLANT_#{key}_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED" end
+    actual_key = fn loop -> "COOLANT_#{key}_CIRCULATION_PUMP_#{loop - 1}_SPEED" end
+
+    get_ordered = fn loop -> ordered_key.(loop) |> API.get_float() |> round() end
+    get_actual = fn loop -> actual_key.(loop) |> API.get_float() |> round() end
+    put_ordered = fn value, loop -> ordered_key.(loop) |> API.put(value) end
+
+    loops
+    |> Enum.each(fn loop ->
+      # Set pump to at least speed 1 (if not already higher).
+      # This has to come before "pump on" because we can't tell the difference
+      # between a pump that is off, and a pump that is on but set to zero.
+      get_ordered.(loop)
+      |> max(1)
+      |> put_ordered.(loop)
+
+      UI.wait("#{title} 0#{loop}", "ON", fn ->
+        get_actual.(loop) > 0.9
+      end)
     end)
   end
 
@@ -129,30 +169,44 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  defp open_steam_valves do
+  defp set_all_mscv(loops, description, target) do
+    loops
+    |> Enum.each(fn loop ->
+      index = loop - 1
+      init_mscv = API.get_float("MSCV_#{index}_OPENING_ACTUAL")
+
+      UI.set_wait_unless(
+        "Main Steam Control Valve 0#{loop}",
+        description,
+        fn -> init_mscv == target end,
+        fn -> API.get_float("MSCV_#{index}_OPENING_ACTUAL") != init_mscv end,
+        fn -> API.put("MSCV_#{index}_OPENING_ORDERED", target) end
+      )
+    end)
+  end
+
+  defp set_all_bypass(loops, description, target) do
+    loops
+    |> Enum.each(fn loop ->
+      index = loop - 1
+      init_bypass = API.get_float("STEAM_TURBINE_#{index}_BYPASS_ACTUAL")
+
+      UI.set_wait_unless(
+        "Turbine Bypass Valve 0#{loop}",
+        description,
+        fn -> init_bypass == target end,
+        fn -> API.get_float("STEAM_TURBINE_#{index}_BYPASS_ACTUAL") != init_bypass end,
+        fn -> API.put("STEAM_TURBINE_#{index}_BYPASS_ORDERED", target) end
+      )
+    end)
+  end
+
+  defp open_steam_valves(loops) do
     UI.console("Steam Generator")
-
-    init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
-
-    UI.set_wait_unless(
-      "Main Steam Control Valve",
-      "CLOSED (0%)",
-      fn -> init_mscv == 0 end,
-      fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
-      fn -> API.put("MSCV_2_OPENING_ORDERED", 0) end
-    )
+    set_all_mscv(loops, "CLOSED (0%)", 0)
 
     UI.console("Generation & Distribution")
-
-    init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
-
-    UI.set_wait_unless(
-      "Turbine Bypass Valve 3",
-      "OPEN (100%)",
-      fn -> init_bypass == 100 end,
-      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") != init_bypass end,
-      fn -> API.put("STEAM_TURBINE_2_BYPASS_ORDERED", 100) end
-    )
+    set_all_bypass(loops, "OPEN (100%)", 100)
 
     UI.console("Condenser")
 
@@ -181,21 +235,23 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp request_connection do
     UI.tablet("Communications Center")
     UI.set("Start Operations", "REQUEST")
-    UI.set("Response", "WAIT FOR PERMISSION")
-    IO.gets("Press enter when permission received ...")
+    IO.gets("Press enter when permission requested ...")
   end
 
-  defp wait_before_load_fuel do
+  defp wait_before_load_fuel(loops) do
     UI.console("Coolant System")
 
-    UI.progress_loop(
-      label: "Pump Speed",
-      fetch: fn ->
-        API.get_float("COOLANT_CORE_CIRCULATION_PUMP_2_SPEED")
-        |> floor()
-      end,
-      max: 50
-    )
+    loops
+    |> Enum.each(fn loop ->
+      UI.progress_loop(
+        label: "Pump 0#{loop} Speed",
+        fetch: fn ->
+          API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_SPEED")
+          |> floor()
+        end,
+        max: 50
+      )
+    end)
 
     UI.console("Condenser")
 
@@ -231,23 +287,29 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     UI.console("Steam Generator")
 
-    UI.progress_loop(
-      label: "MSCV",
-      fetch: fn ->
-        # Hack to support the fact that progress bars must be ascending:
-        (100 - API.get_float("MSCV_2_OPENING_ACTUAL"))
-        |> ceil()
-      end,
-      max: 100
-    )
+    loops
+    |> Enum.each(fn loop ->
+      UI.progress_loop(
+        label: "MSCV 0#{loop}",
+        fetch: fn ->
+          # Hack to support the fact that progress bars must be ascending:
+          (100 - API.get_float("MSCV_#{loop - 1}_OPENING_ACTUAL"))
+          |> ceil()
+        end,
+        max: 100
+      )
+    end)
 
     UI.console("Generation & Distribution")
 
-    UI.progress_loop(
-      label: "Bypass",
-      fetch: fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") |> floor() end,
-      max: 100
-    )
+    loops
+    |> Enum.each(fn loop ->
+      UI.progress_loop(
+        label: "Bypass 0#{loop}",
+        fetch: fn -> API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL") |> floor() end,
+        max: 100
+      )
+    end)
 
     UI.console("Pressurizer")
 
@@ -334,9 +396,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
     end)
+
+    wait_for_temperature(100, false)
   end
 
-  defp wait_for_temperature(temp) do
+  defp wait_for_temperature(temp, with_header \\ true) do
+    if with_header, do: UI.console("Reactor Core")
+
     UI.progress_loop(
       label: "Primary Temperature",
       fetch: fn -> API.get_float("CORE_TEMP") |> round() end,
@@ -344,21 +410,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  defp start_secondary_circulation do
+  defp start_secondary_circulation(loops) do
     UI.console("Steam Generator")
 
-    # This has to come before "pump on" because we can't tell the difference
-    # between a pump that is off, and a pump that is on but set to zero.
-    UI.set_wait(
-      "Secondary Pump Speed",
-      "MEDIUM (50%)",
-      fn -> API.get_float("COOLANT_SEC_CIRCULATION_PUMP_2_ORDERED_SPEED") >= 50 end,
-      fn -> API.put("COOLANT_SEC_CIRCULATION_PUMP_2_ORDERED_SPEED", 50) end
-    )
-
-    UI.wait("Secondary Pump 3", "ON", fn ->
-      API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_2_STATUS") in 1..2
-    end)
+    start_pumps("SEC", "Secondary Pump", loops)
   end
 
   defp start_vacuum_pump do
@@ -417,45 +472,36 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  defp start_turbine do
+  defp start_turbine(loops) do
     UI.console("Steam Generator")
-
-    init_mscv = API.get_float("MSCV_2_OPENING_ACTUAL")
-
-    UI.set_wait_unless(
-      "Main Steam Control Valve",
-      "LIMITED (#{@startup_mscv}%)",
-      fn -> init_mscv == @startup_mscv end,
-      fn -> API.get_float("MSCV_2_OPENING_ACTUAL") != init_mscv end,
-      fn -> API.put("MSCV_2_OPENING_ORDERED", @startup_mscv) end
-    )
+    mscv = @startup_mscv
+    set_all_mscv(loops, "LIMITED (#{mscv}%)", mscv)
 
     UI.console("Generation & Distribution")
-
-    init_bypass = API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL")
-
-    UI.set_wait_unless(
-      "Turbine Bypass Valve 3",
-      "CLOSED (0%)",
-      fn -> init_bypass == 0 end,
-      fn -> API.get_float("STEAM_TURBINE_2_BYPASS_ACTUAL") != init_bypass end,
-      fn -> API.put("STEAM_TURBINE_2_BYPASS_ORDERED", 0) end
-    )
+    set_all_bypass(loops, "CLOSED (0%)", 0)
   end
 
-  defp connect_to_grid do
+  defp connect_to_grid(loops) do
+    UI.tablet("Communications Center")
+    UI.set("Response", "WAIT FOR PERMISSION")
+
     UI.console("Generation & Distribution")
 
-    UI.progress_loop(
-      label: "RPM",
-      fetch: fn -> API.get_float("STEAM_TURBINE_2_RPM") |> round() end,
-      max: 3050
-    )
+    loops
+    |> Enum.each(fn loop ->
+      index = loop - 1
 
-    UI.set("Synchroscope / RPM", "ADJUST UNTIL SYNC")
+      UI.progress_loop(
+        label: "Turbine 0#{loop} RPM",
+        fetch: fn -> API.get_float("STEAM_TURBINE_#{index}_RPM") |> round() end,
+        max: 3050
+      )
 
-    UI.wait("Circuit Breaker", "CLOSE", fn ->
-      !API.get_boolean("GENERATOR_2_BREAKER")
+      UI.set("Turbine 0#{loop} Synchroscope", "ADJUST UNTIL SYNC")
+
+      UI.wait("Turbine 0#{loop} Circuit Breaker", "CLOSE", fn ->
+        !API.get_boolean("GENERATOR_#{index}_BREAKER")
+      end)
     end)
   end
 
@@ -495,5 +541,23 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     Process.sleep(500)
     inject_boron_loop()
+  end
+
+  defp get_installed_secondary_loops do
+    API.get_json("INSTALLED_LOOPS_JSON")
+    |> Enum.map(fn
+      {"Loop_" <> loop,
+       %{
+         "Primary_Pump" => true,
+         "Secondary_Pump" => true,
+         "Steam_Generator" => true,
+         "Turbine" => true
+       }} ->
+        String.to_integer(loop) + 1
+
+      {_, %{}} ->
+        false
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 end

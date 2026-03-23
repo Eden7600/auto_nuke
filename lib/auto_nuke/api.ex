@@ -21,6 +21,7 @@ defmodule AutoNuke.API do
   def get_float(key), do: get(key) |> to_float()
   def get_integer_or_nil(key, default \\ nil), do: get(key) |> or_nil(&to_integer/1, default)
   def get_float_or_nil(key, default \\ nil), do: get(key) |> or_nil(&to_float/1, default)
+  def get_json(key), do: get(key) |> Jason.decode!()
 
   def or_nil("null", _, default), do: default
   def or_nil(str, fun, _), do: fun.(str)
