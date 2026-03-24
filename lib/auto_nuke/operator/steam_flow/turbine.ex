@@ -159,10 +159,10 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
     cond do
       torque < @torque_target ->
-        (torque - @torque_target) / (@torque_target - @torque_critical)
+        (@torque_target - torque) / (@torque_target - @torque_critical)
 
       torque > @torque_target ->
-        (torque - @torque_target) / (@torque_high - @torque_target)
+        (@torque_target - torque) / (@torque_high - @torque_target)
 
       torque == @torque_target ->
         0

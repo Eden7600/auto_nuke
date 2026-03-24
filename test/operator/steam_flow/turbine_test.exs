@@ -113,4 +113,34 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert final_turbine.bypass == 40
     end
   end
+
+  describe "power level 1" do
+    test "targets 2.5 torque" do
+      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", Enum.random(0..100))
+      API.mock_get("MSCV_1_OPENING_ACTUAL", 2)
+      API.mock_get("STEAM_TURBINE_1_TORQUE", 2.2)
+
+      # min_steam is ignored
+      assert %Turbine{} = turbine = Turbine.new(2, 1000)
+      assert turbine.power_level == 1
+
+      # Torque will be 2.5 when at 50 bypass, averaged over the last 5 readings.
+      # Higher bypass will lead to lower torque and vice versa.
+      smoother = Smoother.new(5)
+
+      {final_turbine, _} =
+        1..@settle_time
+        |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
+          new_torque = 2.5 - (old_t.bypass - 50) / 50
+          smoother = Smoother.add(smoother, new_torque)
+
+          API.mock_get("STEAM_TURBINE_1_TORQUE", new_torque)
+
+          assert %Turbine{} = new_t = Turbine.tick(old_t)
+          {new_t, smoother}
+        end)
+
+      assert final_turbine.bypass == 50
+    end
+  end
 end
