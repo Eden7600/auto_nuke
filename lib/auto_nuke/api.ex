@@ -1,20 +1,8 @@
 defmodule AutoNuke.API do
-  defp api_url do
-    case System.fetch_env("NUKE_URL") do
-      {:ok, url} -> url
-      :error -> Application.fetch_env!(:auto_nuke, :api_url)
-    end
-  end
+  @backend Application.compile_env(:auto_nuke, :api_backend, AutoNuke.API.Web)
 
-  defp req_new do
-    Req.new(base_url: api_url())
-  end
-
-  defp get(key) do
-    req_new()
-    |> Req.get!(url: "/", params: [variable: key])
-    |> then(fn %Req.Response{status: 200, body: body} -> body end)
-  end
+  defp get(key), do: @backend.get(key)
+  defdelegate put(key, value), to: @backend
 
   def get_string(key), do: get(key)
   def get_integer(key), do: get(key) |> to_integer()
@@ -23,8 +11,8 @@ defmodule AutoNuke.API do
   def get_float_or_nil(key, default \\ nil), do: get(key) |> or_nil(&to_float/1, default)
   def get_json(key), do: get(key) |> Jason.decode!()
 
-  def or_nil("null", _, default), do: default
-  def or_nil(str, fun, _), do: fun.(str)
+  defp or_nil("null", _, default), do: default
+  defp or_nil(str, fun, _), do: fun.(str)
 
   defp to_integer(str), do: String.to_integer(str)
 
@@ -39,11 +27,5 @@ defmodule AutoNuke.API do
       "True" -> true
       "False" -> false
     end
-  end
-
-  def put(key, value) do
-    req_new()
-    |> Req.post!(url: "/", params: [variable: key, value: value], body: "")
-    |> then(fn %{status: 200} -> :ok end)
   end
 end
