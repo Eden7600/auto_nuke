@@ -38,15 +38,36 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
   end
 
-  describe "power level 5" do
-    test "pushes bypass to zero" do
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 42)
-      API.mock_get("MSCV_2_OPENING_ACTUAL", 5)
+  describe "set_min_steam/2" do
+    setup do
+      [turbine: new_turbine()]
+    end
 
-      assert %Turbine{} = turbine = Turbine.new(3, 50)
-      assert turbine.power_level == 5
-      assert turbine.bypass == 42
+    test "sets minimum steam level", %{turbine: turbine} do
+      new_steam = Enum.random(1..50)
+      assert %Turbine{} = turbine = Turbine.set_min_steam(turbine, new_steam)
+      assert turbine.min_steam == new_steam
+    end
+  end
 
+  describe "set_power_level/2" do
+    setup do
+      [turbine: new_turbine()]
+    end
+
+    test "sets power level", %{turbine: turbine} do
+      new_power = Enum.random(1..100)
+      assert %Turbine{} = turbine = Turbine.set_power_level(turbine, new_power)
+      assert turbine.power_level == new_power
+    end
+  end
+
+  describe "tick/1 at power level 5" do
+    setup do
+      [turbine: new_turbine(loop: 1, power_level: 5)]
+    end
+
+    test "pushes bypass to zero", %{turbine: turbine} do
       final_turbine =
         1..@settle_time
         |> Enum.reduce(turbine, fn _, old_t ->
@@ -59,23 +80,22 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
   end
 
-  describe "power level 3" do
-    test "ensures enough steam" do
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", Enum.random(0..100))
-      API.mock_get("MSCV_0_OPENING_ACTUAL", 3)
+  describe "tick/1 at power level 3" do
+    setup do
+      [turbine: new_turbine(loop: 1, power_level: 3, min_steam: 50)]
+    end
 
-      assert %Turbine{} = turbine = Turbine.new(1, 50)
-      assert turbine.power_level == 3
-
-      # Steam output will be the average of the last 5 bypass settings, doubled.
-      # Our target will be 25 bypass = 50 steam.
+    test "ensures enough steam", %{turbine: turbine} do
+      # Let's pretend steam is just bypass x2, so our target is 25 bypass = 50 steam.
+      steam_fun = fn bypass -> bypass * 2.0 end
+      # Steam output will be the average of the last 5 steam readings.
       smoother = Smoother.new(5)
 
       {final_turbine, _} =
         1..@settle_time
         |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
-          smoother = Smoother.add(smoother, old_t.bypass * 2.0)
-          API.mock_get("STEAM_GEN_0_OUTLET", Smoother.average(smoother) |> Float.to_string())
+          smoother = Smoother.add(smoother, steam_fun.(old_t.bypass))
+          API.mock_get("STEAM_GEN_0_OUTLET", Smoother.average(smoother))
           API.mock_get("COOLANT_SEC_0_PRESSURE", 0)
 
           assert %Turbine{} = new_t = Turbine.tick(old_t)
@@ -85,22 +105,17 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert final_turbine.bypass == 25
     end
 
-    test "ensures low enough pressure" do
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", Enum.random(0..100))
-      API.mock_get("MSCV_0_OPENING_ACTUAL", 3)
-
-      assert %Turbine{} = turbine = Turbine.new(1, 1)
-      assert turbine.power_level == 3
-
-      # Bypass settings below 40 will cause pressure to skyrocket.
-      # We'll simulate this by taking the average of the last 5 readings.
-      smoother = Smoother.new(5) |> Smoother.add(70.0)
+    test "ensures low enough pressure", %{turbine: turbine} do
+      # Let's pretend bypass below 40 will cause pressure to rise.
+      pressure_fun = fn pressure, bypass -> pressure + (40 - bypass) / 5 end
+      # We'll simulate this by taking the average of the last 5 readings,
+      # starting with a random pressure between 50 and 70.
+      smoother = Smoother.new(5) |> Smoother.add(50 + :rand.uniform() * 20.0)
 
       {final_turbine, _} =
         1..@settle_time
         |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
-          old_pressure = Smoother.average(smoother)
-          new_pressure = old_pressure + (40 - old_t.bypass) / 5
+          new_pressure = Smoother.average(smoother) |> pressure_fun.(old_t.bypass)
           smoother = Smoother.add(smoother, new_pressure)
 
           API.mock_get("STEAM_GEN_0_OUTLET", 100)
@@ -114,16 +129,12 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
   end
 
-  describe "power level 1" do
-    test "targets 2.5 torque" do
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", Enum.random(0..100))
-      API.mock_get("MSCV_1_OPENING_ACTUAL", 2)
-      API.mock_get("STEAM_TURBINE_1_TORQUE", 2.2)
+  describe "tick/1 at power level 1" do
+    setup do
+      [turbine: new_turbine(loop: 2, power_level: 1)]
+    end
 
-      # min_steam is ignored
-      assert %Turbine{} = turbine = Turbine.new(2, 1000)
-      assert turbine.power_level == 1
-
+    test "targets 2.5 torque", %{turbine: turbine} do
       # Torque will be 2.5 when at 50 bypass, averaged over the last 5 readings.
       # Higher bypass will lead to lower torque and vice versa.
       smoother = Smoother.new(5)
@@ -143,4 +154,38 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert final_turbine.bypass == 50
     end
   end
+
+  defp new_turbine(opts \\ []) do
+    {loop, opts} = maybe_random(opts, :loop, 1..3)
+    {power_level, opts} = maybe_random(opts, :power_level, 0..100)
+    {min_steam, opts} = maybe_random(opts, :min_steam, 1..100)
+    {bypass, opts} = maybe_random(opts, :bypass, 0..100)
+    {torque, opts} = maybe_random(opts, :torque, fn -> random_torque(power_level) end)
+    unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
+
+    mscv =
+      if power_level in 1..2 do
+        API.mock_get("STEAM_TURBINE_#{loop - 1}_TORQUE", torque)
+        2
+      else
+        power_level
+      end
+
+    API.mock_get("MSCV_#{loop - 1}_OPENING_ACTUAL", mscv)
+    API.mock_get("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL", bypass)
+    assert %Turbine{} = turbine = Turbine.new(loop, min_steam)
+    assert [] = API.unused_mocks()
+    turbine
+  end
+
+  defp maybe_random(opts, key, _.._//_ = range) do
+    maybe_random(opts, key, fn -> Enum.random(range) end)
+  end
+
+  defp maybe_random(opts, key, fun) when is_function(fun) do
+    Keyword.pop_lazy(opts, key, fun)
+  end
+
+  defp random_torque(1), do: 2.000 + :rand.uniform() * 0.699
+  defp random_torque(_), do: 2.701 + :rand.uniform() * 5
 end

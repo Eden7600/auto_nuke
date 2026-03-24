@@ -22,4 +22,13 @@ defmodule AutoNuke.Test.MockAPI do
       0 -> raise "API `put` call was not received: #{inspect(key)}"
     end
   end
+
+  def unused_mocks do
+    receive do
+      {__MODULE__, :mocked, :get, key, value} -> [{:get, key, value} | unused_mocks()]
+      {__MODULE__, :called, :put, key, value} -> [{:put, key, value} | unused_mocks()]
+    after
+      0 -> []
+    end
+  end
 end
