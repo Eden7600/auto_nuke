@@ -98,6 +98,108 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
+  describe "tick with three loops" do
+    setup do
+      [
+        pid:
+          start_steam_flow(
+            turbine1: [power_level: 3],
+            turbine2: [power_level: 5],
+            turbine3: [power_level: 4]
+          )
+      ]
+    end
+
+    test "maintains current power when demand is met", %{pid: pid} do
+      assert power_levels(pid) == [3, 5, 4]
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Ensure supply (kW) is 105% of demand (MW).
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      # Steam output should NOT be queried, no need to mock it.
+      # API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      # API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      # API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [3, 5, 4]
+      assert [] = API.unused_mocks()
+    end
+
+    test "increases power when supply does not meet demand", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 1.20 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) > 12
+      assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert power2 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert power3 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert [^power1, ^power2, ^power3] = powers = power_levels(pid)
+
+      # No level should be more than 1 greater than the others.
+      assert Enum.max(powers) - Enum.min(powers) <= 1
+    end
+
+    test "decreases power when supply exceeds demand", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) < 12
+      assert API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert powers = power_levels(pid)
+
+      # No level should be more than 1 greater than the others.
+      assert Enum.max(powers) - Enum.min(powers) <= 1
+    end
+
+    test "does not increase power beyond current steam level plus one", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 2.0 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 44)
+      API.mock_get("STEAM_GEN_1_OUTLET", 60)
+      API.mock_get("STEAM_GEN_2_OUTLET", 46)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [5, 7, 6]
+    end
+  end
+
   defp start_steam_flow(opts) do
     {turbine1, opts} = Keyword.pop(opts, :turbine1, [])
     {turbine2, opts} = Keyword.pop(opts, :turbine2, [])
@@ -137,4 +239,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   defp state(pid) do
     assert %SteamFlow.State{} = MockGenServer.get_state(pid)
   end
+
+  defp power_levels(pid), do: state(pid).turbines |> Enum.map(& &1.power_level)
+  defp total_power(pid), do: power_levels(pid) |> Enum.sum()
 end

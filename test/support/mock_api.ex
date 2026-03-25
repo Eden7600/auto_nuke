@@ -75,6 +75,12 @@ defmodule AutoNuke.Test.MockAPI do
   end
 
   @impl true
+  def handle_call({:mock_put_value, pid, key}, _from, %State{} = state) do
+    {rval, state} = state |> pop_mock(pid, {:put, key})
+    {:reply, rval, state}
+  end
+
+  @impl true
   def handle_call({:unused_mocks, pid}, _from, %State{} = state) do
     rval =
       Map.get(state.mocks, pid, %{})

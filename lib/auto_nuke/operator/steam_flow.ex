@@ -210,9 +210,9 @@ defmodule AutoNuke.Operator.SteamFlow do
     |> round()
   end
 
-  defp update_power_levels(turbines, target_total) do
+  defp update_power_levels(old_turbines, target_total) do
     power_levels =
-      turbines
+      old_turbines
       |> Enum.map(fn %Turbine{} = t ->
         {t.loop, t.power_level, Turbine.max_power_level(t)}
       end)
@@ -220,7 +220,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     current_total = power_levels |> Enum.sum_by(fn {_, power, _} -> power end)
 
     if current_total == target_total do
-      {:ok, turbines}
+      {:ok, old_turbines}
     else
       delta = target_total - current_total
 
@@ -229,7 +229,7 @@ defmodule AutoNuke.Operator.SteamFlow do
         |> Enum.sort()
 
       new_turbines =
-        turbines
+        old_turbines
         |> Enum.zip_with(new_power_levels, fn
           %Turbine{loop: loop} = turbine, {loop, power, _max} ->
             turbine |> Turbine.set_power_level(power)
@@ -239,7 +239,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
       cond do
         new_total == target_total -> {:ok, new_turbines}
-        new_total < target_total -> {:error, :at_max, new_total, turbines}
+        new_total < target_total -> {:error, :at_max, new_total, new_turbines}
       end
     end
   end
@@ -294,15 +294,22 @@ defmodule AutoNuke.Operator.SteamFlow do
 
       [first, second | rest] ->
         {first_loop, old_first_power, first_max} = first
-        {_, second_power, _} = second
+        {_, second_power, second_max} = second
 
         # Try to add as much power as we can,
         # ... but don't go over max,
-        # ... and don't go more than +1 over the next option.
+        # ... and don't go more than +1 over the next option,
+        #     UNLESS the next option (and thus, all other options) 
+        #     are already at max.
         new_first_power =
           (old_first_power + to_allocate)
           |> min(first_max)
-          |> min(second_power + 1)
+          |> then(fn v ->
+            case second_power < second_max do
+              true -> v |> min(second_power + 1)
+              false -> v
+            end
+          end)
 
         new_power_levels = [
           {first_loop, new_first_power, first_max},
