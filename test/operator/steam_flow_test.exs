@@ -234,6 +234,43 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, 1})
       assert total_power(pid) < 12
     end
+
+    test "uses override target if set", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      kw1 = :rand.uniform() * 25000
+      kw2 = :rand.uniform() * 25000
+      kw3 = :rand.uniform() * 25000
+      demand_mw = (kw1 + kw2 + kw3) / 1.05 / 1000
+
+      mock_power = fn ->
+        API.mock_get("GENERATOR_0_KW", kw1)
+        API.mock_get("GENERATOR_1_KW", kw2)
+        API.mock_get("GENERATOR_2_KW", kw3)
+        API.mock_get("POWER_FROM_TURBINE_KW", 0)
+        API.mock_get("POWER_DEMAND_MW", demand_mw)
+        API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+        API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+        API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+        API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      end
+
+      # Tick 1, nothing changes:
+      mock_power.()
+      send(pid, {:tick, 1})
+      assert total_power(pid) == 12
+
+      # Tick 2, nothing changes:
+      mock_power.()
+      send(pid, {:tick, 1})
+      assert total_power(pid) == 12
+
+      # Tick 3, we override the target to 1.3:
+      SteamFlow.set_target_override(1.3, pid)
+      mock_power.()
+      send(pid, {:tick, 1})
+      assert total_power(pid) > 12
+    end
   end
 
   describe "tick with two loops" do

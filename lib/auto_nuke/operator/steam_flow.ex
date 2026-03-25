@@ -132,13 +132,13 @@ defmodule AutoNuke.Operator.SteamFlow do
   @impl true
   def handle_cast({:override, nil}, %State{} = state) do
     Logger.notice(@log_prefix <> "Target override cleared.")
-    {:reply, :ok, %State{state | target_override: nil}}
+    {:noreply, %State{state | target_override: nil}}
   end
 
   @impl true
   def handle_cast({:override, new}, %State{} = state) when is_float(new) do
     Logger.notice(@log_prefix <> "Target override set: #{percent(new)}")
-    {:reply, :ok, %State{state | target_override: new}}
+    {:noreply, %State{state | target_override: new}}
   end
 
   @impl true
