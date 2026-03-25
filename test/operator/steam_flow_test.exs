@@ -121,9 +121,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       # Steam output should NOT be queried, no need to mock it.
-      # API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      # API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      # API.mock_get("STEAM_GEN_2_OUTLET", 1000)
 
       send(pid, {:tick, 1})
 
@@ -197,6 +194,211 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, 1})
 
       assert power_levels(pid) == [5, 7, 6]
+    end
+
+    test "takes the plant's own used power into account", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      # Ensure supply (kW) is 105% of demand (MW) ...
+      total_kw = kw1 + kw2 + kw3
+      API.mock_get("POWER_DEMAND_MW", total_kw / 1.05 / 1000)
+      # ... but pretend the plant requires a truly excessive amount of power (25%):
+      API.mock_get("POWER_FROM_TURBINE_KW", total_kw / 4)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+      assert total_power(pid) > 12
+    end
+
+    test "targets below 100% if resistor banks enabled", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Ensure supply (kW) is 100.1% of demand (MW) ...
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.001 / 1000)
+      # ... but now we turn the main banks on:
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "True")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+      assert total_power(pid) < 12
+    end
+  end
+
+  describe "tick with two loops" do
+    setup do
+      [
+        pid:
+          start_steam_flow(
+            turbine1: [power_level: 3],
+            turbine2: [power_level: 5],
+            turbine3: false
+          )
+      ]
+    end
+
+    test "maintains current power when demand is met", %{pid: pid} do
+      assert power_levels(pid) == [3, 5]
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Ensure supply (kW) is 105% of demand (MW).
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) / 1.05 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      # Steam output should NOT be queried, no need to mock it.
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [3, 5]
+      assert [] = API.unused_mocks()
+    end
+
+    test "increases power when supply does not meet demand", %{pid: pid} do
+      assert total_power(pid) == 8
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 1.20 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) > 8
+      assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert power2 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert [^power1, ^power2] = power_levels(pid)
+
+      # Levels should be within 1 of each other:
+      assert abs(power1 - power2) in 0..1
+    end
+
+    test "decreases power when supply exceeds demand", %{pid: pid} do
+      assert total_power(pid) == 8
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 0.80 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) < 8
+      assert API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert [power1, power2] = power_levels(pid)
+
+      # Levels should be within 1 of each other:
+      assert abs(power1 - power2) in 0..1
+    end
+
+    test "does not increase power beyond current steam level plus one", %{pid: pid} do
+      assert total_power(pid) == 8
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 2.0 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_0_OUTLET", 34)
+      API.mock_get("STEAM_GEN_1_OUTLET", 75)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [4, 9]
+    end
+  end
+
+  describe "tick with one loop" do
+    setup do
+      [
+        pid:
+          start_steam_flow(
+            turbine1: false,
+            turbine2: false,
+            turbine3: [power_level: 4]
+          )
+      ]
+    end
+
+    test "maintains current power when demand is met", %{pid: pid} do
+      assert power_levels(pid) == [4]
+
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Ensure supply (kW) is 105% of demand (MW).
+      API.mock_get("POWER_DEMAND_MW", kw3 / 1.05 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      # Steam output should NOT be queried, no need to mock it.
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [4]
+      assert [] = API.unused_mocks()
+    end
+
+    test "increases power when supply does not meet demand", %{pid: pid} do
+      assert power_levels(pid) == [4]
+
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", kw3 * 1.20 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert [power3] = power_levels(pid)
+      assert power3 > 4
+      assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
+    end
+
+    test "decreases power when supply exceeds demand", %{pid: pid} do
+      assert power_levels(pid) == [4]
+
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", kw3 * 0.80 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+
+      send(pid, {:tick, 1})
+
+      assert [power3] = power_levels(pid)
+      assert power3 < 4
+      # This could fail if tuning ever drops us down to power level 1 (MSCV 2).
+      # However, I don't think "20% lower demand" should ever drop us from 4 to 1.
+      assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
+    end
+
+    test "does not increase power beyond current steam level plus one", %{pid: pid} do
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", kw3 * 2.0 / 1000)
+      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+      API.mock_get("STEAM_GEN_2_OUTLET", 46)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [6]
+      assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == 6
     end
   end
 

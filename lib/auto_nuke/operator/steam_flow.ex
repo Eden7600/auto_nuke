@@ -246,6 +246,15 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   defp allocate_power(power_levels, 0), do: power_levels
 
+  # Single turbine case is very simple, just allocate whatever we can.
+  defp allocate_power([{loop, old_power, max}], to_allocate) do
+    new_power =
+      (old_power + to_allocate)
+      |> min(max)
+
+    [{loop, new_power, max}]
+  end
+
   defp allocate_power(power_levels, to_allocate) when to_allocate < 0 do
     power_levels
     |> Enum.sort_by(fn {_loop, power, max} ->
