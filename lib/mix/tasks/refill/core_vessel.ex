@@ -48,7 +48,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CoreVessel do
     UI.wait(
       "Primary Core Storage Tank",
       "FILL TO #{pcst_target} kL",
-      fn -> get_primary_cst_level() >= pcst_target end
+      fn -> get_primary_cst_level() >= pcst_target * 1000 end
     )
   end
 
