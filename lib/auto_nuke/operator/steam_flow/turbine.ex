@@ -51,6 +51,13 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | power_level: new}
   end
 
+  def max_power_level(%Turbine{loop: loop}) do
+    get_steam_outlet(loop)
+    |> Kernel./(10)
+    |> round()
+    |> Kernel.+(1)
+  end
+
   def tick(%Turbine{loop: loop, axis: axis} = turbine) do
     ratio = get_current_value(turbine)
 
@@ -111,11 +118,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     # >0 = safe, 0 = at limit, <0 = violation
     normalized_error = (steam - min_steam) / min_steam
     # 0 = very safe, 0.x = approaching limit, 1 = violation
-    activation_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
+    approach_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
     # 0 = safe, <0 = violation
-    required_direction = clamp(normalized_error * gain, -1.0, 0.0)
+    violation_factor = clamp(normalized_error * gain, -1.0, 0.0)
 
-    new_value = (1 - activation_factor) * old_value + activation_factor * required_direction
+    new_value = (1 - approach_factor) * old_value + violation_factor
     min(old_value, new_value)
   end
 
@@ -135,11 +142,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     # >0 = safe, 0 = at limit, <0 = violation
     normalized_error = (@max_pressure - pressure) / @max_pressure
     # 0 = very safe, 0.x = approaching limit, 1 = violation
-    activation_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
+    approach_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
     # 0 = safe, <0 = violation
-    required_direction = clamp(normalized_error * gain, -1.0, 0.0)
+    violation_factor = clamp(normalized_error * gain, -1.0, 0.0)
 
-    new_value = (1 - activation_factor) * old_value + activation_factor * required_direction
+    new_value = (1 - approach_factor) * old_value + violation_factor
     min(old_value, new_value)
   end
 

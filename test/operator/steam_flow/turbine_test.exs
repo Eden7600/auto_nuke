@@ -62,6 +62,17 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
   end
 
+  describe "max_power_level/1" do
+    setup do
+      [turbine: new_turbine(loop: 1)]
+    end
+
+    test "returns one level higher than current steam output", %{turbine: turbine} do
+      API.mock_get("STEAM_GEN_0_OUTLET", 40)
+      assert Turbine.max_power_level(turbine) == 5
+    end
+  end
+
   describe "tick/1 at power level 5" do
     setup do
       [turbine: new_turbine(loop: 1, power_level: 5)]

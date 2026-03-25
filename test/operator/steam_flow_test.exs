@@ -1,120 +1,140 @@
 defmodule AutoNuke.Operator.SteamFlowTest do
   use ExUnit.Case, async: true
+  alias AutoNuke.Operator.SteamFlow
+  alias AutoNuke.Operator.SteamFlow.Turbine
+  alias AutoNuke.Test.MockGenServer
+  alias AutoNuke.Test.TurbineFactory
+  alias AutoNuke.Test.MockAPI, as: API
 
-  alias AutoNuke.Operator.SteamFlow, as: SF
+  describe "start_link/1" do
+    test "takes control of turbines with closed breakers" do
+      pid =
+        start_steam_flow(
+          turbine1: [power_level: 5, bypass: 5],
+          turbine2: false,
+          turbine3: [power_level: 3, bypass: 10]
+        )
 
-  # approximate
-  @cutover -0.892617
+      assert [t1, t3] = state(pid).turbines
 
-  describe "axis_to_valves/1" do
-    test "converts min axis to max bypass + min MSCV" do
-      assert [same, same, same] = SF.axis_to_valves(-1.0)
-      assert same == {80, 3}
-    end
+      assert t1.loop == 1
+      assert t1.power_level == 5
+      assert t1.min_steam == 25
+      assert t1.bypass == 5
 
-    test "converts max axis to min bypass + max MSCV" do
-      assert [same, same, same] = SF.axis_to_valves(1.0)
-      assert same == {0, 50}
-    end
-
-    test "converts cutover point to min bypass + min MSCV" do
-      assert [same, same, same] = SF.axis_to_valves(@cutover)
-      assert same == {0, 3}
-    end
-
-    test "above cutover point, increases MSCV one valve at a time" do
-      assert number_stream(@cutover, fn n -> n + 0.005 end)
-             |> Stream.map(&SF.axis_to_valves/1)
-             |> Stream.dedup()
-             |> Enum.take(5) == [
-               [{0, 3}, {0, 3}, {0, 3}],
-               [{0, 4}, {0, 3}, {0, 3}],
-               [{0, 4}, {0, 4}, {0, 3}],
-               [{0, 4}, {0, 4}, {0, 4}],
-               [{0, 5}, {0, 4}, {0, 4}]
-             ]
-    end
-
-    test "below cutover point, increases bypass on all valves at once" do
-      assert number_stream(@cutover, fn n -> n - 0.0005 end)
-             |> Stream.map(&SF.axis_to_valves/1)
-             |> Stream.dedup()
-             |> Enum.take(5) == [
-               [{0, 3}, {0, 3}, {0, 3}],
-               [{1, 3}, {1, 3}, {1, 3}],
-               [{2, 3}, {2, 3}, {2, 3}],
-               [{3, 3}, {3, 3}, {3, 3}],
-               [{4, 3}, {4, 3}, {4, 3}]
-             ]
+      assert t3.loop == 3
+      assert t3.power_level == 3
+      assert t3.min_steam == 25
+      assert t3.bypass == 10
     end
   end
 
-  describe "valves_to_axis/2" do
-    test "converts max bypass + min MSCV to min axis" do
-      min = {80, 3}
-      assert_in_delta SF.valves_to_axis([min, min, min], 1..3), -1.0, 0.00001
+  describe "add_loop/1" do
+    setup do
+      [pid: start_steam_flow(turbine1: false, turbine3: false)]
     end
 
-    test "converts min bypass + max MSCV to min axis" do
-      min = {0, 50}
-      assert_in_delta SF.valves_to_axis([min, min, min], 1..3), 1.0, 0.00001
+    test "begins managing new turbine", %{pid: pid} do
+      # Start with just turbine 2:
+      assert [%Turbine{loop: 2}] = state(pid).turbines
+
+      # Add turbine 1:
+      TurbineFactory.create(loop: 1, mock_only: true)
+      assert :ok = SteamFlow.add_loop(1, pid)
+
+      # Verify we have turbines 1 and 2:
+      assert [%Turbine{loop: 1}, %Turbine{loop: 2}] = state(pid).turbines
     end
 
-    test "converts min bypass + min MSCV to cutover point" do
-      min = {0, 3}
-      assert_in_delta SF.valves_to_axis([min, min, min], 1..3), @cutover, 0.001
+    test "updates minimum steam flow on all turbines", %{pid: pid} do
+      assert [%Turbine{min_steam: 50.0}] = state(pid).turbines
+
+      TurbineFactory.create(loop: 1, mock_only: true)
+      assert :ok = SteamFlow.add_loop(1, pid)
+      assert [%Turbine{min_steam: 25.0}, %Turbine{min_steam: 25.0}] = state(pid).turbines
+
+      TurbineFactory.create(loop: 3, mock_only: true)
+      assert :ok = SteamFlow.add_loop(3, pid)
+      assert [t1, t2, t3] = state(pid).turbines
+      assert_in_delta t1.min_steam, 16.66666, 0.0001
+      assert_in_delta t2.min_steam, 16.66666, 0.0001
+      assert_in_delta t3.min_steam, 16.66666, 0.0001
+    end
+
+    test "returns error when turbine already added", %{pid: pid} do
+      assert {:error, :already_active} = SteamFlow.add_loop(2, pid)
     end
   end
 
-  test "axis_to_valves/1 + valves_to_axis/2 = same value" do
-    1..100
-    |> Enum.each(fn _ ->
-      input = :rand.uniform() * 2 - 1
-      output = input |> SF.axis_to_valves() |> SF.valves_to_axis(1..3)
-      assert_in_delta input, output, 0.01
+  describe "remove_loop/1" do
+    setup do
+      [pid: start_steam_flow(turbine1: false)]
+    end
+
+    test "stops managing specified turbine", %{pid: pid} do
+      # Start with turbines 2 and 3:
+      assert [%Turbine{loop: 2}, %Turbine{loop: 3}] = state(pid).turbines
+
+      # Remove turbine 2:
+      assert :ok = SteamFlow.remove_loop(2, pid)
+
+      # Verify we have only turbine 3:
+      assert [%Turbine{loop: 3}] = state(pid).turbines
+    end
+
+    test "returns error when turbine not active", %{pid: pid} do
+      assert {:error, :not_active} = SteamFlow.remove_loop(1, pid)
+    end
+
+    test "updates minimum steam flow on all turbines", %{pid: pid} do
+      # Verify old steam flow:
+      assert [%Turbine{min_steam: 25.0}, %Turbine{min_steam: 25.0}] = state(pid).turbines
+
+      # Remove turbine 3:
+      assert :ok = SteamFlow.remove_loop(3, pid)
+
+      # Verify minimum steam flow has increased:
+      assert [%Turbine{min_steam: 50.0}] = state(pid).turbines
+    end
+  end
+
+  defp start_steam_flow(opts) do
+    {turbine1, opts} = Keyword.pop(opts, :turbine1, [])
+    {turbine2, opts} = Keyword.pop(opts, :turbine2, [])
+    {turbine3, opts} = Keyword.pop(opts, :turbine3, [])
+    unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
+
+    [turbine1, turbine2, turbine3]
+    |> Enum.with_index(1)
+    |> Enum.each(fn
+      {false, loop} ->
+        API.mock_get("GENERATOR_#{loop - 1}_BREAKER", "True")
+
+      {t_opts, loop} when is_list(t_opts) ->
+        API.mock_get("GENERATOR_#{loop - 1}_BREAKER", "False")
+
+        t_opts
+        |> Keyword.put(:mock_only, true)
+        |> Keyword.put(:loop, loop)
+        |> TurbineFactory.create()
     end)
+
+    test_pid = self()
+
+    mock_pid =
+      start_link_supervised!(
+        {MockGenServer,
+         module: SteamFlow,
+         before_init: fn ->
+           API.register_alias(self(), test_pid)
+         end}
+      )
+
+    assert [] = API.unused_mocks()
+    mock_pid
   end
 
-  test "valves_to_axis/2 + axis_to_valves/1 = same value" do
-    1..100
-    |> Enum.each(fn _ ->
-      valves = random_valves()
-
-      assert valves
-             |> SF.valves_to_axis(1..3)
-             |> SF.axis_to_valves() == valves
-    end)
-  end
-
-  defp number_stream(initial, fun) do
-    Stream.resource(
-      fn -> initial end,
-      fn n ->
-        {[n], fun.(n)}
-      end,
-      fn _ -> :done end
-    )
-  end
-
-  all_mscv = 3..50 |> Enum.map(&{0, &1})
-  all_bypass = 0..80 |> Enum.map(&{&1, 3})
-  @all MapSet.new(all_mscv ++ all_bypass)
-
-  defp random_valves do
-    {bypass, mscv} = base = Enum.random(@all)
-
-    next =
-      [{bypass, mscv + 1}, {bypass, mscv}]
-      |> Enum.find(&(&1 in @all))
-
-    has_next = Enum.random(0..2)
-
-    1..3
-    |> Enum.map(fn i ->
-      case i <= has_next do
-        true -> next
-        false -> base
-      end
-    end)
+  defp state(pid) do
+    assert %SteamFlow.State{} = MockGenServer.get_state(pid)
   end
 end

@@ -2,24 +2,24 @@ defmodule AutoNuke.Operator.SteamFlow do
   use GenServer
   require Logger
 
-  alias AutoNuke.API
   alias AutoNuke.Smoother
 
   defmodule State do
     # Give us the average of the last 5 ticks (1 sec) of generation:
     @generator_smoothing 5
 
-    @enforce_keys [:axis, :limiters]
+    @enforce_keys [:axis, :turbines]
     defstruct(
       axis: nil,
-      limiters: nil,
+      turbines: nil,
       smoothed_generation: Smoother.new(@generator_smoothing),
       target_override: nil
     )
   end
 
+  alias AutoNuke.API
   alias AutoNuke.ControlAxis
-  alias AutoNuke.Operator.SteamFlow.Limiter
+  alias AutoNuke.Operator.SteamFlow.Turbine
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -32,22 +32,12 @@ defmodule AutoNuke.Operator.SteamFlow do
   # But if resistor banks are on, drop that down to 95%, to try to avoid using them.
   @resistors_offset -0.10
 
-  # When more power is needed, control MSCV between these values, using a
-  # round-robin-increase distribution:
-  @mscv_range 3..50
-  @mscv_size (Range.size(@mscv_range) - 1) * Range.size(@all_loops)
-  # When less power is needed, control turbine bypass between these values,
-  # using raw control of all turbines at the same time:
-  @bypass_range 0..80
-  @bypass_size Range.size(@bypass_range) - 1
-  # Assume that every 1 point of MSCV change is about 10 points of bypass:
-  @mscv_bypass_ratio 10
-  # Therefore, the transition point between bypass (low) and MSCV (high) is ...
-  cutover_percent = @bypass_size / (@bypass_size + @mscv_size * @mscv_bypass_ratio)
-  @axis_cutover_point cutover_percent * 2 - 1
-  # Derived values for convenience:
-  @axis_above_cutover 1.0 - @axis_cutover_point
-  @axis_below_cutover @axis_cutover_point - -1.0
+  # There's no power level zero as far as we're concerned.
+  @power_levels 1..100
+  @power_level_span Range.size(@power_levels) - 1
+  # Ensure that all managed turbines produce at least 50 kg/min of steam between them.
+  @min_steam 50
+  defp steam_per_turbine(count) when count in 1..3, do: @min_steam / count
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -72,16 +62,11 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   @impl true
   def init(nil) do
-    breakers = get_loop_breakers()
-    connected = breakers |> Keyword.get_values(:closed)
-    valves = get_valves()
+    connected = get_closed_breakers()
+    count = Enum.count(connected)
 
-    limiters =
-      breakers
-      |> Enum.map(fn
-        {:open, _} -> nil
-        {:closed, loop} -> Limiter.new(loop)
-      end)
+    turbines = connected |> Enum.map(&Turbine.new(&1, steam_per_turbine(count)))
+    initial = turbines |> Enum.sum_by(& &1.power_level) |> total_power_to_axis(count)
 
     axis =
       ControlAxis.new(
@@ -89,13 +74,13 @@ defmodule AutoNuke.Operator.SteamFlow do
         ki: 0.01,
         kd: 0.005,
         deadzone: @deadzone,
-        to_value_fn: &axis_to_valves/1,
-        offset: valves |> valves_to_axis(connected),
-        initial_value: valves
+        to_value_fn: &Function.identity/1,
+        offset: initial,
+        initial_value: initial
       )
 
     state = %State{
-      limiters: limiters,
+      turbines: turbines,
       axis: axis
     }
 
@@ -105,30 +90,42 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_call({:add, loop}, _from, %State{limiters: old_limiters} = state) do
-    index = loop - 1
-
-    case old_limiters |> Enum.at(index) do
-      %Limiter{loop: ^loop} ->
+  def handle_call({:add, loop}, _from, %State{turbines: old_turbines} = state) do
+    case old_turbines |> Enum.any?(&(&1.loop == loop)) do
+      true ->
         {:reply, {:error, :already_active}, state}
 
-      nil ->
-        new_limiters = old_limiters |> List.replace_at(index, Limiter.new(loop))
-        {:reply, :ok, %State{state | limiters: new_limiters}}
+      false ->
+        steam =
+          (Enum.count(old_turbines) + 1)
+          |> steam_per_turbine()
+
+        new_turbines =
+          [
+            Turbine.new(loop, steam)
+            | old_turbines |> Enum.map(&Turbine.set_min_steam(&1, steam))
+          ]
+          |> Enum.sort_by(& &1.loop)
+
+        {:reply, :ok, %State{state | turbines: new_turbines}}
     end
   end
 
   @impl true
-  def handle_call({:remove, loop}, _from, %State{limiters: old_limiters} = state) do
-    index = loop - 1
+  def handle_call({:remove, loop}, _from, %State{turbines: old_turbines} = state) do
+    {found, rest} = old_turbines |> Enum.split_with(&(&1.loop == loop))
 
-    case old_limiters |> Enum.at(index) do
-      nil ->
-        {:reply, {:error, :already_active}, state}
+    case found do
+      [] ->
+        {:reply, {:error, :not_active}, state}
 
-      %Limiter{loop: ^loop} ->
-        new_limiters = old_limiters |> List.replace_at(index, nil)
-        {:reply, :ok, %State{state | limiters: new_limiters}}
+      [%Turbine{}] ->
+        steam =
+          Enum.count(rest)
+          |> steam_per_turbine()
+
+        new_turbines = rest |> Enum.map(&Turbine.set_min_steam(&1, steam))
+        {:reply, :ok, %State{state | turbines: new_turbines}}
     end
   end
 
@@ -145,30 +142,29 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_info({:tick, _}, %State{axis: axis} = state) do
-    {ratio, %State{} = state} = get_demand_ratio(state)
+  def handle_info({:tick, _}, %State{axis: old_axis, turbines: old_turbines} = state) do
+    {ratio, smoother} = get_demand_ratio(state)
     target = state.target_override || get_target_ratio()
 
-    # Fudge our ratio: If all limiters are at limits, we treat it
-    # like we're in the deadzone, to allow e.g. integral to unwind.
-    ratio =
-      case state.limiters |> Enum.map(&Limiter.at_limit/1) |> Enum.uniq() do
-        [:high] -> min(ratio, target)
-        [:low] -> max(ratio, target)
-        _ -> ratio
-      end
+    case ControlAxis.step(old_axis, target, ratio) do
+      {:changed, new_axis, new_value, _old_value} ->
+        turbine_count = Enum.count(old_turbines)
+        total_power = axis_to_total_power(new_value, turbine_count)
 
-    case ControlAxis.step(axis, target, ratio) do
-      {:changed, axis, new, old} ->
-        limiters = change_active_valves(state.limiters, old, new)
-        %State{state | axis: axis, limiters: limiters}
+        case update_power_levels(old_turbines, total_power) do
+          {:ok, new_turbines} ->
+            {new_axis, new_turbines}
 
-      {:unchanged, axis, _old_value} ->
-        limiters = state.limiters |> Enum.map(&Limiter.check(&1))
-        %State{state | axis: axis, limiters: limiters}
+          {:error, :at_max, max_total_power, new_turbines} ->
+            max_axis = total_power_to_axis(max_total_power, turbine_count)
+            {new_axis |> ControlAxis.clamp_max(max_axis), new_turbines}
+        end
+
+      {:unchanged, new_axis, _old} ->
+        {new_axis, old_turbines}
     end
-    |> then(fn %State{} = new_state ->
-      {:noreply, new_state}
+    |> then(fn {%ControlAxis{} = axis, turbines} ->
+      {:noreply, %State{state | axis: axis, turbines: turbines, smoothed_generation: smoother}}
     end)
   end
 
@@ -180,7 +176,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     demand_kw = API.get_float("POWER_DEMAND_MW") * 1000
     ratio = (generated_kw - used_kw) / demand_kw
 
-    {ratio, %State{state | smoothed_generation: smoothed}}
+    {ratio, smoothed}
   end
 
   defp get_target_ratio do
@@ -190,119 +186,132 @@ defmodule AutoNuke.Operator.SteamFlow do
     end
   end
 
-  defp get_loop_breakers do
+  defp get_closed_breakers do
     @all_loops
-    |> Enum.map(fn loop ->
-      case API.get_boolean("GENERATOR_#{loop - 1}_BREAKER") do
-        true -> {:open, loop}
-        false -> {:closed, loop}
-      end
-    end)
+    # true = open, false = closed
+    |> Enum.reject(&API.get_boolean("GENERATOR_#{&1 - 1}_BREAKER"))
   end
 
-  defp get_generation_kw(%State{limiters: limiters}) do
-    limiters
-    |> Enum.map(fn %Limiter{loop: loop} ->
+  defp get_generation_kw(%State{turbines: turbines}) do
+    turbines
+    |> Enum.map(fn %Turbine{loop: loop} ->
       API.get_float("GENERATOR_#{loop - 1}_KW")
     end)
     |> Enum.sum()
   end
 
-  defp get_valves do
-    @all_loops
-    |> Enum.map(fn loop ->
-      {get_bypass(loop), get_mscv(loop)}
-    end)
-  end
-
-  defp get_bypass(loop), do: API.get_integer("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
-  defp get_mscv(loop), do: API.get_integer("MSCV_#{loop - 1}_OPENING_ACTUAL")
-
-  # Axis high: Bypass to zero, MSCV proportional within range.
-  def axis_to_valves(output) when output >= @axis_cutover_point and output <= 1.0 do
-    value = output - @axis_cutover_point
-    percent = value / @axis_above_cutover
-
-    @all_loops
-    |> distribute(@mscv_size, percent)
-    |> Enum.map(fn mscv -> {0, @mscv_range |> Enum.at(mscv)} end)
-  end
-
-  # Axis low: MSCV to minimum, bypass proportional within range.
-  def axis_to_valves(output) when output >= -1.0 and output <= @axis_cutover_point do
-    value = @axis_cutover_point - output
-    bypass = (value / @axis_below_cutover * @bypass_size) |> round()
-
-    min_mscv.._//1 = @mscv_range
-
-    @all_loops
-    |> Enum.map(fn _ -> {@bypass_range |> Enum.at(bypass), min_mscv} end)
-  end
-
-  # For n `items`, returns a list of length n where each value is between 0 and `size - 1`, based on `percent`.
-  defp distribute(items, size, percent) do
-    notches = round(size * percent)
-    item_count = Enum.count(items)
-    base = div(notches, item_count)
-    remain = rem(notches, item_count)
-
-    items
-    |> Enum.with_index()
-    |> Enum.map(fn {_, index} ->
-      case index < remain do
-        true -> base + 1
-        false -> base
-      end
-    end)
-  end
-
-  def valves_to_axis(valves, connected_loops) do
-    connected =
-      valves
-      |> Enum.with_index(1)
-      |> Enum.filter(fn {_, index} -> index in connected_loops end)
-      |> Enum.map(&elem(&1, 0))
-
-    bypass =
-      connected
-      |> Enum.map(fn {b, _} -> b end)
-      |> Statistex.average()
-      |> percent_of_range(@bypass_range)
-
-    mscv =
-      connected
-      |> Enum.map(fn {_, m} -> m end)
-      |> Statistex.average()
-      |> percent_of_range(@mscv_range)
-
-    @axis_cutover_point - bypass * @axis_below_cutover + mscv * @axis_above_cutover
-  end
-
-  defp percent_of_range(value, rmin..rmax//1) do
-    inside = value - rmin
-    size = rmax - rmin
-
-    (inside / size)
-    |> max(0.0)
-    |> min(1.0)
-  end
-
   defp percent(float), do: "#{float * 100}%"
 
-  defp change_active_valves(old_limiters, old_valves, new_valves) do
-    Enum.zip_with([old_limiters, old_valves, new_valves], fn
-      [nil, _, _] ->
-        nil
+  defp total_power_to_axis(total, count), do: total / (@power_level_span * count)
 
-      [%Limiter{} = limiter, old, new] ->
-        if old != new do
-          Logger.info(
-            @log_prefix <>
-              "Changing loop #{limiter.loop} valves from #{inspect(old)} to #{inspect(new)}."
-          )
-        end
+  defp axis_to_total_power(axis, count) do
+    axis
+    |> Kernel.*(@power_level_span * count)
+    |> round()
+  end
 
-        limiter |> Limiter.set_valves(new)
+  defp update_power_levels(turbines, target_total) do
+    power_levels =
+      turbines
+      |> Enum.map(fn %Turbine{} = t ->
+        {t.loop, t.power_level, Turbine.max_power_level(t)}
+      end)
+
+    current_total = power_levels |> Enum.sum_by(fn {_, power, _} -> power end)
+
+    if current_total == target_total do
+      {:ok, turbines}
+    else
+      delta = target_total - current_total
+
+      new_power_levels =
+        allocate_power(power_levels, delta)
+        |> Enum.sort()
+
+      new_turbines =
+        turbines
+        |> Enum.zip_with(new_power_levels, fn
+          %Turbine{loop: loop} = turbine, {loop, power, _max} ->
+            turbine |> Turbine.set_power_level(power)
+        end)
+
+      new_total = new_power_levels |> Enum.sum_by(fn {_, power, _} -> power end)
+
+      cond do
+        new_total == target_total -> {:ok, new_turbines}
+        new_total < target_total -> {:error, :at_max, new_total, turbines}
+      end
+    end
+  end
+
+  defp allocate_power(power_levels, 0), do: power_levels
+
+  defp allocate_power(power_levels, to_allocate) when to_allocate < 0 do
+    power_levels
+    |> Enum.sort_by(fn {_loop, power, max} ->
+      # Over-max powers come first so we can lower them ASAP
+      over_max_first = if power > max, do: 1, else: 2
+      # Otherwise, sort by highest power first.
+      {over_max_first, -power}
+    end)
+    |> then(fn
+      [first, second | rest] ->
+        {first_loop, old_first_power, first_max} = first
+        {_, second_power, _} = second
+
+        # Try to reduce as much power as we can,
+        # ... but don't go lower than -1 below the next option,
+        # ... unless our max is even lower than both of the above.
+        new_first_power =
+          (old_first_power + to_allocate)
+          |> max(second_power - 1)
+          |> min(first_max)
+
+        new_power_levels = [
+          {first_loop, new_first_power, first_max},
+          second | rest
+        ]
+
+        to_allocate = to_allocate - (new_first_power - old_first_power)
+
+        allocate_power(new_power_levels, to_allocate)
+    end)
+  end
+
+  defp allocate_power(power_levels, to_allocate) when to_allocate > 0 do
+    power_levels
+    # Lowest power first, BUT maxed-out powers go last.
+    |> Enum.sort_by(fn {_loop, power, max} ->
+      # Under-max powers come first, we can't increase maxed out ones
+      under_max_first = if power < max, do: 1, else: 2
+      # Otherwise, sort by lowest power first.
+      {under_max_first, power}
+    end)
+    |> then(fn
+      [{_turbine, power, max} | _] when power >= max ->
+        # Our best choice is already at max, so we can't allocate anything.
+        power_levels
+
+      [first, second | rest] ->
+        {first_loop, old_first_power, first_max} = first
+        {_, second_power, _} = second
+
+        # Try to add as much power as we can,
+        # ... but don't go over max,
+        # ... and don't go more than +1 over the next option.
+        new_first_power =
+          (old_first_power + to_allocate)
+          |> min(first_max)
+          |> min(second_power + 1)
+
+        new_power_levels = [
+          {first_loop, new_first_power, first_max},
+          second | rest
+        ]
+
+        to_allocate = to_allocate - (new_first_power - old_first_power)
+
+        allocate_power(new_power_levels, to_allocate)
     end)
   end
 end
