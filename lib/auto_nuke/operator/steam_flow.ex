@@ -34,7 +34,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   # There's no power level zero as far as we're concerned.
   @power_levels 1..100
-  @power_level_span Range.size(@power_levels) - 1
+  @power_level_span (Range.size(@power_levels) - 1) / 2
   # Ensure that all managed turbines produce at least 50 kg/min of steam between them.
   @min_steam 50
   defp steam_per_turbine(count) when count in 1..3, do: @min_steam / count
@@ -202,12 +202,18 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   defp percent(float), do: "#{float * 100}%"
 
-  defp total_power_to_axis(total, count), do: total / (@power_level_span * count)
+  def total_power_to_axis(total, count) do
+    total
+    |> Kernel.-(@power_levels.first * count)
+    |> Kernel./(@power_level_span * count)
+    |> Kernel.-(1.0)
+  end
 
-  defp axis_to_total_power(axis, count) do
-    axis
+  def axis_to_total_power(axis, count) do
+    (axis + 1.0)
     |> Kernel.*(@power_level_span * count)
     |> round()
+    |> Kernel.+(@power_levels.first * count)
   end
 
   defp update_power_levels(old_turbines, target_total) do
@@ -231,6 +237,10 @@ defmodule AutoNuke.Operator.SteamFlow do
       new_turbines =
         old_turbines
         |> Enum.zip_with(new_power_levels, fn
+          %Turbine{loop: loop, power_level: power} = turbine, {loop, power, _max} ->
+            # Power unchanged.
+            turbine
+
           %Turbine{loop: loop} = turbine, {loop, power, _max} ->
             turbine |> Turbine.set_power_level(power)
         end)

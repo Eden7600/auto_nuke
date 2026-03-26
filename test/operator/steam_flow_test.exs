@@ -6,6 +6,56 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   alias AutoNuke.Test.TurbineFactory
   alias AutoNuke.Test.MockAPI, as: API
 
+  describe "axis_to_total_power/2" do
+    test "is power level 1 for min axis" do
+      assert SteamFlow.axis_to_total_power(-1.0, 1) == 1
+    end
+
+    test "is power level 50 for roughly mid-axis" do
+      assert SteamFlow.axis_to_total_power(-0.01, 1) == 50
+    end
+
+    test "is power level 100 for max axis" do
+      assert SteamFlow.axis_to_total_power(+1.0, 1) == 100
+    end
+
+    test "is based on the number of turbines" do
+      assert SteamFlow.axis_to_total_power(-1.0, 1) == 1
+      assert SteamFlow.axis_to_total_power(-1.0, 2) == 2
+      assert SteamFlow.axis_to_total_power(-1.0, 3) == 3
+      assert SteamFlow.axis_to_total_power(1.0, 1) == 100
+      assert SteamFlow.axis_to_total_power(1.0, 2) == 200
+      assert SteamFlow.axis_to_total_power(1.0, 3) == 300
+    end
+  end
+
+  describe "total_power_to_axis/2" do
+    test "is min axis for power level 1" do
+      assert SteamFlow.total_power_to_axis(1, 1) == -1.0
+    end
+
+    test "is roughly mid-axis for power level 50" do
+      assert_in_delta SteamFlow.total_power_to_axis(50, 1), -0.01, 0.01
+    end
+
+    test "is power level 100 for max axis" do
+      assert SteamFlow.total_power_to_axis(100, 1) == +1.0
+    end
+
+    test "is based on the number of turbines" do
+      assert SteamFlow.total_power_to_axis(1, 1) == -1.0
+      assert SteamFlow.total_power_to_axis(2, 2) == -1.0
+      assert SteamFlow.total_power_to_axis(3, 3) == -1.0
+
+      assert SteamFlow.total_power_to_axis(100, 1) == +1.0
+      assert SteamFlow.total_power_to_axis(200, 2) == +1.0
+      assert SteamFlow.total_power_to_axis(300, 3) == +1.0
+
+      assert_in_delta SteamFlow.total_power_to_axis(100, 2), -0.01, 0.01
+      assert_in_delta SteamFlow.total_power_to_axis(100, 3), -0.35, 0.01
+    end
+  end
+
   describe "start_link/1" do
     test "takes control of turbines with closed breakers" do
       pid =
@@ -145,9 +195,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       assert total_power(pid) > 12
       assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert power2 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert power3 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
-      assert [^power1, ^power2, ^power3] = powers = power_levels(pid)
+      # Loops 2 and 3 were likely not increased.
+      assert [^power1, _, _] = powers = power_levels(pid)
 
       # No level should be more than 1 greater than the others.
       assert Enum.max(powers) - Enum.min(powers) <= 1
@@ -169,9 +218,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, 1})
 
       assert total_power(pid) < 12
-      assert API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      # Only loop 2 is decreased, the others are low enough already.
       assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert API.mock_put_value("MSCV_2_OPENING_ORDERED")
       assert powers = power_levels(pid)
 
       # No level should be more than 1 greater than the others.
@@ -304,6 +352,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 8
+      assert [old_power1, old_power2] = power_levels(pid)
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
@@ -316,12 +365,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, 1})
 
       assert total_power(pid) > 8
-      assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert power2 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert [^power1, ^power2] = power_levels(pid)
-
-      # Levels should be within 1 of each other:
-      assert abs(power1 - power2) in 0..1
+      assert new_power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert new_power1 > old_power1
+      assert [^new_power1, ^old_power2] = power_levels(pid)
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -338,7 +384,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, 1})
 
       assert total_power(pid) < 8
-      assert API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      # Loop 1 is already low enough, was not decreased.
       assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [power1, power2] = power_levels(pid)
 
