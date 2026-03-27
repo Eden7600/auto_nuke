@@ -7,25 +7,34 @@ defmodule Mix.Tasks.AutoNuke.Boron.Filter do
   alias AutoNuke.TaskUI, as: UI
 
   def run([target]) do
-    target
-    |> String.to_integer()
-    |> maybe_filter_boron()
+    maybe_filter_boron(
+      target |> String.to_integer(),
+      100
+    )
   end
 
-  defp maybe_filter_boron(target) when is_integer(target) do
+  def run([target, max_speed]) do
+    maybe_filter_boron(
+      target |> String.to_integer(),
+      max_speed |> String.to_integer()
+    )
+  end
+
+  defp maybe_filter_boron(target, max_speed)
+       when is_integer(target) and is_integer(max_speed) and max_speed in 1..100 do
     {:ok, _} = Application.ensure_all_started([:req])
 
     ppm = get_boron_ppm()
     excess = ppm - target
 
     if excess > 0 do
-      filter_boron(target, excess)
+      filter_boron(target, excess, max_speed)
     else
       UI.success("Boron PPM is #{ppm}.")
     end
   end
 
-  defp filter_boron(target, excess) do
+  defp filter_boron(target, excess, max_speed) do
     UI.console("Chemical Treatment")
 
     UI.set("Ion Exchange Inlet", "OPEN")
@@ -40,17 +49,17 @@ defmodule Mix.Tasks.AutoNuke.Boron.Filter do
         "START",
         fn -> get_boron_ppm() <= target end,
         fn -> get_pump_speed() > 0 end,
-        fn -> get_boron_ppm() |> adjust_pump_speed(target) end
+        fn -> get_boron_ppm() |> adjust_pump_speed(target, max_speed) end
       )
 
       UI.progress_loop(
         label: "Boron Decrease",
         fetch: fn ->
           ppm = get_boron_ppm()
-          adjust_pump_speed(ppm, target)
+          adjust_pump_speed(ppm, target, max_speed)
           (target + excess - ppm) |> Float.round(1)
         end,
-        max: excess |> Float.round(1)
+        max: excess |> round()
       )
     after
       UI.set_wait(
@@ -65,13 +74,13 @@ defmodule Mix.Tasks.AutoNuke.Boron.Filter do
   defp get_pump_speed, do: API.get_float("CHEM_BORON_FILTER_ACTUAL")
   defp set_pump_speed(speed), do: API.put("CHEM_BORON_FILTER_ORDERED_SPEED", speed)
 
-  defp adjust_pump_speed(ppm, target) do
+  defp adjust_pump_speed(ppm, target, max_speed) do
     if ppm <= target do
       0
     else
       (ppm - target)
       |> ceil()
-      |> min(100)
+      |> min(max_speed)
     end
     |> set_pump_speed()
   end
