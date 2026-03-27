@@ -3,48 +3,17 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:target, :axis, :current_temp, :temp_history, :roc_smoothed]
+    @enforce_keys [:target, :axis, :last_temp]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
-  alias AutoNuke.Smoother
   alias AutoNuke.API
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
-  # Core temperature tends to have semi-rare transient spikes depending on read timing.
-  # To mitigate this, use the median of the last 3 readings.
-  @current_temp_size 3
-  # Then, measure one minute's worth of history, to calculate rate-of-change.
-  @temp_history_size AutoNuke.Ticker.ticks_per_minute()
-  # And smooth that over the past minute as well:
-  @roc_smoothed_size AutoNuke.Ticker.ticks_per_minute()
-
-  # Goals:
-  #   - when off by 1°C, target 0.2°C/minute (or 5 minutes per degree change)
-  #   - when off by 10°C, target ~1°C/minute
-  #   - when off by 300°C, target ~30°C/minute
-  #
-  # The formula that roughly matches this:
-  #
-  #   f(x) = 0.2 * x^0.7
-  #
-  # Additionally:
-  #   - minimum speed: 0.1°C/minute
-  @dpm_minimum 0.1
-  #   - deadzone: when error < 0.1°C, target full stop (0°C/min)
-  @error_deadzone 0.1
-
-  defp dpm_per_degree(error) when error >= 0, do: (0.2 * error ** 0.7) |> max(@dpm_minimum)
-  defp dpm_per_degree(error) when error < 0, do: -dpm_per_degree(abs(error))
-
-  defp target_degrees_per_minute(error) do
-    case abs(error) <= @error_deadzone do
-      true -> 0.0
-      false -> dpm_per_degree(error)
-    end
-  end
+  # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
+  @rods_clamping 1.0
 
   def start_link(opts) do
     {target, opts} = Keyword.pop(opts, :target)
@@ -66,8 +35,8 @@ defmodule AutoNuke.Operator.CoreTemp do
       ControlAxis.new(
         kp: 0.01,
         ki: 0.001,
-        kd: 0.0005,
-        deadzone: 0.05,
+        kd: 0.0001,
+        deadzone: 0.1,
         to_value_fn: &axis_to_rods/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods
@@ -76,9 +45,7 @@ defmodule AutoNuke.Operator.CoreTemp do
     state =
       %State{
         target: target,
-        current_temp: Smoother.new(@current_temp_size) |> Smoother.add(temp),
-        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp),
-        roc_smoothed: Smoother.new(@roc_smoothed_size),
+        last_temp: temp,
         axis: axis
       }
 
@@ -100,45 +67,43 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    current_temp = state.current_temp |> Smoother.add(get_temperature())
-    temp = Smoother.median(current_temp)
-    error = state.target - temp
+    temp = get_verified_temperature([state.last_temp])
 
-    temp_history = state.temp_history |> Smoother.add(temp)
-    roc_smoothed = state.roc_smoothed |> Smoother.add(Smoother.rate_of_change(state.temp_history))
-
-    roc_current = Smoother.average(roc_smoothed)
-    roc_target = target_degrees_per_minute(error)
-
-    case ControlAxis.step(state.axis, roc_target, roc_current) do
+    case ControlAxis.step(state.axis, state.target, temp) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
         set_rods(new)
-        axis
+        maybe_clamp(axis, new)
 
       {:unchanged, axis, _old_value} ->
         axis
     end
     |> then(fn axis ->
-      {:noreply,
-       %State{
-         state
-         | axis: axis,
-           current_temp: current_temp,
-           temp_history: temp_history,
-           roc_smoothed: roc_smoothed
-       }}
+      {:noreply, %State{state | axis: axis, last_temp: temp}}
     end)
   end
 
-  defp get_temperature, do: API.get_float("CORE_TEMP")
+  defp get_temperature(), do: API.get_float("CORE_TEMP")
+
+  defp get_verified_temperature(seen) when is_list(seen) do
+    # Temperature has a tendency to have tiny little spikes depending on read timing.
+    # To mitigate this and try to hold a steady state, if we detect a temperature change,
+    # we take extra readings until they agree.
+    temp = get_temperature()
+
+    if temp in seen do
+      temp
+    else
+      get_verified_temperature([temp | seen])
+    end
+  end
 
   # Assumption: Any core with an installed fuel cell will have control rods.
   defp get_rods do
     1..9
     |> Enum.map(fn core ->
       case API.get_string("CORE_BAY_#{core}_STATE") do
-        "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ORDERED")
+        "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ACTUAL")
         _ -> nil
       end
     end)
@@ -152,4 +117,25 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   defp axis_to_rods(output), do: (50 - output * 50) |> Float.round(1)
   defp rods_to_axis(rods), do: ((50 - rods) / 50) |> Float.round(5)
+
+  defp maybe_clamp(axis, ordered) do
+    actual = get_rods()
+
+    cond do
+      ordered - actual > @rods_clamping ->
+        # We're asking for too much rods at once, clamp down.
+        Logger.debug(@log_prefix <> "Clamping down to #{actual + @rods_clamping}")
+        clamp_to = (actual + @rods_clamping) |> rods_to_axis()
+        axis |> ControlAxis.clamp_min(clamp_to)
+
+      actual - ordered > @rods_clamping ->
+        # We're asking for too little rods at once, clamp up.
+        Logger.debug(@log_prefix <> "Clamping up to #{actual - @rods_clamping}")
+        clamp_to = (actual - @rods_clamping) |> rods_to_axis()
+        axis |> ControlAxis.clamp_max(clamp_to)
+
+      true ->
+        axis
+    end
+  end
 end
