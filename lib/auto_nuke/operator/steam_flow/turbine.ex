@@ -98,11 +98,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # Thankfully, both 1 and 2 are solved with more bypass, so they work together.
   # Order is also irrelevant, since it'll just prioritise the more-violated concern.
   defp bypass_concerns(n) when n in 2..4, do: [:zero_bypass, :min_steam, :max_pressure]
-  # At power level 5 and up, we shouldn't ever need bypass.
-  # We could technically just use the same steps as levels 2 through 4,
-  # but dropping them will avoid a bunch of useless API calls.
-  # (This may change if I find a scenario where high heat + MSCV 5 = runaway pressure.)
-  defp bypass_concerns(n) when n in 5..100, do: [:zero_bypass]
+  # At power level 5 and up, we can drop the min_steam requirement.
+  defp bypass_concerns(n) when n in 5..100, do: [:zero_bypass, :max_pressure]
 
   # If our prior target calls for less bypass,
   # start applying the brakes when steam output is 10% above `min_steam`:
@@ -126,8 +123,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     min(old_value, new_value)
   end
 
-  # When limiting pressure, target 60 bar:
-  @max_pressure 60
+  # When limiting pressure, target 80 bar:
+  @max_pressure 80
   # If our prior target calls for less bypass,
   # start applying the brakes when pressure is 10% below `@max_pressure`:
   @max_pressure_margin 0.1

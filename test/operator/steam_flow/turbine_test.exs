@@ -82,6 +82,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       final_turbine =
         1..@settle_time
         |> Enum.reduce(turbine, fn _, old_t ->
+          API.mock_get("COOLANT_SEC_0_PRESSURE", 0)
           assert %Turbine{} = new_t = Turbine.tick(old_t)
           assert new_t.bypass <= old_t.bypass
           new_t
