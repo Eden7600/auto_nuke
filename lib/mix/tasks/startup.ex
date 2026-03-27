@@ -18,11 +18,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Set rods to this (%) to begin reaction:
   @startup_rods 90
   # Stop and maintain this temperature (°C):
-  @startup_temp 280
+  @startup_temp 300
   # Wait for this temperature before starting turbines:
   @min_temp 270
   # Open or close MSCV to this (%):
-  @startup_mscv 5
+  @startup_mscv 10
 
   # Need at least this % in the retention tank before we start the vacuum pump:
   @retention_percent 45
@@ -76,6 +76,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
 
     wait_for_temperature(@min_temp)
+
+    loops
+    |> Enum.each(fn loop ->
+      {:ok, _} = AutoNuke.Operator.HeatFlow.start_link(loop: loop)
+    end)
 
     request_connection()
     start_turbine(loops)
@@ -336,7 +341,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.progress_loop(
       label: "Boron PPM",
       fetch: fn -> API.get_float("CHEM_BORON_PPM") |> Float.round(1) end,
-      max: @boron_target
+      max: @boron_target - 50
     )
   end
 
