@@ -3,26 +3,24 @@ defmodule AutoNuke.Operator.SecondaryFill do
   require Logger
 
   defmodule State do
-    @enforce_keys [:loop, :axis]
+    @enforce_keys [:loop, :speed, :capacity]
     defstruct(@enforce_keys)
   end
 
-  alias AutoNuke.ControlAxis
-
   @tank_size 60000.0
 
-  # Use 50% fill level at 60 bars of pressure.
-  @reference_pressure 60
-  @reference_level 0.5
-  # For every 10 bars deviation, adjust fill level by 5%.
-  @adjust_pressure 10
-  @adjust_level 0.05
-
-  # If fill level is within 1% of target,
-  # just try to balance inlet and outlet.
-  @fill_level_deadzone 0.01
-  # If fill level is >= 80%, stop pumps immediately.
-  @fill_max 0.8
+  # Target between 49% and 51% fill.
+  @fill_target_min 0.49
+  @fill_target_max 0.51
+  # Outside this range, adjust pump speed by 1.
+  @fill_target_pump_adjust 1
+  # Keep fill between 30% and 70%.
+  @fill_limit_min 0.30
+  @fill_limit_max 0.70
+  # Outside this range, we have a 10% scaling range.
+  # This will scale pumps up to 100% at 20% fill or lower,
+  # and down to 0% at 80% fill or higher.
+  @fill_limit_span 0.10
 
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
@@ -49,103 +47,80 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   defp do_init(loop) do
+    capacity = get_capacity(loop)
     speed = get_speed(loop)
-
-    axis =
-      ControlAxis.new(
-        kp: 0.1,
-        ki: 0.01,
-        kd: 0.005,
-        deadzone: 0.02,
-        to_value_fn: &axis_to_speed/1,
-        offset: speed |> speed_to_axis(),
-        initial_value: speed
-      )
+    fill_level = (get_current_fill_percent(loop) * 100) |> Float.round(2)
 
     state = %State{
       loop: loop,
-      axis: axis
+      speed: speed,
+      capacity: capacity
     }
 
     PubSub.subscribe(self(), :ticker)
 
-    fill_level = (get_current_fill_percent(loop) * 100) |> Float.round(2)
-    Logger.info(log_prefix(loop) <> "Started with fill level of #{fill_level}%.")
+    Logger.info(
+      log_prefix(loop) <>
+        "Started with pump capacity #{capacity} and fill level of #{fill_level}%."
+    )
 
     {:ok, state}
   end
 
   @impl true
-  def handle_info({:tick, _}, %State{loop: loop} = state) do
-    current = get_current_ratio(loop)
-    target = get_target_ratio(loop)
+  def handle_info({:tick, _}, %State{loop: loop, speed: old_speed} = state) do
+    new_speed = calculate_speed(loop, state.capacity)
 
-    case ControlAxis.step(state.axis, target, current) do
-      {:changed, axis, new, old} ->
-        Logger.info(log_prefix(loop) <> "Changing speed from #{old} to #{new}.")
-        set_speed(loop, new)
-        axis
-
-      {:unchanged, axis, _old_value} ->
-        axis
+    if new_speed != old_speed do
+      Logger.info(log_prefix(loop) <> "Changing speed from #{old_speed} to #{new_speed}.")
+      set_speed(loop, new_speed)
+      {:noreply, %State{state | speed: new_speed}}
+    else
+      {:noreply, state}
     end
-    |> then(fn axis ->
-      {:noreply, %State{state | axis: axis}}
-    end)
+  end
+
+  defp calculate_speed(loop, capacity) do
+    ideal = get_steam_outlet(loop) / capacity * 100
+    fill_level = get_current_fill_percent(loop)
+
+    cond do
+      fill_level < @fill_limit_min ->
+        error = @fill_limit_min - fill_level
+        percent = (error / @fill_limit_span) |> min(1.0)
+        ideal + (100 - ideal) * percent
+
+      fill_level > @fill_limit_max ->
+        error = fill_level - @fill_limit_max
+        percent = (error / @fill_limit_span) |> min(1.0)
+        ideal - ideal * percent
+
+      fill_level < @fill_target_min ->
+        ideal + @fill_target_pump_adjust
+
+      fill_level > @fill_target_max ->
+        ideal - @fill_target_pump_adjust
+
+      true ->
+        ideal
+    end
+    |> round()
   end
 
   defp get_current_fill_percent(loop) do
     AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
   end
 
-  defp get_target_fill_percent(loop) do
-    pressure = AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-
-    # Both of these are positive if pressure is low, negative if high.
-    delta_p = @reference_pressure - pressure
-    adjust = @adjust_level * (delta_p / @adjust_pressure)
-
-    # Increase if pressure is low, decrease if high.
-    @reference_level + adjust
-  end
-
   defp is_installed?(loop) do
     AutoNuke.API.get_integer("STEAM_GEN_#{loop - 1}_STATUS") == 2
   end
 
-  defp get_current_ratio(loop) do
-    inlet = AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_INLET")
-    outlet = AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
-
-    cond do
-      outlet > 0 -> inlet / outlet
-      # If we have zero outlet, any inlet is too high.
-      # We return a conservatively high value that should
-      # gently convince the PID controller to reduce input to 0.
-      # But we keep this low enough that a very low fill level
-      # can still override it and start filling an empty tank.
-      inlet > 0 -> 1.5
-      # Consider the ratio satisfied.
-      true -> 1.0
-    end
+  defp get_capacity(loop) do
+    AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
   end
 
-  defp get_target_ratio(loop) do
-    current_fill = get_current_fill_percent(loop)
-    target_fill = get_target_fill_percent(loop)
-    fill_ratio = current_fill / target_fill
-    delta = abs(1.0 - fill_ratio)
-
-    cond do
-      # Too full, stop pumps!
-      current_fill >= @fill_max -> -1
-      # Avoids divide-by-zero and sets pumps to max.
-      fill_ratio < 0.05 -> 10.0
-      # Within deadzone, just balance inlet/outlet.
-      delta < @fill_level_deadzone -> 1.0
-      # Adjust inlet/outlet to reach target.
-      true -> 1 / fill_ratio
-    end
+  defp get_steam_outlet(loop) do
+    AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   end
 
   defp get_speed(loop) do
