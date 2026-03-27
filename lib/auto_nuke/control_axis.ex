@@ -42,12 +42,14 @@ defmodule AutoNuke.ControlAxis do
   end
 
   def clamp_max(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, max) do
+    max = max - axis.offset
     new_p = min(pidc.p, max)
     new_i = min(pidc.i, max - new_p)
     %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}
   end
 
   def clamp_min(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, min) do
+    min = min - axis.offset
     new_p = max(pidc.p, min)
     new_i = max(pidc.i, min - new_p)
     %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}

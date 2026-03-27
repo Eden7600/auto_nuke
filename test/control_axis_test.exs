@@ -132,6 +132,23 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:changed, _, 23, 22} = axis |> CA.clamp_max(0.21) |> CA.step(0, -0.2)
   end
 
+  test "clamp_max/2 takes offset into account" do
+    axis = CA.new(kp: 1, ki: 0.1, offset: 0.5, to_value_fn: fn x -> round(x * 100) end)
+
+    assert {:changed, axis, 72, nil} = CA.step(axis, 0, -0.2)
+
+    # Unclamped:
+    assert {:changed, _, 74, 72} = axis |> CA.step(0, -0.2)
+    # Clamped to +0.80 (no effect):
+    assert {:changed, _, 74, 72} = axis |> CA.clamp_max(0.8) |> CA.step(0, -0.2)
+    # Clamped to +0.70:
+    assert {:unchanged, _, 72} = axis |> CA.clamp_max(0.7) |> CA.step(0, -0.2)
+    # Clamped to +0.00: Unchanged, because we're just clearing the integral.
+    assert {:unchanged, _, 72} = axis |> CA.clamp_max(0.00) |> CA.step(0, -0.2)
+    # Clamped to +0.71: This just reduces integral from 0.02 to 0.01.
+    assert {:changed, _, 73, 72} = axis |> CA.clamp_max(0.71) |> CA.step(0, -0.2)
+  end
+
   test "clamp_min/2 clamps controller to lower bound" do
     axis = CA.new(kp: 1, ki: 0.5, to_value_fn: fn x -> round(x * 100) end)
 
@@ -145,8 +162,25 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:unchanged, _, -60} = axis |> CA.clamp_min(-0.4) |> CA.step(0, 0.4)
     # Clamped to -0.25: Unchanged — see clamp_max explanation.
     assert {:unchanged, _, -60} = axis |> CA.clamp_min(-0.25) |> CA.step(0, 0.4)
-    # Clamped to -0.45: Reduces integral from -0.2 to -0.05.
+    # Clamped to -0.45: Reduces integral from -0.2 to -0.25.
     assert {:changed, _, -65, -60} = axis |> CA.clamp_min(-0.45) |> CA.step(0, 0.4)
+  end
+
+  test "clamp_min/2 takes offset into account" do
+    axis = CA.new(kp: 1, ki: 0.4, offset: 0.5, to_value_fn: fn x -> round(x * 100) end)
+
+    assert {:changed, axis, -6, nil} = CA.step(axis, 0, 0.4)
+
+    # Unclamped:
+    assert {:changed, _, -22, -6} = axis |> CA.step(0, 0.4)
+    # Clamped to -0.90 (no effect):
+    assert {:changed, _, -22, -6} = axis |> CA.clamp_min(-0.9) |> CA.step(0, 0.4)
+    # Clamped to +0.90:
+    assert {:unchanged, _, -6} = axis |> CA.clamp_min(+0.90) |> CA.step(0, 0.4)
+    # Clamped to +0.40: Unchanged — see clamp_max explanation.
+    assert {:unchanged, _, -6} = axis |> CA.clamp_min(+0.25) |> CA.step(0, 0.4)
+    # Clamped to +0.15: Reduces integral from -0.16 to -0.21.
+    assert {:changed, _, -11, -6} = axis |> CA.clamp_min(+0.05) |> CA.step(0, 0.4)
   end
 
   test "clamping improves responsiveness to direction reversals" do
