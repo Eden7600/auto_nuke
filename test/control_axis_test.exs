@@ -26,53 +26,6 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:unchanged, _axis, -0.5} = CA.step(axis, 0, 0)
   end
 
-  test "slews offset downwards when output goes too high" do
-    axis = CA.new(kp: 1, offset: 0.9)
-
-    # Would result in adjusted value 1.1, so offset is reduced to 0.8.
-    assert {:changed, axis, 1.0, nil} = CA.step(axis, 0, -0.2)
-    assert_in_delta axis.offset, 0.8, 0.0001
-
-    # Would result in adjusted value 1.8, so offset is reduced to 0.0.
-    assert {:unchanged, axis, 1.0} = CA.step(axis, 0, -100)
-    assert_in_delta axis.offset, 0.0, 0.0001
-  end
-
-  test "slews offset upwards when output goes too low" do
-    axis = CA.new(kp: 1, offset: -0.5)
-
-    # Would result in adjusted value -1.2, so offset is increased to -0.3.
-    assert {:changed, axis, -1.0, nil} = CA.step(axis, 0, 0.7)
-    assert_in_delta axis.offset, -0.3, 0.0001
-
-    # Would result in adjusted value -1.3, so offset is increased to 0.0.
-    assert {:unchanged, axis, -1.0} = CA.step(axis, 0, 100)
-    assert_in_delta axis.offset, 0.0, 0.0001
-  end
-
-  test "scales offset towards zero when positive offset meets max negative output" do
-    axis = CA.new(kp: 1, offset: 0.3)
-
-    assert {:changed, axis, -0.7, nil} = CA.step(axis, 0, 5)
-    assert_in_delta axis.offset, 0.285, 0.0001
-
-    assert {:changed, axis, output, -0.7} = CA.step(axis, 0, 5)
-    assert_in_delta output, -0.715, 0.0001
-    assert_in_delta axis.offset, 0.27075, 0.0001
-  end
-
-  test "scales offset towards zero when negative offset meets max positive output" do
-    axis = CA.new(kp: 1, offset: -0.8)
-
-    assert {:changed, axis, output1, nil} = CA.step(axis, 0, -5)
-    assert_in_delta output1, 0.2, 0.0001
-    assert_in_delta axis.offset, -0.76, 0.0001
-
-    assert {:changed, axis, output2, ^output1} = CA.step(axis, 0, -5)
-    assert_in_delta output2, 0.24, 0.0001
-    assert_in_delta axis.offset, -0.722, 0.0001
-  end
-
   defp settle_loop(_axis, full, full, remaining, overshoots),
     do: {:complete, remaining, overshoots}
 
@@ -132,23 +85,6 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:changed, _, 23, 22} = axis |> CA.clamp_max(0.21) |> CA.step(0, -0.2)
   end
 
-  test "clamp_max/2 takes offset into account" do
-    axis = CA.new(kp: 1, ki: 0.1, offset: 0.5, to_value_fn: fn x -> round(x * 100) end)
-
-    assert {:changed, axis, 72, nil} = CA.step(axis, 0, -0.2)
-
-    # Unclamped:
-    assert {:changed, _, 74, 72} = axis |> CA.step(0, -0.2)
-    # Clamped to +0.80 (no effect):
-    assert {:changed, _, 74, 72} = axis |> CA.clamp_max(0.8) |> CA.step(0, -0.2)
-    # Clamped to +0.70:
-    assert {:unchanged, _, 72} = axis |> CA.clamp_max(0.7) |> CA.step(0, -0.2)
-    # Clamped to +0.00: Unchanged, because we're just clearing the integral.
-    assert {:unchanged, _, 72} = axis |> CA.clamp_max(0.00) |> CA.step(0, -0.2)
-    # Clamped to +0.71: This just reduces integral from 0.02 to 0.01.
-    assert {:changed, _, 73, 72} = axis |> CA.clamp_max(0.71) |> CA.step(0, -0.2)
-  end
-
   test "clamp_min/2 clamps controller to lower bound" do
     axis = CA.new(kp: 1, ki: 0.5, to_value_fn: fn x -> round(x * 100) end)
 
@@ -164,23 +100,6 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:unchanged, _, -60} = axis |> CA.clamp_min(-0.25) |> CA.step(0, 0.4)
     # Clamped to -0.45: Reduces integral from -0.2 to -0.25.
     assert {:changed, _, -65, -60} = axis |> CA.clamp_min(-0.45) |> CA.step(0, 0.4)
-  end
-
-  test "clamp_min/2 takes offset into account" do
-    axis = CA.new(kp: 1, ki: 0.4, offset: 0.5, to_value_fn: fn x -> round(x * 100) end)
-
-    assert {:changed, axis, -6, nil} = CA.step(axis, 0, 0.4)
-
-    # Unclamped:
-    assert {:changed, _, -22, -6} = axis |> CA.step(0, 0.4)
-    # Clamped to -0.90 (no effect):
-    assert {:changed, _, -22, -6} = axis |> CA.clamp_min(-0.9) |> CA.step(0, 0.4)
-    # Clamped to +0.90:
-    assert {:unchanged, _, -6} = axis |> CA.clamp_min(+0.90) |> CA.step(0, 0.4)
-    # Clamped to +0.40: Unchanged — see clamp_max explanation.
-    assert {:unchanged, _, -6} = axis |> CA.clamp_min(+0.25) |> CA.step(0, 0.4)
-    # Clamped to +0.15: Reduces integral from -0.16 to -0.21.
-    assert {:changed, _, -11, -6} = axis |> CA.clamp_min(+0.05) |> CA.step(0, 0.4)
   end
 
   test "clamping improves responsiveness to direction reversals" do

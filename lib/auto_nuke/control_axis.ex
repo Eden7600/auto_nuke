@@ -1,5 +1,5 @@
 defmodule AutoNuke.ControlAxis do
-  @enforce_keys [:pidc, :offset, :deadzone, :to_value_fn, :last_value]
+  @enforce_keys [:pidc, :deadzone, :to_value_fn, :last_value]
   defstruct(@enforce_keys)
   alias __MODULE__
 
@@ -16,9 +16,11 @@ defmodule AutoNuke.ControlAxis do
       raise "Unknown options for #{__MODULE__}.new: #{Keyword.keys(opts) |> inspect()}"
     end
 
+    %PIDControl{} = pidc = PIDControl.new(kp: kp, kd: kd, ki: ki)
+    pidc = %PIDControl{pidc | i: offset}
+
     %__MODULE__{
-      pidc: PIDControl.new(kp: kp, kd: kd, ki: ki),
-      offset: offset,
+      pidc: pidc,
       deadzone: deadzone,
       to_value_fn: t_v_fn,
       last_value: initial
@@ -28,11 +30,10 @@ defmodule AutoNuke.ControlAxis do
   def step(%ControlAxis{} = axis, target, measurement) do
     measurement = apply_deadzone(axis.deadzone, target, measurement)
     pidc = PIDControl.step(axis.pidc, target, measurement)
-    {output, offset} = adjusted_output(pidc.output, axis.offset)
 
     old_value = axis.last_value
-    new_value = axis.to_value_fn.(output)
-    axis = %__MODULE__{axis | pidc: pidc, offset: offset, last_value: new_value}
+    new_value = axis.to_value_fn.(pidc.output)
+    axis = %__MODULE__{axis | pidc: pidc, last_value: new_value}
 
     if old_value != new_value do
       {:changed, axis, new_value, old_value}
@@ -42,29 +43,15 @@ defmodule AutoNuke.ControlAxis do
   end
 
   def clamp_max(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, max) do
-    max = max - axis.offset
     new_p = min(pidc.p, max)
     new_i = min(pidc.i, max - new_p)
     %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}
   end
 
   def clamp_min(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, min) do
-    min = min - axis.offset
     new_p = max(pidc.p, min)
     new_i = max(pidc.i, min - new_p)
     %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}
-  end
-
-  defp adjusted_output(output, offset) do
-    adjusted = output + offset
-
-    cond do
-      adjusted > 1.0 -> {1.0, offset - (adjusted - 1.0)}
-      adjusted < -1.0 -> {-1.0, offset - (adjusted + 1.0)}
-      output == -1.0 && offset > 0 -> {adjusted, offset * 0.95}
-      output == 1.0 && offset < 0 -> {adjusted, offset * 0.95}
-      true -> {adjusted, offset}
-    end
   end
 
   defp apply_deadzone(+0.0, _target, measurement), do: measurement
