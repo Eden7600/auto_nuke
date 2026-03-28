@@ -170,12 +170,18 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      # Steam output should NOT be queried, no need to mock it.
+      # Steam output gets queried by `Turbine.tick/1`.
+      # Loop 2 does not get queried because it's already power level 5.
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
       assert power_levels(pid) == [3, 5, 4]
-      assert [] = API.unused_mocks()
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "increases power when supply does not meet demand", %{pid: pid} do
@@ -190,16 +196,21 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_0_OUTLET", 1000)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
       assert total_power(pid) > 12
+      # Only loops 1 and 3 are increased.  Loop 2 is already high enough.
       assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      # Loops 2 and 3 were likely not increased.
-      assert [^power1, _, _] = powers = power_levels(pid)
+      assert power3 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert [^power1, 5, ^power3] = powers = power_levels(pid)
 
       # No level should be more than 1 greater than the others.
       assert Enum.max(powers) - Enum.min(powers) <= 1
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -211,19 +222,24 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
       assert total_power(pid) < 12
-      # Only loop 2 is decreased, the others are low enough already.
+      # Only loops 2 and 3 are decreased, loop 1 is low enough already.
       assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert API.mock_put_value("MSCV_2_OPENING_ORDERED")
       assert powers = power_levels(pid)
 
       # No level should be more than 1 greater than the others.
       assert Enum.max(powers) - Enum.min(powers) <= 1
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
@@ -238,6 +254,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_0_OUTLET", 44)
       API.mock_get("STEAM_GEN_1_OUTLET", 60)
       API.mock_get("STEAM_GEN_2_OUTLET", 46)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -259,6 +278,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_0_OUTLET", 1000)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
       assert total_power(pid) > 12
@@ -275,9 +297,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.001 / 1000)
       # ... but now we turn the main banks on:
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "True")
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
       assert total_power(pid) < 12
@@ -301,6 +326,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
         API.mock_get("STEAM_GEN_0_OUTLET", 1000)
         API.mock_get("STEAM_GEN_1_OUTLET", 1000)
         API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+        API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+        API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+        API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
       end
 
       # Tick 1, nothing changes:
@@ -342,12 +370,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) / 1.05 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      # Steam output should NOT be queried, no need to mock it.
+      # Loop 1 steam output gets queried by `Turbine.tick/1`.
+      # Loop 2 does not get queried because it's already power level 5.
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
       assert power_levels(pid) == [3, 5]
-      assert [] = API.unused_mocks()
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "increases power when supply does not meet demand", %{pid: pid} do
@@ -361,6 +393,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -368,6 +402,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert new_power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
       assert new_power1 > old_power1
       assert [^new_power1, ^old_power2] = power_levels(pid)
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -378,8 +413,10 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 0.80 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -390,6 +427,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       # Levels should be within 1 of each other:
       assert abs(power1 - power2) in 0..1
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
@@ -400,8 +438,10 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 2.0 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      API.mock_get("STEAM_GEN_0_OUTLET", 34)
+      API.mock_get("STEAM_GEN_0_OUTLET", 34, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 75)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -429,12 +469,14 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", kw3 / 1.05 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      # Steam output should NOT be queried, no need to mock it.
+      # Steam output is queried by `Turbine.tick/1`.
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
       assert power_levels(pid) == [4]
-      assert [] = API.unused_mocks()
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "increases power when supply does not meet demand", %{pid: pid} do
@@ -445,6 +487,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_DEMAND_MW", kw3 * 1.20 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -460,7 +503,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", kw3 * 0.80 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -477,6 +521,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_DEMAND_MW", kw3 * 2.0 / 1000)
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 46)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, 1})
 
@@ -527,4 +572,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
   defp power_levels(pid), do: state(pid).turbines |> Enum.map(& &1.power_level)
   defp total_power(pid), do: power_levels(pid) |> Enum.sum()
+
+  defp ignore_bypass_mock_puts(mocks) do
+    mocks
+    |> Enum.reject(fn
+      {:put, key, _} -> key =~ ~r"STEAM_TURBINE_[0-2]_BYPASS_ORDERED"
+      _ -> false
+    end)
+  end
 end

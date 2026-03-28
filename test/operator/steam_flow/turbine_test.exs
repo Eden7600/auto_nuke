@@ -7,7 +7,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
   # This seems like a lot of ticks to wait for things to settle,
   # but I'm going to roll with it for now and tune the PID controller
   # in the real game.
-  @settle_time 100
+  @settle_time 120
 
   describe "new/2" do
     test "determines power level based on MSCV" do

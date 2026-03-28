@@ -164,7 +164,13 @@ defmodule AutoNuke.Operator.SteamFlow do
         {new_axis, old_turbines}
     end
     |> then(fn {%ControlAxis{} = axis, turbines} ->
-      {:noreply, %State{state | axis: axis, turbines: turbines, smoothed_generation: smoother}}
+      {:noreply,
+       %State{
+         state
+         | axis: axis,
+           turbines: turbines |> Enum.map(&Turbine.tick/1),
+           smoothed_generation: smoother
+       }}
     end)
   end
 
