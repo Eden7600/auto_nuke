@@ -26,11 +26,22 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Valid loop numbers:
   @all_loops 1..3
 
-  # Target 105% demand, plus or minus 5%.
-  @target_percent 1.05
-  @deadzone 0.05
-  # But if resistor banks are on, drop that down to 95%, to try to avoid using them.
-  @resistors_offset -0.10
+  # Without resistor banks, we target between 95% and 110% demand.
+  #
+  # Why 95%?  Because if demand increases, there will be a brief period
+  # at the start of the hour where we're underproducing, and if we then
+  # happen to end up at just over 90% the rest of the hour, we might still
+  # miss the 90% demand target.
+  #
+  # To accomplish this, we target 102.5%, plus or minus 7.5%.
+  @target_percent 1.025
+  @deadzone 0.075
+  # If resistor banks are on, let's try not to use them.
+  # Accordingly, let's target between 90.5% and 99.5%, or 95% ± 4.5%.
+  @resistors_target_percent 0.95
+  @resistors_deadzone 0.045
+  # When overriding, use a flat 5% deadzone.
+  @override_deadzone 0.05
 
   # There's no power level zero as far as we're concerned.
   @power_levels 1..100
@@ -142,9 +153,16 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_info({:tick, _}, %State{axis: old_axis, turbines: old_turbines} = state) do
+  def handle_info(
+        {:tick, _},
+        %State{
+          axis: %ControlAxis{} = old_axis,
+          turbines: old_turbines
+        } = state
+      ) do
     {ratio, smoother} = get_demand_ratio(state)
-    target = state.target_override || get_target_ratio()
+    {target, deadzone} = get_target_ratio_and_deadzone(state.target_override)
+    old_axis = %ControlAxis{old_axis | deadzone: deadzone}
 
     case ControlAxis.step(old_axis, target, ratio) do
       {:changed, new_axis, new_value, _old_value} ->
@@ -185,12 +203,15 @@ defmodule AutoNuke.Operator.SteamFlow do
     {ratio, smoothed}
   end
 
-  defp get_target_ratio do
+  defp get_target_ratio_and_deadzone(nil) do
     case API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH") do
-      true -> @target_percent + @resistors_offset
-      false -> @target_percent
+      true -> {@resistors_target_percent, @resistors_deadzone}
+      false -> {@target_percent, @deadzone}
     end
   end
+
+  defp get_target_ratio_and_deadzone(override) when is_float(override),
+    do: {override, @override_deadzone}
 
   defp get_closed_breakers do
     @all_loops
@@ -207,6 +228,8 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   defp percent(float), do: "#{float * 100}%"
+
+  def total_power_to_axis(_, 0), do: -1.0
 
   def total_power_to_axis(total, count) do
     total
