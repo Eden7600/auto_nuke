@@ -13,8 +13,8 @@ defmodule AutoNuke.Test.MockAPI do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
-  def mock_get(key, value) do
-    GenServer.cast(__MODULE__, {:mock_get, self(), key, "#{value}"})
+  def mock_get(key, value, opts \\ []) do
+    GenServer.cast(__MODULE__, {:mock_get, self(), key, "#{value}", opts})
   end
 
   def get(key) do
@@ -47,13 +47,13 @@ defmodule AutoNuke.Test.MockAPI do
   def init(_), do: {:ok, %State{}}
 
   @impl true
-  def handle_cast({:mock_get, pid, key, value}, %State{} = state) do
-    {:noreply, state |> put_mock(pid, {:get, key}, value)}
+  def handle_cast({:mock_get, pid, key, value, opts}, %State{} = state) do
+    {:noreply, state |> put_mock(pid, {:get, key}, value, opts)}
   end
 
   @impl true
   def handle_cast({:put, pid, key, value}, %State{} = state) do
-    {:noreply, state |> put_mock(pid, {:put, key}, value)}
+    {:noreply, state |> put_mock(pid, {:put, key}, value, [])}
   end
 
   @impl true
@@ -84,8 +84,10 @@ defmodule AutoNuke.Test.MockAPI do
   def handle_call({:unused_mocks, pid}, _from, %State{} = state) do
     rval =
       Map.get(state.mocks, pid, %{})
-      |> Enum.map(fn {{op, key}, value} ->
-        {op, key, value}
+      |> Enum.flat_map(fn {{op, key}, q} ->
+        q
+        |> :queue.to_list()
+        |> Enum.map(fn value -> {op, key, value} end)
       end)
 
     {:reply, rval, state}
@@ -101,16 +103,17 @@ defmodule AutoNuke.Test.MockAPI do
      }}
   end
 
-  defp put_mock(%State{mocks: mocks, aliases: aliases} = state, pid, operation, value) do
+  defp put_mock(%State{mocks: mocks, aliases: aliases} = state, pid, operation, value, opts) do
     pid = aliases |> Map.get(pid, pid)
+    validate_opts(opts)
 
     new_mocks =
-      if Map.has_key?(mocks, pid) do
-        put_in(mocks, [pid, operation], value)
-      else
-        Process.monitor(pid)
-        Map.put(mocks, pid, %{operation => value})
-      end
+      mocks
+      |> maybe_add_pid(pid)
+      |> update_in([pid, operation], fn q ->
+        q = q || :queue.new()
+        :queue.in({value, opts}, q)
+      end)
 
     %State{state | mocks: new_mocks}
   end
@@ -118,9 +121,38 @@ defmodule AutoNuke.Test.MockAPI do
   defp pop_mock(%State{mocks: mocks, aliases: aliases} = state, pid, operation) do
     pid = aliases |> Map.get(pid, pid)
 
-    case pop_in(mocks, [pid, operation]) do
-      {nil, _} -> {nil, state}
-      {value, new_mocks} -> {value, %State{state | mocks: new_mocks}}
+    get_and_update_in(mocks, [pid, operation], fn q ->
+      case :queue.out(q) do
+        {{:value, {v, opts}}, new_q} ->
+          remaining = Keyword.get(opts, :times, 1) - 1
+
+          if remaining > 0 do
+            new_opts = Keyword.replace(opts, :times, remaining)
+            {v, :queue.in_r({v, new_opts}, new_q)}
+          else
+            {v, new_q}
+          end
+
+        {:empty, new_q} ->
+          {nil, new_q}
+      end
+    end)
+    |> then(fn {value, new_mocks} ->
+      {value, %State{state | mocks: new_mocks}}
+    end)
+  end
+
+  defp maybe_add_pid(mocks, pid) do
+    case Map.has_key?(mocks, pid) do
+      true ->
+        mocks
+
+      false ->
+        Process.monitor(pid)
+        Map.put(mocks, pid, %{})
     end
   end
+
+  defp validate_opts([]), do: :ok
+  defp validate_opts([{:times, n} | rest]) when is_integer(n), do: validate_opts(rest)
 end
