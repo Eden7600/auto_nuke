@@ -34,7 +34,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Reservoir do
 
   defp get_tank_volume do
     API.get_float("CORE_EXTERNAL_COOLANT_RESERVOIR_VOLUME")
-    |> floor()
-    |> div(@gauge_factor)
+    |> Kernel./(@gauge_factor)
+    |> Float.floor(1)
   end
 end

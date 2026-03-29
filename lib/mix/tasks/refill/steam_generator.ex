@@ -48,7 +48,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
 
     pump_speed =
       (target - volume)
-      |> Kernel./(5)
+      |> Kernel./(2)
       |> ceil()
       |> min(100)
 
