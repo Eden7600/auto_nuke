@@ -15,12 +15,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Set core factor to this to begin reaction:
-  @startup_core_factor 3.0
+  # Increase core factor target by 0.005 every tick:
+  @core_factor_increase 0.005
+  # Don't go more than 0.11 above the current actual core factor
+  # (i.e. just outside the deadzone).
+  @core_factor_max_error 0.11
   # Target this temperature (°C):
   @startup_temp 300
   # Wait for this temperature before starting turbines:
-  @min_temp 270
+  @min_temp @startup_temp - 20
   # Open or close MSCV to this (%):
   @startup_mscv 10
 
@@ -69,7 +72,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: loop)
     end)
 
-    {:ok, _} = AutoNuke.Operator.CoreFactor.start_link(target: @startup_core_factor)
+    {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
 
@@ -128,15 +131,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     UI.set_wait(
       "Primary Pump Speed",
-      "MEDIUM (50%)",
+      "LOW (10%)",
       fn ->
         loops
         |> Enum.map(get)
-        |> Enum.all?(&(&1 == 50))
+        |> Enum.all?(&(&1 == 10))
       end,
       fn ->
         loops
-        |> Enum.map(&put.(50, &1))
+        |> Enum.map(&put.(10, &1))
       end
     )
   end
@@ -262,7 +265,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
           API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_SPEED")
           |> floor()
         end,
-        max: 50
+        max: 10
       )
     end)
 
@@ -399,15 +402,51 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp achieve_criticality do
     UI.console("Reactor Core")
 
-    UI.wait("Control Rod Height", "BEGIN REDUCING", fn ->
-      API.get_float("RODS_POS_ACTUAL") <= 99.0
-    end)
+    UI.set_wait_unless(
+      "Control Rod Height",
+      "BEGIN REDUCING",
+      fn -> API.get_float("CORE_TEMP") >= @startup_temp end,
+      fn -> API.get_float("RODS_POS_ACTUAL") <= 99.0 end,
+      fn ->
+        init_factor = API.get_float("CORE_FACTOR")
+
+        spawn_link(fn ->
+          # Ensure only one:
+          Process.register(self(), :core_factor_increase)
+          PubSub.subscribe(self(), :ticker)
+          increase_core_factor_loop(init_factor)
+        end)
+      end
+    )
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
     end)
 
     wait_for_temperature(100, false)
+  end
+
+  defp increase_core_factor_loop(old_factor) do
+    receive do
+      {:tick, _} ->
+        new_factor = (old_factor + @core_factor_increase) |> maybe_clamp_core_factor()
+        AutoNuke.Operator.CoreFactor.set_target(new_factor)
+
+        case API.get_float("CORE_TEMP") >= @startup_temp do
+          true -> :done
+          false -> increase_core_factor_loop(new_factor)
+        end
+    end
+  end
+
+  defp maybe_clamp_core_factor(wanted) do
+    actual = API.get_float("CORE_FACTOR")
+
+    if actual < 1.0 do
+      wanted
+    else
+      wanted |> min(actual + @core_factor_max_error)
+    end
   end
 
   defp wait_for_temperature(temp, with_header \\ true) do
