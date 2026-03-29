@@ -15,6 +15,7 @@ defmodule AutoNuke do
         PubSub,
         AutoNuke.Ticker,
         AutoNuke.Operator.CoreFactor,
+        AutoNuke.Operator.CoreTemp,
         {AutoNuke.Operator.SecondaryFill, loop: 1},
         {AutoNuke.Operator.SecondaryFill, loop: 2},
         {AutoNuke.Operator.SecondaryFill, loop: 3},
