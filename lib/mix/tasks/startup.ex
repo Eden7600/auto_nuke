@@ -54,7 +54,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     check_power_source()
     start_pressurizer()
     start_primary_circulation(loops)
-    begin_injecting_boron()
+    if using_boron?(), do: begin_injecting_boron()
     start_condenser()
     open_steam_valves(loops)
     enable_resistor_bank()
@@ -336,13 +336,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       max: 150
     )
 
-    UI.console("Chemical Treatemnt")
+    if using_boron?() do
+      UI.console("Chemical Treatemnt")
 
-    UI.progress_loop(
-      label: "Boron PPM",
-      fetch: fn -> API.get_float("CHEM_BORON_PPM") |> Float.round(1) end,
-      max: @boron_target - 50
-    )
+      UI.progress_loop(
+        label: "Boron PPM",
+        fetch: fn -> API.get_float("CHEM_BORON_PPM") |> Float.round(1) end,
+        max: @boron_target - 50
+      )
+    end
   end
 
   defp enable_resistor_bank do
@@ -576,5 +578,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         nil
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp using_boron? do
+    API.get_integer("CHEMICAL_DOSING_PUMP_STATUS") != 4
   end
 end
