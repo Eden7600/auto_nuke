@@ -88,8 +88,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
     axis =
       ControlAxis.new(
-        kp: -0.5,
-        ki: -0.1,
+        kp: -0.2,
+        ki: -0.05,
         deadzone: 0.1,
         to_value_fn: &axis_to_bypass/1,
         offset: bypass |> bypass_to_axis(),

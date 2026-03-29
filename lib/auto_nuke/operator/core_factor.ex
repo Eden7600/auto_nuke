@@ -18,7 +18,7 @@ defmodule AutoNuke.Operator.CoreFactor do
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, target, opts)

@@ -19,7 +19,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   @speeds 10..50
   @speed_span (@speeds.last - @speeds.first) / 2
 
-  def start_link(opts) do
+  def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, target, opts)
@@ -37,9 +37,9 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     axis =
       ControlAxis.new(
-        kp: 0.01,
-        ki: 0.001,
-        deadzone: 0.1,
+        kp: -0.01,
+        ki: -0.001,
+        deadzone: 0.5,
         to_value_fn: &axis_to_speed/1,
         offset: speed |> speed_to_axis(),
         initial_value: speed
@@ -109,6 +109,6 @@ defmodule AutoNuke.Operator.CoreTemp do
   defp get_pump_speed(n), do: API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{n}_SPEED")
   defp set_pump_speed(n, v), do: API.put("COOLANT_CORE_CIRCULATION_PUMP_#{n}_ORDERED_SPEED", v)
 
-  def axis_to_speed(output), do: round(output + 1.0) * @speed_span + @speeds.first
+  def axis_to_speed(output), do: round((output + 1.0) * @speed_span + @speeds.first)
   def speed_to_axis(speed), do: (speed - @speeds.first) / @speed_span - 1.0
 end
