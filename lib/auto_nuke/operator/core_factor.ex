@@ -1,17 +1,20 @@
-defmodule AutoNuke.Operator.CoreTemp do
+defmodule AutoNuke.Operator.CoreFactor do
   use GenServer
   require Logger
 
   defmodule State do
-    @enforce_keys [:target, :axis, :last_temp]
+    @enforce_keys [:target, :axis, :smoothed]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API
+  alias AutoNuke.Smoother
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
+  # Average the core factor over the past three in-game minutes:
+  @core_factor_smoothing AutoNuke.Ticker.ticks_per_minute() * 3
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
@@ -28,14 +31,13 @@ defmodule AutoNuke.Operator.CoreTemp do
   @impl true
   def init(target) when is_number(target) or is_nil(target) do
     rods = get_rods()
-    temp = get_temperature()
-    target = target || temp
+    factor = get_core_factor()
+    target = target || factor
 
     axis =
       ControlAxis.new(
-        kp: 0.01,
-        ki: 0.001,
-        kd: 0.0001,
+        kp: 0.02,
+        ki: 0.002,
         deadzone: 0.1,
         to_value_fn: &axis_to_rods/1,
         offset: rods |> rods_to_axis(),
@@ -45,14 +47,14 @@ defmodule AutoNuke.Operator.CoreTemp do
     state =
       %State{
         target: target,
-        last_temp: temp,
-        axis: axis
+        axis: axis,
+        smoothed: Smoother.new(@core_factor_smoothing)
       }
 
     PubSub.subscribe(self(), :ticker)
 
     Logger.info(
-      @log_prefix <> "Started with temperature #{temp}°C, target #{target}°C, rods at #{rods}%."
+      @log_prefix <> "Started with core factor #{factor}°C, target #{target}°C, rods at #{rods}%."
     )
 
     {:ok, state}
@@ -60,16 +62,17 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_cast({:target, t}, %State{} = state) do
-    Logger.info(@log_prefix <> "Core target changed from #{state.target}°C to #{t}°C.")
-
+    Logger.info(@log_prefix <> "Core factor target changed from #{state.target} to #{t}.")
     {:noreply, %State{state | target: t}}
   end
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    temp = get_verified_temperature([state.last_temp])
+    factor = get_core_factor()
+    smoothed = state.smoothed |> Smoother.add(factor)
+    current = Smoother.average(smoothed)
 
-    case ControlAxis.step(state.axis, state.target, temp) do
+    case ControlAxis.step(state.axis, state.target, current) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
         set_rods(new)
@@ -79,44 +82,18 @@ defmodule AutoNuke.Operator.CoreTemp do
         axis
     end
     |> then(fn axis ->
-      {:noreply, %State{state | axis: axis, last_temp: temp}}
+      {:noreply, %State{state | axis: axis, smoothed: smoothed}}
     end)
   end
 
-  defp get_temperature(), do: API.get_float("CORE_TEMP")
+  defp get_core_factor, do: API.get_float("CORE_FACTOR")
+  defp get_rods, do: API.get_float("RODS_POS_ACTUAL")
 
-  defp get_verified_temperature(seen) when is_list(seen) do
-    # Temperature has a tendency to have tiny little spikes depending on read timing.
-    # To mitigate this and try to hold a steady state, if we detect a temperature change,
-    # we take extra readings until they agree.
-    temp = get_temperature()
-
-    if temp in seen do
-      temp
-    else
-      get_verified_temperature([temp | seen])
-    end
-  end
-
-  # Assumption: Any core with an installed fuel cell will have control rods.
-  defp get_rods do
-    1..9
-    |> Enum.map(fn core ->
-      case API.get_string("CORE_BAY_#{core}_STATE") do
-        "INTERIOR" -> API.get_float("ROD_BANK_POS_#{core - 1}_ACTUAL")
-        _ -> nil
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Statistex.average()
-  end
-
-  defp set_rods(value) when value >= 0.0 and value <= 100.0 do
-    AutoNuke.API.put("RODS_ALL_POS_ORDERED", value)
-  end
+  defp set_rods(value) when value >= 0.0 and value <= 100.0,
+    do: API.put("RODS_ALL_POS_ORDERED", value)
 
   defp axis_to_rods(output), do: (50 - output * 50) |> Float.round(1)
-  defp rods_to_axis(rods), do: ((50 - rods) / 50) |> Float.round(5)
+  defp rods_to_axis(rods), do: (50 - rods) / 50
 
   defp maybe_clamp(axis, ordered) do
     actual = get_rods()

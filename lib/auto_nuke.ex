@@ -14,15 +14,11 @@ defmodule AutoNuke do
       [
         PubSub,
         AutoNuke.Ticker,
-        AutoNuke.Operator.CoreTemp,
+        AutoNuke.Operator.CoreFactor,
         {AutoNuke.Operator.SecondaryFill, loop: 1},
         {AutoNuke.Operator.SecondaryFill, loop: 2},
         {AutoNuke.Operator.SecondaryFill, loop: 3},
-        AutoNuke.Operator.VacuumTank,
-        {AutoNuke.Operator.HeatFlow, loop: 1},
-        {AutoNuke.Operator.HeatFlow, loop: 2},
-        {AutoNuke.Operator.HeatFlow, loop: 3},
-        AutoNuke.Operator.SteamFlow
+        AutoNuke.Operator.VacuumTank
       ]
     else
       []
