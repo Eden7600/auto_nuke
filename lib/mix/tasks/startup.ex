@@ -15,9 +15,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Set rods to this (%) to begin reaction:
-  @startup_rods 90
-  # Stop and maintain this temperature (°C):
+  # Set core factor to this to begin reaction:
+  @startup_core_factor 3.0
+  # Target this temperature (°C):
   @startup_temp 300
   # Wait for this temperature before starting turbines:
   @min_temp 270
@@ -69,6 +69,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: loop)
     end)
 
+    {:ok, _} = AutoNuke.Operator.CoreFactor.start_link(target: @startup_core_factor)
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
 
@@ -76,11 +77,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
 
     wait_for_temperature(@min_temp)
-
-    loops
-    |> Enum.each(fn loop ->
-      {:ok, _} = AutoNuke.Operator.HeatFlow.start_link(loop: loop)
-    end)
 
     request_connection()
     start_turbine(loops)
@@ -403,14 +399,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp achieve_criticality do
     UI.console("Reactor Core")
 
-    bank = 0..8 |> Enum.find(fn c -> API.get_float_or_nil("ROD_BANK_POS_#{c}_ACTUAL") end)
-
-    UI.set_wait(
-      "Control Rod Height",
-      "SET TO #{@startup_rods}%",
-      fn -> API.get_float("ROD_BANK_POS_#{bank}_ORDERED") == @startup_rods end,
-      fn -> API.put("RODS_ALL_POS_ORDERED", @startup_rods) end
-    )
+    UI.wait("Control Rod Height", "BEGIN REDUCING", fn ->
+      API.get_float("RODS_POS_ACTUAL") <= 99.0
+    end)
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
