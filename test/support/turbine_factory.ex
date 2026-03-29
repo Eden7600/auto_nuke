@@ -5,7 +5,7 @@ defmodule AutoNuke.Test.TurbineFactory do
   def create(opts \\ []) do
     {loop, opts} = maybe_random(opts, :loop, 1..3)
     {power_level, opts} = maybe_random(opts, :power_level, 0..100)
-    {min_steam, opts} = maybe_random(opts, :min_steam, 1..100)
+    {min_steam, opts} = maybe_random(opts, :min_steam, 1..50)
     {bypass, opts} = maybe_random(opts, :bypass, 0..100)
     {torque, opts} = maybe_random(opts, :torque, fn -> random_torque(power_level) end)
     {mock_only, opts} = Keyword.pop(opts, :mock_only, false)
@@ -20,7 +20,7 @@ defmodule AutoNuke.Test.TurbineFactory do
       end
 
     API.mock_get("MSCV_#{loop - 1}_OPENING_ACTUAL", mscv)
-    API.mock_get("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL", bypass)
+    API.mock_get("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL", bypass, times: 2)
 
     unless mock_only do
       %Turbine{} = turbine = Turbine.new(loop, min_steam)

@@ -11,7 +11,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
 
   describe "new/2" do
     test "determines power level based on MSCV" do
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
+      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0, times: 2)
       API.mock_get("MSCV_2_OPENING_ACTUAL", 4)
 
       assert %Turbine{} = turbine = Turbine.new(3, 50)
@@ -20,7 +20,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
 
     test "guesses power level 1 or 2 based on torque" do
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
+      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0, times: 2)
       API.mock_get("MSCV_1_OPENING_ACTUAL", 2)
       API.mock_get("STEAM_TURBINE_1_TORQUE", 2.5)
 
@@ -28,7 +28,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert turbine1.loop == 2
       assert turbine1.power_level == 1
 
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
+      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0, times: 2)
       API.mock_get("MSCV_0_OPENING_ACTUAL", 2)
       API.mock_get("STEAM_TURBINE_0_TORQUE", "3.5")
 
@@ -52,10 +52,11 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
 
   describe "set_power_level/2" do
     setup do
-      [turbine: new_turbine()]
+      [turbine: new_turbine(loop: 1)]
     end
 
     test "sets power level", %{turbine: turbine} do
+      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
       new_power = Enum.random(1..100)
       assert %Turbine{} = turbine = Turbine.set_power_level(turbine, new_power)
       assert turbine.power_level == new_power
@@ -75,14 +76,15 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
 
   describe "tick/1 at power level 5" do
     setup do
-      [turbine: new_turbine(loop: 1, power_level: 5)]
+      [turbine: new_turbine(loop: 1, power_level: 5, min_steam: 25)]
     end
 
     test "pushes bypass to zero", %{turbine: turbine} do
       final_turbine =
         1..@settle_time
         |> Enum.reduce(turbine, fn _, old_t ->
-          API.mock_get("COOLANT_SEC_0_PRESSURE", 0)
+          API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+          API.mock_get("STEAM_GEN_0_OUTLET", 50)
           assert %Turbine{} = new_t = Turbine.tick(old_t)
           assert new_t.bypass <= old_t.bypass
           new_t
@@ -137,8 +139,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
           {new_t, smoother}
         end)
 
-      # Sometimes we get 41 instead of 40.
-      assert_in_delta final_turbine.bypass, 40, 1
+      assert final_turbine.bypass == 40
     end
   end
 
@@ -159,12 +160,14 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
           smoother = Smoother.add(smoother, new_torque)
 
           API.mock_get("STEAM_TURBINE_1_TORQUE", new_torque)
+          API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
           assert %Turbine{} = new_t = Turbine.tick(old_t)
           {new_t, smoother}
         end)
 
-      assert final_turbine.bypass == 50
+      # This will be inexact due to deadzone.
+      assert final_turbine.bypass in 45..55
     end
   end
 

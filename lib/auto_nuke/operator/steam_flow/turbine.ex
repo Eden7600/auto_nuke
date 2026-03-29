@@ -5,13 +5,25 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     loop: nil,
     # ControlAxis controlling turbine bypass
     axis: nil,
-    # Currently ordered turbine bypass setting
+    # Current bypass setting
     bypass: nil,
     # Target power level, assigned by parent (based on power requirements)
     power_level: nil,
     # Minimum steam requirement, assigned by parent (based on number of turbines)
-    min_steam: nil
+    min_steam: nil,
+    # Functions for current and target, based on power level
+    current_fn: nil,
+    target_fn: nil
   )
+
+  # When at power level 1, target 2.5% torque:
+  @torque_target 2.5
+  # When at power levels 2 and above, we target `turbine.min_steam` instead.
+
+  # If pressure exceeds about 70 bar, we're having a pressure excursion event.
+  @max_pressure 70
+  # Above that pressure, override bypass and open by 2% every bar.
+  defp pressure_min_bypass(loop), do: ceil(get_pressure(loop) - @max_pressure) * 2
 
   require Logger
   alias __MODULE__
@@ -19,25 +31,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   alias AutoNuke.ControlAxis
 
   def new(loop, min_steam) when loop in 1..3 and min_steam > 0 do
-    bypass = get_bypass(loop) |> round()
-
-    axis =
-      ControlAxis.new(
-        kp: 0.5,
-        ki: 0.1,
-        deadzone: 0.01,
-        to_value_fn: &axis_to_bypass/1,
-        offset: bypass |> bypass_to_axis(),
-        initial_value: bypass
-      )
-
     %Turbine{
       loop: loop,
-      axis: axis,
-      bypass: bypass,
+      axis: nil,
+      bypass: get_bypass(loop),
       power_level: guess_power_level(loop),
       min_steam: min_steam
     }
+    |> change_control_mode()
   end
 
   def set_min_steam(%Turbine{loop: loop, min_steam: old} = turbine, new) do
@@ -48,7 +49,9 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   def set_power_level(%Turbine{loop: loop, power_level: old} = turbine, new) do
     Logger.info(log_prefix(loop) <> "Changing power level from #{old} to #{new}.")
     set_mscv(loop, mscv_setting(new))
+
     %Turbine{turbine | power_level: new}
+    |> change_control_mode()
   end
 
   def max_power_level(%Turbine{loop: loop}) do
@@ -58,23 +61,69 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     |> Kernel.+(1)
   end
 
-  def tick(%Turbine{loop: loop, axis: axis} = turbine) do
-    ratio = get_current_value(turbine)
+  def tick(%Turbine{loop: loop} = turbine) do
+    current = turbine.current_fn.(turbine)
+    target = turbine.target_fn.(turbine)
 
-    case ControlAxis.step(axis, 0.0, ratio) do
-      {:changed, axis, new, old} ->
+    case ControlAxis.step(turbine.axis, target, current) do
+      {:changed, axis, new, _old} -> {axis, new}
+      {:unchanged, axis, old} -> {axis, old}
+    end
+    |> then(fn {axis, new} ->
+      old = turbine.bypass
+      new = new |> max(pressure_min_bypass(loop))
+
+      if old != new do
         Logger.info(log_prefix(loop) <> "Changing bypass from #{old} to #{new}.")
         set_bypass(loop, new)
-        %Turbine{turbine | axis: axis, bypass: new}
+      end
 
-      {:unchanged, axis, _old_value} ->
-        %Turbine{turbine | axis: axis}
-    end
+      %Turbine{turbine | axis: axis, bypass: new}
+    end)
   end
 
-  defp get_current_value(%Turbine{power_level: level} = turbine) do
-    bypass_concerns(level)
-    |> Enum.reduce(0.0, &apply_concern(turbine, &1, &2))
+  # Power level 1: Target 2.5% torque.
+  defp change_control_mode(%Turbine{loop: loop, power_level: 1} = turbine) do
+    bypass = get_bypass(loop)
+
+    axis =
+      ControlAxis.new(
+        kp: -0.5,
+        ki: -0.1,
+        deadzone: 0.1,
+        to_value_fn: &axis_to_bypass/1,
+        offset: bypass |> bypass_to_axis(),
+        initial_value: bypass
+      )
+
+    %Turbine{
+      turbine
+      | axis: axis,
+        current_fn: fn %Turbine{loop: loop} -> get_turbine_torque(loop) end,
+        target_fn: fn _ -> @torque_target end
+    }
+  end
+
+  # Power levels 2 and up: Target `min_steam` steam output.
+  defp change_control_mode(%Turbine{loop: loop} = turbine) do
+    bypass = get_bypass(loop)
+
+    axis =
+      ControlAxis.new(
+        kp: 0.01,
+        ki: 0.001,
+        deadzone: 0.5,
+        to_value_fn: &axis_to_bypass/1,
+        offset: bypass |> bypass_to_axis(),
+        initial_value: bypass
+      )
+
+    %Turbine{
+      turbine
+      | axis: axis,
+        current_fn: fn %Turbine{loop: loop} -> get_steam_outlet(loop) end,
+        target_fn: fn %Turbine{min_steam: min_steam} -> min_steam end
+    }
   end
 
   defp mscv_setting(power_level)
@@ -82,102 +131,6 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   defp mscv_setting(1), do: 2
   # Power level 2 and up use the given MSCV with as little bypass as possible.
   defp mscv_setting(n) when n in 2..100, do: n
-
-  # Lists the concerns for each power level, from least to most important.
-  # Each concern will have the opportunity to adjust the output of the prior one.
-  defp bypass_concerns(power_level)
-  # At power level 1, we want as much bypass as possible.
-  # Targeting torque directly should also address both the pressure and steam concerns:
-  # Opening bypass wide should keep steam high and pressure low.
-  # (Excessive pressure will raise torque, so we'll compensate automatically.)
-  defp bypass_concerns(1), do: [:target_torque]
-  # At power levels 2, 3, and 4, we need to
-  #   1: avoid excessive pressure
-  #   2: ensure enough steam
-  #   3: otherwise, as little bypass as we can get away with
-  # Thankfully, both 1 and 2 are solved with more bypass, so they work together.
-  # Order is also irrelevant, since it'll just prioritise the more-violated concern.
-  defp bypass_concerns(n) when n in 2..4, do: [:zero_bypass, :min_steam, :max_pressure]
-  # At power level 5 and up, we can drop the min_steam requirement.
-  defp bypass_concerns(n) when n in 5..100, do: [:zero_bypass, :max_pressure]
-
-  # If our prior target calls for less bypass,
-  # start applying the brakes when steam output is 10% above `min_steam`:
-  @min_steam_margin 0.1
-  # How aggressively to pursue our `min_steam` agenda:
-  @min_steam_gain 1
-
-  defp apply_concern(%Turbine{loop: loop, min_steam: min_steam}, :min_steam, old_value) do
-    steam = get_steam_outlet(loop)
-    margin = @min_steam_margin
-    gain = @min_steam_gain
-
-    # >0 = safe, 0 = at limit, <0 = violation
-    normalized_error = (steam - min_steam) / min_steam
-    # 0 = very safe, 0.x = approaching limit, 1 = violation
-    approach_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
-    # 0 = safe, <0 = violation
-    violation_factor = clamp(normalized_error * gain, -1.0, 0.0)
-
-    new_value = (1 - approach_factor) * old_value + violation_factor
-    min(old_value, new_value)
-  end
-
-  # When limiting pressure, target 80 bar:
-  @max_pressure 80
-  # If our prior target calls for less bypass,
-  # start applying the brakes when pressure is 10% below `@max_pressure`:
-  @max_pressure_margin 0.1
-  # How aggressively to pursue our `@max_pressure` agenda:
-  @max_pressure_gain 1
-
-  defp apply_concern(%Turbine{loop: loop}, :max_pressure, old_value) do
-    pressure = get_pressure(loop)
-    margin = @max_pressure_margin
-    gain = @max_pressure_gain
-
-    # >0 = safe, 0 = at limit, <0 = violation
-    normalized_error = (@max_pressure - pressure) / @max_pressure
-    # 0 = very safe, 0.x = approaching limit, 1 = violation
-    approach_factor = clamp((margin - normalized_error) / margin, 0.0, 1.0)
-    # 0 = safe, <0 = violation
-    violation_factor = clamp(normalized_error * gain, -1.0, 0.0)
-
-    new_value = (1 - approach_factor) * old_value + violation_factor
-    min(old_value, new_value)
-  end
-
-  # What torque value to target.
-  # If torque is exactly this, then value will be zero (perfect bypass).
-  @torque_target 2.5
-  # What torque value to never go below.
-  # If torque reaches or drops below this, then value will be +1 (too much bypass!)
-  @torque_critical 2.0
-  # Where to start slowing down our torque decrease.
-  # Above this, value will be -1 (not enough bypass).
-  # Below this, value will approach zero (perfect bypass).
-  @torque_high 3.5
-
-  defp apply_concern(%Turbine{loop: loop}, :target_torque, _old_value) do
-    torque = get_turbine_torque(loop)
-
-    cond do
-      torque < @torque_target ->
-        (@torque_target - torque) / (@torque_target - @torque_critical)
-
-      torque > @torque_target ->
-        (@torque_target - torque) / (@torque_high - @torque_target)
-
-      torque == @torque_target ->
-        0
-    end
-    |> clamp(-1.0, +1.0)
-  end
-
-  # This concern is simple: Always reduce bypass.
-  defp apply_concern(%Turbine{}, :zero_bypass, _old_value), do: 1
-
-  defp clamp(value, min, max), do: value |> max(min) |> min(max)
 
   defp get_steam_outlet(loop), do: API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")

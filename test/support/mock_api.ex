@@ -121,21 +121,25 @@ defmodule AutoNuke.Test.MockAPI do
   defp pop_mock(%State{mocks: mocks, aliases: aliases} = state, pid, operation) do
     pid = aliases |> Map.get(pid, pid)
 
-    get_and_update_in(mocks, [pid, operation], fn q ->
-      case :queue.out(q) do
-        {{:value, {v, opts}}, new_q} ->
-          remaining = Keyword.get(opts, :times, 1) - 1
+    get_and_update_in(mocks, [pid, operation], fn
+      nil ->
+        {nil, nil}
 
-          if remaining > 0 do
-            new_opts = Keyword.replace(opts, :times, remaining)
-            {v, :queue.in_r({v, new_opts}, new_q)}
-          else
-            {v, new_q}
-          end
+      q ->
+        case :queue.out(q) do
+          {{:value, {v, opts}}, new_q} ->
+            remaining = Keyword.get(opts, :times, 1) - 1
 
-        {:empty, new_q} ->
-          {nil, new_q}
-      end
+            if remaining > 0 do
+              new_opts = Keyword.replace(opts, :times, remaining)
+              {v, :queue.in_r({v, new_opts}, new_q)}
+            else
+              {v, new_q}
+            end
+
+          {:empty, new_q} ->
+            {nil, new_q}
+        end
     end)
     |> then(fn {value, new_mocks} ->
       {value, %State{state | mocks: new_mocks}}
