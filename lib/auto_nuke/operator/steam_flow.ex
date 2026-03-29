@@ -43,8 +43,8 @@ defmodule AutoNuke.Operator.SteamFlow do
   # When overriding, use a flat 5% deadzone.
   @override_deadzone 0.05
 
-  # There's no power level zero as far as we're concerned.
-  @power_levels 1..100
+  # Precalculate power level axis conversion factors:
+  @power_levels Turbine.allowed_power_levels()
   @power_level_span (Range.size(@power_levels) - 1) / 2
   # Ensure that all managed turbines produce at least 50 kg/min of steam between them.
   @min_steam 50

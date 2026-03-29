@@ -10,16 +10,12 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     # Target power level, assigned by parent (based on power requirements)
     power_level: nil,
     # Minimum steam requirement, assigned by parent (based on number of turbines)
-    min_steam: nil,
-    # Functions for current and target, based on power level
-    current_fn: nil,
-    target_fn: nil
+    min_steam: nil
   )
 
-  # When at power level 1, target 2.5% torque:
-  @torque_target 2.5
-  # When at power levels 2 and above, we target `turbine.min_steam` instead.
-
+  # Allowed power levels:
+  @power_levels 2..100
+  def allowed_power_levels, do: @power_levels
   # If pressure exceeds about 70 bar, we're having a pressure excursion event.
   @max_pressure 70
   # Above that pressure, override bypass and open by 2% every bar.
@@ -31,14 +27,25 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   alias AutoNuke.ControlAxis
 
   def new(loop, min_steam) when loop in 1..3 and min_steam > 0 do
+    bypass = get_bypass(loop)
+
+    axis =
+      ControlAxis.new(
+        kp: 0.01,
+        ki: 0.001,
+        deadzone: 0.5,
+        to_value_fn: &axis_to_bypass/1,
+        offset: bypass |> bypass_to_axis(),
+        initial_value: bypass
+      )
+
     %Turbine{
       loop: loop,
-      axis: nil,
+      axis: axis,
       bypass: get_bypass(loop),
-      power_level: guess_power_level(loop),
+      power_level: get_mscv(loop) |> round() |> mscv_to_power_level(),
       min_steam: min_steam
     }
-    |> change_control_mode()
   end
 
   def set_min_steam(%Turbine{loop: loop, min_steam: old} = turbine, new) do
@@ -46,12 +53,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | min_steam: new}
   end
 
-  def set_power_level(%Turbine{loop: loop, power_level: old} = turbine, new) do
+  def set_power_level(%Turbine{loop: loop, power_level: old} = turbine, new)
+      when new in @power_levels do
     Logger.info(log_prefix(loop) <> "Changing power level from #{old} to #{new}.")
     set_mscv(loop, mscv_setting(new))
-
     %Turbine{turbine | power_level: new}
-    |> change_control_mode()
   end
 
   def max_power_level(%Turbine{loop: loop}) do
@@ -62,8 +68,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   end
 
   def tick(%Turbine{loop: loop} = turbine) do
-    current = turbine.current_fn.(turbine)
-    target = turbine.target_fn.(turbine)
+    current = get_steam_outlet(loop)
+    target = turbine.min_steam
 
     case ControlAxis.step(turbine.axis, target, current) do
       {:changed, axis, new, _old} -> {axis, new}
@@ -82,59 +88,10 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     end)
   end
 
-  # Power level 1: Target 2.5% torque.
-  defp change_control_mode(%Turbine{loop: loop, power_level: 1} = turbine) do
-    bypass = get_bypass(loop)
-
-    axis =
-      ControlAxis.new(
-        kp: -0.2,
-        ki: -0.05,
-        deadzone: 0.1,
-        to_value_fn: &axis_to_bypass/1,
-        offset: bypass |> bypass_to_axis(),
-        initial_value: bypass
-      )
-
-    %Turbine{
-      turbine
-      | axis: axis,
-        current_fn: fn %Turbine{loop: loop} -> get_turbine_torque(loop) end,
-        target_fn: fn _ -> @torque_target end
-    }
-  end
-
-  # Power levels 2 and up: Target `min_steam` steam output.
-  defp change_control_mode(%Turbine{loop: loop} = turbine) do
-    bypass = get_bypass(loop)
-
-    axis =
-      ControlAxis.new(
-        kp: 0.01,
-        ki: 0.001,
-        deadzone: 0.5,
-        to_value_fn: &axis_to_bypass/1,
-        offset: bypass |> bypass_to_axis(),
-        initial_value: bypass
-      )
-
-    %Turbine{
-      turbine
-      | axis: axis,
-        current_fn: fn %Turbine{loop: loop} -> get_steam_outlet(loop) end,
-        target_fn: fn %Turbine{min_steam: min_steam} -> min_steam end
-    }
-  end
-
-  defp mscv_setting(power_level)
-  # Power level 1 is still MSCV 2, but with as much bypass as possible.
-  defp mscv_setting(1), do: 2
-  # Power level 2 and up use the given MSCV with as little bypass as possible.
-  defp mscv_setting(n) when n in 2..100, do: n
+  defp mscv_setting(n) when n in @power_levels, do: n
 
   defp get_steam_outlet(loop), do: API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-  defp get_turbine_torque(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_TORQUE")
 
   defp get_bypass(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
   defp set_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
@@ -148,20 +105,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   defp axis_to_bypass(output), do: round(output * 50) + 50
   defp bypass_to_axis(bypass), do: (bypass - 50) / 50
 
-  defp guess_power_level(loop) do
-    case get_mscv(loop) |> round() do
-      0 -> 0
-      1 -> 0
-      2 -> guess_power_level_two(loop)
-      n when n in 3..100 -> n
-    end
-  end
-
-  # This isn't an exact science, but since there are basically no constraints
-  # on power level 1 reaching the target torque value, we can generally assume
-  # that if we inherit a torque close to / below target, we're at power level 1.
-  defp guess_power_level_two(loop) do
-    offset = get_turbine_torque(loop) - @torque_target
-    if offset < 0.2, do: 1, else: 2
-  end
+  defp mscv_to_power_level(0), do: 2
+  defp mscv_to_power_level(1), do: 2
+  defp mscv_to_power_level(n) when n in @power_levels, do: n
 end

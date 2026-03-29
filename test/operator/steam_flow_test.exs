@@ -7,12 +7,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   alias AutoNuke.Test.MockAPI, as: API
 
   describe "axis_to_total_power/2" do
-    test "is power level 1 for min axis" do
-      assert SteamFlow.axis_to_total_power(-1.0, 1) == 1
+    test "is power level 2 for min axis" do
+      assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
     end
 
-    test "is power level 50 for roughly mid-axis" do
-      assert SteamFlow.axis_to_total_power(-0.01, 1) == 50
+    test "is power level 51 for mid-axis" do
+      assert SteamFlow.axis_to_total_power(+0.0, 1) == 51
     end
 
     test "is power level 100 for max axis" do
@@ -20,9 +20,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "is based on the number of turbines" do
-      assert SteamFlow.axis_to_total_power(-1.0, 1) == 1
-      assert SteamFlow.axis_to_total_power(-1.0, 2) == 2
-      assert SteamFlow.axis_to_total_power(-1.0, 3) == 3
+      assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
+      assert SteamFlow.axis_to_total_power(-1.0, 2) == 4
+      assert SteamFlow.axis_to_total_power(-1.0, 3) == 6
       assert SteamFlow.axis_to_total_power(1.0, 1) == 100
       assert SteamFlow.axis_to_total_power(1.0, 2) == 200
       assert SteamFlow.axis_to_total_power(1.0, 3) == 300
@@ -30,12 +30,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   end
 
   describe "total_power_to_axis/2" do
-    test "is min axis for power level 1" do
-      assert SteamFlow.total_power_to_axis(1, 1) == -1.0
+    test "is min axis for power level 2" do
+      assert SteamFlow.total_power_to_axis(2, 1) == -1.0
     end
 
-    test "is roughly mid-axis for power level 50" do
-      assert_in_delta SteamFlow.total_power_to_axis(50, 1), -0.01, 0.01
+    test "is roughly mid-axis for power level 51" do
+      assert_in_delta SteamFlow.total_power_to_axis(51, 1), -0.01, 0.01
     end
 
     test "is power level 100 for max axis" do
@@ -43,16 +43,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "is based on the number of turbines" do
-      assert SteamFlow.total_power_to_axis(1, 1) == -1.0
-      assert SteamFlow.total_power_to_axis(2, 2) == -1.0
-      assert SteamFlow.total_power_to_axis(3, 3) == -1.0
+      assert SteamFlow.total_power_to_axis(2, 1) == -1.0
+      assert SteamFlow.total_power_to_axis(4, 2) == -1.0
+      assert SteamFlow.total_power_to_axis(6, 3) == -1.0
 
       assert SteamFlow.total_power_to_axis(100, 1) == +1.0
       assert SteamFlow.total_power_to_axis(200, 2) == +1.0
       assert SteamFlow.total_power_to_axis(300, 3) == +1.0
 
-      assert_in_delta SteamFlow.total_power_to_axis(100, 2), -0.01, 0.01
-      assert_in_delta SteamFlow.total_power_to_axis(100, 3), -0.35, 0.01
+      assert_in_delta SteamFlow.total_power_to_axis(100, 2), -0.02, 0.01
+      assert_in_delta SteamFlow.total_power_to_axis(100, 3), -0.36, 0.01
     end
   end
 
@@ -199,8 +199,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -230,8 +228,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -261,9 +257,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -288,9 +281,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
       assert total_power(pid) > 12
@@ -313,9 +303,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
       assert total_power(pid) < 12
@@ -342,9 +329,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
         API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
         API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
         API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-        API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-        API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
-        API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
       end
 
       # Tick 1, nothing changes:
@@ -410,7 +394,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -433,7 +416,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -459,8 +441,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_1_OUTLET", 75, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -507,7 +487,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -525,7 +504,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 
@@ -543,7 +521,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-      API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0)
 
       send(pid, {:tick, 1})
 

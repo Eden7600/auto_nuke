@@ -18,24 +18,6 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert turbine.loop == 3
       assert turbine.power_level == 4
     end
-
-    test "guesses power level 1 or 2 based on torque" do
-      API.mock_get("STEAM_TURBINE_1_BYPASS_ACTUAL", 0, times: 2)
-      API.mock_get("MSCV_1_OPENING_ACTUAL", 2)
-      API.mock_get("STEAM_TURBINE_1_TORQUE", 2.5)
-
-      assert %Turbine{} = turbine1 = Turbine.new(2, 50)
-      assert turbine1.loop == 2
-      assert turbine1.power_level == 1
-
-      API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0, times: 2)
-      API.mock_get("MSCV_0_OPENING_ACTUAL", 2)
-      API.mock_get("STEAM_TURBINE_0_TORQUE", "3.5")
-
-      assert %Turbine{} = turbine2 = Turbine.new(1, 50)
-      assert turbine2.loop == 1
-      assert turbine2.power_level == 2
-    end
   end
 
   describe "set_min_steam/2" do
@@ -140,34 +122,6 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
         end)
 
       assert final_turbine.bypass == 40
-    end
-  end
-
-  describe "tick/1 at power level 1" do
-    setup do
-      [turbine: new_turbine(loop: 2, power_level: 1)]
-    end
-
-    test "targets 2.5 torque", %{turbine: turbine} do
-      # Torque will be 2.5 when at 50 bypass, averaged over the last 5 readings.
-      # Higher bypass will lead to lower torque and vice versa.
-      smoother = Smoother.new(5)
-
-      {final_turbine, _} =
-        1..@settle_time
-        |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
-          new_torque = 2.5 - (old_t.bypass - 50) / 50
-          smoother = Smoother.add(smoother, new_torque)
-
-          API.mock_get("STEAM_TURBINE_1_TORQUE", new_torque)
-          API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-
-          assert %Turbine{} = new_t = Turbine.tick(old_t)
-          {new_t, smoother}
-        end)
-
-      # This will be inexact due to deadzone.
-      assert final_turbine.bypass in 45..55
     end
   end
 
