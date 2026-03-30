@@ -175,7 +175,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
           {:error, :at_max, max_total_power, new_turbines} ->
             max_axis = total_power_to_axis(max_total_power, turbine_count)
-            {new_axis |> ControlAxis.clamp_max(max_axis), new_turbines}
+            {new_axis |> ControlAxis.clamp_min(max_axis), new_turbines}
         end
 
       {:unchanged, new_axis, _old} ->
