@@ -14,9 +14,9 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   # We'll use the raw indices here for convenience.
   @loops 0..2
-  # I'm told that <10% is dangerous and >50% is useless,
-  # so that's our allowed range.
-  @speeds 10..50
+  # I'm told that <10% is dangerous and >50% is useless.
+  # Also, there's the "keep pumps below 50%" objective.
+  @speeds 10..49
   @speed_span (@speeds.last - @speeds.first) / 2
 
   def start_link(opts \\ []) do
@@ -33,7 +33,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   def init(target) when is_number(target) or is_nil(target) do
     temp = get_temperature()
     speed = get_average_pump_speed()
-    target = target || temp
+    target = target || get_initial_target(speed, temp)
 
     axis =
       ControlAxis.new(
@@ -109,6 +109,12 @@ defmodule AutoNuke.Operator.CoreTemp do
   defp get_pump_speed(n), do: API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{n}_SPEED")
   defp set_pump_speed(n, v), do: API.put("COOLANT_CORE_CIRCULATION_PUMP_#{n}_ORDERED_SPEED", v)
 
-  def axis_to_speed(output), do: round((output + 1.0) * @speed_span + @speeds.first)
-  def speed_to_axis(speed), do: (speed - @speeds.first) / @speed_span - 1.0
+  defp axis_to_speed(output), do: round((output + 1.0) * @speed_span + @speeds.first)
+  defp speed_to_axis(speed), do: (speed - @speeds.first) / @speed_span - 1.0
+
+  # If speed is low, assume it's because our old target was too high.
+  defp get_initial_target(speed, temp) when speed == @speeds.first, do: temp + 10
+  # If speed is high, assume it's because our old target was too low.
+  defp get_initial_target(speed, temp) when speed == @speeds.last, do: temp - 10
+  defp get_initial_target(_, temp), do: temp
 end
