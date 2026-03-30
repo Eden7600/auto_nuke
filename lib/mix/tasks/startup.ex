@@ -356,12 +356,30 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.put("RESISTOR_BANKS_MAIN_SWITCH", true) end
     )
 
-    UI.set_wait(
-      "Resistor Bank Switch 1",
-      "ON",
-      fn -> API.get_boolean("RESISTOR_BANK_01_SWITCH") end,
-      fn -> API.put("RESISTOR_BANK_01_SWITCH", true) end
-    )
+    API.get_json("RESISTOR_BANKS_JSON")
+    |> Map.fetch!("resistors")
+    |> Enum.each(fn {"Resistor_Bank_" <> num, bank} ->
+      case Map.fetch!(bank, "IsInstalled") do
+        0 ->
+          UI.notice("Resistor Bank #{num} is not installed.")
+
+        _ ->
+          UI.set_wait(
+            "Resistor Bank Switch #{num}",
+            "ON",
+            fn -> API.get_boolean("RESISTOR_BANK_#{num}_SWITCH") end,
+            fn -> API.put("RESISTOR_BANK_#{num}_SWITCH", true) end
+          )
+      end
+    end)
+
+    capacity = API.get_float("RES_ABSORPTION_CAPACITY_MW")
+
+    if capacity > 0 do
+      UI.success("Resistor Bank Capacity: #{capacity} MW")
+    else
+      raise "No resistor bank capacity, cannot proceed with startup."
+    end
   end
 
   defp load_fuel do
@@ -406,7 +424,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       "Control Rod Height",
       "BEGIN REDUCING",
       fn -> API.get_float("CORE_TEMP") >= @startup_temp end,
-      fn -> API.get_float("RODS_POS_ACTUAL") <= 99.0 end,
+      fn -> API.get_float("RODS_POS_ACTUAL") <= 99.9 end,
       fn ->
         init_factor = API.get_float("CORE_FACTOR")
 
