@@ -1,10 +1,12 @@
 defmodule AutoNuke.Operator.SteamFlow.Turbine do
-  @enforce_keys [:loop, :axis, :bypass, :power_level, :min_steam]
+  @enforce_keys [:loop, :steam_axis, :pressure_axis, :bypass, :power_level, :min_steam]
   defstruct(
     # Loop number
     loop: nil,
-    # ControlAxis controlling turbine bypass
-    axis: nil,
+    # ControlAxis controlling turbine bypass needed to reach min_steam
+    steam_axis: nil,
+    # ControlAxis controlling turbine bypass needed to stay at a safe pressure
+    pressure_axis: nil,
     # Current bypass setting
     bypass: nil,
     # Target power level, assigned by parent (based on power requirements)
@@ -16,10 +18,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # Allowed power levels:
   @power_levels 2..100
   def allowed_power_levels, do: @power_levels
-  # If pressure exceeds about 70 bar, we're having a pressure excursion event.
-  @max_pressure 70
-  # Above that pressure, override bypass and open by 2% every bar.
-  defp pressure_min_bypass(loop), do: ceil(get_pressure(loop) - @max_pressure) * 2
+  # Keep pressure under 65 bar.
+  @max_pressure 65
 
   require Logger
   alias __MODULE__
@@ -29,7 +29,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   def new(loop, min_steam) when loop in 1..3 and min_steam > 0 do
     bypass = get_bypass(loop)
 
-    axis =
+    steam_axis =
       ControlAxis.new(
         kp: 0.01,
         ki: 0.001,
@@ -39,9 +39,20 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         initial_value: bypass
       )
 
+    pressure_axis =
+      ControlAxis.new(
+        kp: -0.01,
+        ki: -0.001,
+        deadzone: 0.5,
+        to_value_fn: &axis_to_bypass/1,
+        offset: bypass |> bypass_to_axis(),
+        initial_value: bypass
+      )
+
     %Turbine{
       loop: loop,
-      axis: axis,
+      steam_axis: steam_axis,
+      pressure_axis: pressure_axis,
       bypass: get_bypass(loop),
       power_level: get_mscv(loop) |> round() |> mscv_to_power_level(),
       min_steam: min_steam
@@ -68,24 +79,42 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   end
 
   def tick(%Turbine{loop: loop} = turbine) do
-    current = get_steam_outlet(loop)
-    target = turbine.min_steam
+    {steam_bypass, steam_axis} =
+      step_axis(
+        turbine.steam_axis,
+        get_steam_outlet(loop),
+        turbine.min_steam
+      )
 
-    case ControlAxis.step(turbine.axis, target, current) do
-      {:changed, axis, new, _old} -> {axis, new}
-      {:unchanged, axis, old} -> {axis, old}
-    end
-    |> then(fn {axis, new} ->
-      old = turbine.bypass
-      new = new |> max(pressure_min_bypass(loop))
+    {pressure_bypass, pressure_axis} =
+      step_axis(
+        turbine.pressure_axis,
+        get_pressure(loop),
+        @max_pressure
+      )
 
-      if old != new do
-        Logger.info(log_prefix(loop) <> "Changing bypass from #{old} to #{new}.")
-        set_bypass(loop, new)
+    old = turbine.bypass
+
+    {new, reason} =
+      cond do
+        steam_bypass > pressure_bypass -> {steam_bypass, "min steam"}
+        pressure_bypass > steam_bypass -> {pressure_bypass, "max pressure"}
+        true -> {pressure_bypass, "both concerns"}
       end
 
-      %Turbine{turbine | axis: axis, bypass: new}
-    end)
+    if old != new do
+      Logger.info(log_prefix(loop) <> "Changing bypass from #{old} to #{new} due to #{reason}.")
+      set_bypass(loop, new)
+    end
+
+    %Turbine{turbine | steam_axis: steam_axis, pressure_axis: pressure_axis, bypass: new}
+  end
+
+  defp step_axis(axis, current, target) do
+    case ControlAxis.step(axis, target, current) do
+      {:changed, axis, new, _old} -> {new, axis}
+      {:unchanged, axis, old} -> {old, axis}
+    end
   end
 
   defp mscv_setting(n) when n in @power_levels, do: n
