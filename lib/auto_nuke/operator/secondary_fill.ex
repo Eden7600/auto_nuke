@@ -88,12 +88,14 @@ defmodule AutoNuke.Operator.SecondaryFill do
       fill_level < @fill_limit_min ->
         error = @fill_limit_min - fill_level
         percent = (error / @fill_limit_span) |> min(1.0)
-        ideal + (100 - ideal) * percent
+        adjust = (100 - ideal) * percent
+        ideal + max(adjust, @fill_target_pump_adjust)
 
       fill_level > @fill_limit_max ->
         error = fill_level - @fill_limit_max
         percent = (error / @fill_limit_span) |> min(1.0)
-        ideal - ideal * percent
+        adjust = ideal * percent
+        ideal - max(adjust, @fill_target_pump_adjust)
 
       fill_level < @fill_target_min ->
         ideal + @fill_target_pump_adjust
@@ -105,6 +107,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
         ideal
     end
     |> round()
+    |> max(0)
+    |> min(100)
   end
 
   defp get_current_fill_percent(loop) do
