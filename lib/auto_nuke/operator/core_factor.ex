@@ -3,8 +3,14 @@ defmodule AutoNuke.Operator.CoreFactor do
   require Logger
 
   defmodule State do
-    @enforce_keys [:target, :axis, :smoothed]
-    defstruct(@enforce_keys)
+    @enforce_keys [:target, :axis, :smoothed, :last_core_factor]
+    defstruct(
+      target: nil,
+      axis: nil,
+      smoothed: nil,
+      last_core_factor: nil,
+      allow_decay: false
+    )
   end
 
   alias AutoNuke.ControlAxis
@@ -13,8 +19,8 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
-  # Average the core factor over the past three in-game minutes:
-  @core_factor_smoothing AutoNuke.Ticker.ticks_per_minute() * 3
+  # Average the core factor over the past minute:
+  @core_factor_smoothing AutoNuke.Ticker.ticks_per_minute()
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
@@ -24,21 +30,33 @@ defmodule AutoNuke.Operator.CoreFactor do
     GenServer.start_link(__MODULE__, target, opts)
   end
 
+  def get_target(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_target)
+  end
+
   def set_target(target, pid \\ __MODULE__) do
-    GenServer.cast(pid, {:target, target})
+    GenServer.call(pid, {:set_target, target})
+  end
+
+  def decay_to(target, pid \\ __MODULE__) do
+    GenServer.call(pid, {:decay_to, target})
+  end
+
+  def stop_decay(pid \\ __MODULE__) do
+    GenServer.call(pid, :stop_decay)
   end
 
   @impl true
   def init(target) when is_number(target) or is_nil(target) do
     rods = get_rods()
-    factor = get_core_factor()
+    factor = get_verified_core_factor([])
     target = target || factor
 
     axis =
       ControlAxis.new(
         kp: 0.02,
         ki: 0.002,
-        deadzone: 0.1,
+        deadzone: 0.01,
         to_value_fn: &axis_to_rods/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods
@@ -48,45 +66,97 @@ defmodule AutoNuke.Operator.CoreFactor do
       %State{
         target: target,
         axis: axis,
-        smoothed: Smoother.new(@core_factor_smoothing)
+        smoothed: Smoother.new(@core_factor_smoothing),
+        last_core_factor: factor
       }
 
     PubSub.subscribe(self(), :ticker)
 
     Logger.info(
-      @log_prefix <> "Started with core factor #{factor}°C, target #{target}°C, rods at #{rods}%."
+      @log_prefix <> "Started with core factor #{factor}, target #{target}, rods at #{rods}%."
     )
 
     {:ok, state}
   end
 
   @impl true
-  def handle_cast({:target, t}, %State{} = state) do
+  def handle_call(:get_target, _from, %State{} = state) do
+    {:reply, state.target, state}
+  end
+
+  @impl true
+  def handle_call({:set_target, t}, _from, %State{} = state) do
     Logger.info(@log_prefix <> "Core factor target changed from #{state.target} to #{t}.")
-    {:noreply, %State{state | target: t}}
+    {:reply, :ok, %State{state | target: t, allow_decay: false}}
+  end
+
+  @impl true
+  def handle_call({:decay_to, t}, _from, %State{} = state) do
+    if t < state.last_core_factor do
+      Logger.info(@log_prefix <> "Will allow decay to #{t}.")
+      {:reply, :ok, %State{state | target: t, allow_decay: true}}
+    else
+      {:reply, {:error, :above_core_factor}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(:stop_decay, _from, %State{} = state) do
+    last = state.last_core_factor
+    Logger.info(@log_prefix <> "Halting decay at #{last}.")
+    {:reply, :ok, %State{state | target: last, allow_decay: false}}
   end
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    factor = get_core_factor()
+    factor = get_verified_core_factor([state.last_core_factor])
     smoothed = state.smoothed |> Smoother.add(factor)
     current = Smoother.average(smoothed)
 
-    case ControlAxis.step(state.axis, state.target, current) do
-      {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
-        set_rods(new)
-        maybe_clamp(axis, new)
+    {decaying, state} = check_decay(state, current)
 
-      {:unchanged, axis, _old_value} ->
-        axis
+    if decaying do
+      state.axis
+    else
+      case ControlAxis.step(state.axis, state.target, current) do
+        {:changed, axis, new, old} ->
+          Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
+          set_rods(new)
+          maybe_clamp(axis, new)
+
+        {:unchanged, axis, _old_value} ->
+          axis
+      end
     end
     |> then(fn axis ->
-      {:noreply, %State{state | axis: axis, smoothed: smoothed}}
+      {:noreply, %State{state | axis: axis, smoothed: smoothed, last_core_factor: factor}}
     end)
   end
 
-  defp get_core_factor, do: API.get_float("CORE_FACTOR")
+  defp check_decay(%State{allow_decay: false} = state, _), do: {false, state}
+
+  defp check_decay(%State{allow_decay: true, target: target} = state, current) do
+    if current > target do
+      {true, state}
+    else
+      Logger.info(@log_prefix <> "Decay target reached, holding at #{target}.")
+      {false, %State{state | allow_decay: false}}
+    end
+  end
+
+  # Avoid transients:
+  defp get_verified_core_factor(seen) do
+    factor = get_core_factor()
+
+    if factor in seen do
+      factor
+    else
+      Process.sleep(20)
+      get_verified_core_factor([factor | seen])
+    end
+  end
+
+  def get_core_factor, do: API.get_float("CORE_FACTOR")
   defp get_rods, do: API.get_float("RODS_POS_ACTUAL")
 
   defp set_rods(value) when value >= 0.0 and value <= 100.0,
