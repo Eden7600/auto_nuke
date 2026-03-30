@@ -55,18 +55,22 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   end
 
   defp fill_loop(target) do
-    AutoNuke.Tasks.Refill.refill(
-      pre_check: &check_core_storage_tank/0,
-      pump_name: "Core Pool Pump",
-      tank_description: "Pool Filling",
-      pump_get_active: fn -> get_pump_state() == 3 end,
-      pump_set_enabled: fn
-        true -> set_pump("LOAD")
-        false -> set_pump("OFF")
-      end,
-      tank_get_level: &fill_check_get_percent/0,
-      target_level: target
-    )
+    try do
+      AutoNuke.Tasks.Refill.refill(
+        pre_check: &check_core_storage_tank/0,
+        pump_name: "Core Pool Pump",
+        tank_description: "Pool Filling",
+        pump_get_active: fn -> get_pump_state() == 3 end,
+        pump_set_enabled: fn
+          true -> set_pump("LOAD")
+          false -> set_pump("OFF")
+        end,
+        tank_get_level: &fill_check_get_percent/0,
+        target_level: target
+      )
+    catch
+      :empty_tank -> :ok
+    end
 
     if target > get_pool_fill_percent() do
       fill_loop(target)
@@ -85,7 +89,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
 
   defp fill_check_get_percent do
     if get_core_storage_fill() < @min_core_storage_stop do
-      100.0
+      throw(:empty_tank)
     else
       get_pool_fill_percent()
     end
@@ -123,4 +127,3 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   defp mode_number("OFF"), do: 2
   defp mode_number("LOAD"), do: 3
 end
-
