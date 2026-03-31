@@ -110,7 +110,7 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    tick_drift(state)
+    state = tick_drift(state)
 
     factor = get_verified_core_factor([state.last_core_factor])
     smoothed = state.smoothed |> Smoother.add(factor)
@@ -149,7 +149,7 @@ defmodule AutoNuke.Operator.CoreFactor do
           false ->
             Logger.notice(
               @log_prefix <>
-                "Beginning drift from #{drift.start_factor} to #{drift.core_factor} ..."
+                "Beginning drift from #{drift.start_factor} to #{drift.end_factor} ..."
             )
 
             %State{state | target: target, drift: {drift, true}}
