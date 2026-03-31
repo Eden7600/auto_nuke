@@ -121,7 +121,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
   end
 
-  defp start_primary_circulation(loops) do
+  def start_primary_circulation(loops) do
     UI.console("Coolant System")
 
     start_pumps("CORE", "Circulation Pump", loops)
@@ -347,7 +347,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end
   end
 
-  defp enable_resistor_bank do
+  def enable_resistor_bank do
     UI.console("Generation & Distribution")
 
     UI.set_wait(
@@ -465,7 +465,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  defp start_secondary_circulation(loops) do
+  def start_secondary_circulation(loops) do
     UI.console("Steam Generator")
 
     start_pumps("SEC", "Secondary Pump", loops)
@@ -536,9 +536,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     set_all_bypass(loops, "CLOSED (0%)", 0)
   end
 
-  defp connect_to_grid(loops) do
-    UI.tablet("Communications Center")
-    UI.set("Response", "WAIT FOR PERMISSION")
+  def connect_to_grid(loops, permission \\ true) do
+    if permission do
+      UI.tablet("Communications Center")
+      UI.set("Response", "WAIT FOR PERMISSION")
+    end
 
     UI.console("Generation & Distribution")
 

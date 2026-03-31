@@ -56,11 +56,15 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   def add_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
-    GenServer.call(pid, {:add, loop})
+    GenServer.call(pid, {:add_loop, loop})
   end
 
   def remove_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
-    GenServer.call(pid, {:remove, loop})
+    GenServer.call(pid, {:remove_loop, loop})
+  end
+
+  def get_loops(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_loops)
   end
 
   def set_target_override(target, pid \\ __MODULE__) when is_number(target) and target < 10 do
@@ -101,7 +105,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_call({:add, loop}, _from, %State{turbines: old_turbines} = state) do
+  def handle_call({:add_loop, loop}, _from, %State{turbines: old_turbines} = state) do
     case old_turbines |> Enum.any?(&(&1.loop == loop)) do
       true ->
         {:reply, {:error, :already_active}, state}
@@ -123,7 +127,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_call({:remove, loop}, _from, %State{turbines: old_turbines} = state) do
+  def handle_call({:remove_loop, loop}, _from, %State{turbines: old_turbines} = state) do
     {found, rest} = old_turbines |> Enum.split_with(&(&1.loop == loop))
 
     case found do
@@ -138,6 +142,15 @@ defmodule AutoNuke.Operator.SteamFlow do
         new_turbines = rest |> Enum.map(&Turbine.set_min_steam(&1, steam))
         {:reply, :ok, %State{state | turbines: new_turbines}}
     end
+  end
+
+  @impl true
+  def handle_call(:get_loops, _from, %State{turbines: old_turbines} = state) do
+    old_turbines
+    |> Enum.map(& &1.loop)
+    |> then(fn loops ->
+      {:reply, loops, state}
+    end)
   end
 
   @impl true
