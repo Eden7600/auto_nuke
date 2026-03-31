@@ -37,7 +37,10 @@ defmodule Mix.Tasks.AutoNuke.Valve do
     "PZR COOLING" => "Valvula_Pressurizer_Spray",
     "PZR VENT" => "Valvula_Pressurizer_Vent",
     "RCV" => "Valvula_Descargar_REF",
-    "CST DRAIN" => "Valvula_Purgar_Coolant"
+    "CST DRAIN" => "Valvula_Purgar_Coolant",
+    "TURBINE A VENT" => "VALVULA_VENT_TURBINA_01",
+    "TURBINE B VENT" => "VALVULA_VENT_TURBINA_02",
+    "TURBINE C VENT" => "VALVULA_VENT_TURBINA_03"
   }
 
   @valves Map.merge(@base_valves, @other_valves)
