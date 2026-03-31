@@ -169,7 +169,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       # Steam output and pressure gets queried by `Turbine.tick/1`.
       API.mock_get("STEAM_GEN_0_OUTLET", 1000)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000)
@@ -192,7 +191,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 1.20 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -221,7 +219,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -250,7 +247,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 2.0 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 44, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 60, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
@@ -274,7 +270,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_DEMAND_MW", total_kw / 1.05 / 1000)
       # ... but pretend the plant requires a truly excessive amount of power (25%):
       API.mock_get("POWER_FROM_TURBINE_KW", total_kw / 4)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -284,28 +279,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, 1})
       assert total_power(pid) > 12
-    end
-
-    test "targets below 100% if resistor banks enabled", %{pid: pid} do
-      assert total_power(pid) == 12
-
-      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
-      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
-      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
-      API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      # Ensure supply (kW) is 100.1% of demand (MW) ...
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.001 / 1000)
-      # ... but now we turn the main banks on:
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "True")
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
-      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
-
-      send(pid, {:tick, 1})
-      assert total_power(pid) < 12
     end
 
     test "uses override target if set", %{pid: pid} do
@@ -322,7 +295,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
         API.mock_get("GENERATOR_2_KW", kw3)
         API.mock_get("POWER_FROM_TURBINE_KW", 0)
         API.mock_get("POWER_DEMAND_MW", demand_mw)
-        API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
         API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
         API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
         API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -369,7 +341,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) / 1.05 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -389,7 +360,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 1.20 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -411,7 +381,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 0.80 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -436,7 +405,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 2.0 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_0_OUTLET", 34, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 75, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -467,7 +435,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", kw3 / 1.05 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       # Steam output is queried by `Turbine.tick/1`.
       API.mock_get("STEAM_GEN_2_OUTLET", 1000)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
@@ -484,7 +451,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", kw3 * 1.20 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
@@ -501,7 +467,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", kw3 * 0.80 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
@@ -518,7 +483,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       API.mock_get("POWER_DEMAND_MW", kw3 * 2.0 / 1000)
-      API.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 

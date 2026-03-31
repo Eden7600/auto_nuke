@@ -26,7 +26,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Valid loop numbers:
   @all_loops 1..3
 
-  # Without resistor banks, we target between 95% and 110% demand.
+  # Unless overridden, we target between 95% and 110% demand.
   #
   # Why 95%?  Because if demand increases, there will be a brief period
   # at the start of the hour where we're underproducing, and if we then
@@ -36,10 +36,6 @@ defmodule AutoNuke.Operator.SteamFlow do
   # To accomplish this, we target 102.5%, plus or minus 7.5%.
   @target_percent 1.025
   @deadzone 0.075
-  # If resistor banks are on, let's try not to use them.
-  # Accordingly, let's target between 90.5% and 99.5%, or 95% ± 4.5%.
-  @resistors_target_percent 0.95
-  @resistors_deadzone 0.045
   # When overriding, use a flat 5% deadzone.
   @override_deadzone 0.05
 
@@ -216,12 +212,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     {ratio, smoothed}
   end
 
-  defp get_target_ratio_and_deadzone(nil) do
-    case API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH") do
-      true -> {@resistors_target_percent, @resistors_deadzone}
-      false -> {@target_percent, @deadzone}
-    end
-  end
+  defp get_target_ratio_and_deadzone(nil), do: {@target_percent, @deadzone}
 
   defp get_target_ratio_and_deadzone(override) when is_float(override),
     do: {override, @override_deadzone}
