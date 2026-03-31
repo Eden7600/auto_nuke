@@ -35,6 +35,7 @@ defmodule AutoNuke.Operator.VacuumTank do
   def tank_size, do: @tank_size
 
   def start_link(opts \\ []) do
+    opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
   end
 

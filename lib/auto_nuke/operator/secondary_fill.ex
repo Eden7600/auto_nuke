@@ -22,17 +22,20 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # and down to 0% at 80% fill or higher.
   @fill_limit_span 0.10
 
+  defp process_name(loop), do: __MODULE__ |> Module.concat("L#{loop}")
+
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
 
     %{
-      id: __MODULE__ |> Module.concat("L#{loop}"),
+      id: process_name(loop),
       start: {__MODULE__, :start_link, [opts]}
     }
   end
 
   def start_link(opts) do
     {loop, opts} = Keyword.pop!(opts, :loop)
+    opts = Keyword.put_new(opts, :name, process_name(loop))
     GenServer.start_link(__MODULE__, loop, opts)
   end
 

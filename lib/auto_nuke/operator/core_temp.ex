@@ -27,6 +27,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   @loops 0..2
 
   def start_link(opts \\ []) do
+    opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
