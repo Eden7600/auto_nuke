@@ -15,15 +15,17 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Increase core factor target by 0.005 every tick:
-  @core_factor_increase 0.005
-  # Don't go more than 0.11 above the current actual core factor
-  # (i.e. just outside the deadzone).
-  @core_factor_max_error 0.11
-  # Target this temperature (°C):
+  # Increase core factor target smoothly from 0.0 to 4.0 over two hours:
+  @startup_drift [
+    start_time: :now,
+    duration: {2, 0},
+    start_factor: 0.0,
+    end_factor: 4.0
+  ]
+  # Stop drift prematurely once we reach this temperature (°C):
   @startup_temp 300
   # Wait for this temperature before starting turbines:
-  @min_temp @startup_temp - 20
+  @turbine_temp 270
   # Open or close MSCV to this (%):
   @startup_mscv 10
 
@@ -74,13 +76,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
     achieve_criticality()
-    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link(target: @startup_temp)
+    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
 
     start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
 
-    wait_for_temperature(@min_temp)
-
+    wait_for_temperature(@turbine_temp)
     request_connection()
     start_turbine(loops)
     connect_to_grid(loops)
@@ -425,17 +426,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       "BEGIN REDUCING",
       fn -> API.get_float("CORE_TEMP") >= @startup_temp end,
       fn -> API.get_float("RODS_POS_ACTUAL") <= 99.9 end,
-      fn ->
-        init_factor = API.get_float("CORE_FACTOR")
-
-        spawn_link(fn ->
-          # Ensure only one:
-          Process.register(self(), :core_factor_increase)
-          PubSub.subscribe(self(), :ticker)
-          increase_core_factor_loop(init_factor)
-        end)
-      end
+      fn -> AutoNuke.Operator.CoreFactor.drift(@startup_drift) end
     )
+
+    spawn_link(fn ->
+      # Ensure only one:
+      Process.register(self(), :stop_drift)
+      PubSub.subscribe(self(), :ticker)
+      stop_drift_loop()
+    end)
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
@@ -444,26 +443,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait_for_temperature(100, false)
   end
 
-  defp increase_core_factor_loop(old_factor) do
+  defp stop_drift_loop do
     receive do
       {:tick, _} ->
-        new_factor = (old_factor + @core_factor_increase) |> maybe_clamp_core_factor()
-        AutoNuke.Operator.CoreFactor.set_target(new_factor)
+        temp = API.get_float("CORE_TEMP")
 
-        case API.get_float("CORE_TEMP") >= @startup_temp do
-          true -> :done
-          false -> increase_core_factor_loop(new_factor)
+        case temp >= @startup_temp do
+          true -> AutoNuke.Operator.CoreFactor.stop_drift()
+          false -> stop_drift_loop()
         end
-    end
-  end
-
-  defp maybe_clamp_core_factor(wanted) do
-    actual = API.get_float("CORE_FACTOR")
-
-    if actual < 1.0 do
-      wanted
-    else
-      wanted |> min(actual + @core_factor_max_error)
     end
   end
 
@@ -586,6 +574,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         spawn_link(fn ->
           # Ensure only one:
           Process.register(self(), :boron_injector)
+          PubSub.subscribe(self(), :ticker)
           inject_boron_loop()
         end)
       end
@@ -593,21 +582,22 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp inject_boron_loop do
-    ppm = API.get_float("CHEM_BORON_PPM")
+    receive do
+      {:tick, _} ->
+        ppm = API.get_float("CHEM_BORON_PPM")
 
-    rate =
-      if ppm >= @boron_target do
-        0
-      else
-        ((@boron_target - ppm) / @boron_easing)
-        |> ceil()
-        |> min(50)
-      end
+        rate =
+          if ppm >= @boron_target do
+            0
+          else
+            ((@boron_target - ppm) / @boron_easing)
+            |> ceil()
+            |> min(50)
+          end
 
-    API.put("CHEM_BORON_DOSAGE_ORDERED_RATE", rate)
-
-    Process.sleep(500)
-    inject_boron_loop()
+        API.put("CHEM_BORON_DOSAGE_ORDERED_RATE", rate)
+        inject_boron_loop()
+    end
   end
 
   defp get_installed_secondary_loops do
