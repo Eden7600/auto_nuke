@@ -6,8 +6,8 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
 
   def new(opts) do
     opts = Map.new(opts)
-    {start_time, opts} = Map.pop_lazy(opts, :start_time, &get_current_time/0)
-    start_time = parse_time(start_time, :now)
+    {start_time, opts} = Map.pop(opts, :start_time, :now)
+    start_time = parse_start_time(start_time)
     {end_time, opts} = pop_end_time(opts, start_time)
     {start_factor, opts} = Map.pop!(opts, :start_factor)
     {end_factor, opts} = Map.pop!(opts, :end_factor)
@@ -22,7 +22,6 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
 
     cond do
       end_time < start_time -> raise "End time is before start time: #{inspect(drift)}"
-      end_time == start_time -> raise "End time is same as start time: #{inspect(drift)}"
       true -> drift
     end
   end
@@ -63,6 +62,8 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
   @minute 1
   @hour 60 * @minute
   @day 24 * @hour
+  defp parse_start_time(:now), do: get_current_time()
+  defp parse_start_time(t), do: parse_time(t, :now)
 
   defp parse_time(time, prior_time \\ nil)
   defp parse_time(t, _) when is_integer(t), do: t

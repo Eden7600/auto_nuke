@@ -108,12 +108,42 @@ defmodule AutoNuke.Operator.CoreFactor.DriftTest do
       assert drift.end_time == 16623
     end
 
+    test "handles `:now` for start time" do
+      now = 1000..9999 |> Enum.random()
+      MockAPI.mock_get("TIME_STAMP", now)
+
+      assert drift =
+               Drift.new(
+                 start_time: :now,
+                 duration: "3:00",
+                 start_factor: 1.2,
+                 end_factor: 3.4
+               )
+
+      assert drift.start_time == now
+      assert drift.end_time == now + 3 * 60
+    end
+
+    test "rejects `:now` for end time" do
+      assert_raise FunctionClauseError, fn ->
+        Drift.new(start_time: 123, end_time: :now, start_factor: 1.2, end_factor: 3.4)
+      end
+    end
+
     test "rejects drift that ends before it starts" do
       assert Drift.new(start_time: 1, end_time: 2, start_factor: 3.0, end_factor: 4.0)
 
       assert_raise RuntimeError, fn ->
         Drift.new(start_time: 2, end_time: 1, start_factor: 3.0, end_factor: 4.0)
       end
+    end
+
+    test "accepts drift that starts and ends at the same time" do
+      # This may seem weird, but it's potentially a way to plan an instantaneous jump.
+      # Of course, start_factor is ignored here.
+      assert Drift.new(start_time: 2, end_time: 2, start_factor: 3.0, end_factor: 4.0)
+      # This also works.
+      assert Drift.new(start_time: 2, duration: 0, start_factor: 3.0, end_factor: 4.0)
     end
   end
 
