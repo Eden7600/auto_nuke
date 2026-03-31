@@ -9,13 +9,14 @@ defmodule AutoNuke.Operator.CoreFactor do
       axis: nil,
       smoothed: nil,
       last_core_factor: nil,
-      allow_decay: false
+      drift: nil
     )
   end
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API
   alias AutoNuke.Smoother
+  alias AutoNuke.Operator.CoreFactor.Drift
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -38,12 +39,13 @@ defmodule AutoNuke.Operator.CoreFactor do
     GenServer.call(pid, {:set_target, target})
   end
 
-  def decay_to(target, pid \\ __MODULE__) do
-    GenServer.call(pid, {:decay_to, target})
+  def drift(opts, pid \\ __MODULE__) do
+    drift = Drift.new(opts)
+    GenServer.call(pid, {:drift, drift})
   end
 
-  def stop_decay(pid \\ __MODULE__) do
-    GenServer.call(pid, :stop_decay)
+  def stop_drift(pid \\ __MODULE__) do
+    GenServer.call(pid, :stop_drift)
   end
 
   @impl true
@@ -87,60 +89,71 @@ defmodule AutoNuke.Operator.CoreFactor do
   @impl true
   def handle_call({:set_target, t}, _from, %State{} = state) do
     Logger.info(@log_prefix <> "Core factor target changed from #{state.target} to #{t}.")
-    {:reply, :ok, %State{state | target: t, allow_decay: false}}
+    {:reply, :ok, %State{state | target: t}}
   end
 
   @impl true
-  def handle_call({:decay_to, t}, _from, %State{} = state) do
-    if t < state.last_core_factor do
-      Logger.info(@log_prefix <> "Will allow decay to #{t}.")
-      {:reply, :ok, %State{state | target: t, allow_decay: true}}
-    else
-      {:reply, {:error, :above_core_factor}, state}
-    end
+  def handle_call({:drift, drift}, _from, %State{} = state) do
+    Logger.info(
+      @log_prefix <>
+        "Now planning to drift from #{drift.start_factor} at #{drift.start_time} to #{drift.end_factor} at #{drift.end_time}."
+    )
+
+    {:reply, :ok, %State{state | drift: {drift, false}}}
   end
 
   @impl true
-  def handle_call(:stop_decay, _from, %State{} = state) do
-    last = state.last_core_factor
-    Logger.info(@log_prefix <> "Halting decay at #{last}.")
-    {:reply, :ok, %State{state | target: last, allow_decay: false}}
+  def handle_call(:stop_drift, _from, %State{} = state) do
+    Logger.info(@log_prefix <> "Cancelling drift.")
+    {:reply, :ok, %State{state | drift: nil}}
   end
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
+    tick_drift(state)
+
     factor = get_verified_core_factor([state.last_core_factor])
     smoothed = state.smoothed |> Smoother.add(factor)
     current = Smoother.average(smoothed)
 
-    {decaying, state} = check_decay(state, current)
+    case ControlAxis.step(state.axis, state.target, current) do
+      {:changed, axis, new, old} ->
+        Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
+        set_rods(new)
+        maybe_clamp(axis, new)
 
-    if decaying do
-      state.axis
-    else
-      case ControlAxis.step(state.axis, state.target, current) do
-        {:changed, axis, new, old} ->
-          Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
-          set_rods(new)
-          maybe_clamp(axis, new)
-
-        {:unchanged, axis, _old_value} ->
-          axis
-      end
+      {:unchanged, axis, _old_value} ->
+        axis
     end
     |> then(fn axis ->
       {:noreply, %State{state | axis: axis, smoothed: smoothed, last_core_factor: factor}}
     end)
   end
 
-  defp check_decay(%State{allow_decay: false} = state, _), do: {false, state}
+  defp tick_drift(%State{drift: nil} = state), do: state
 
-  defp check_decay(%State{allow_decay: true, target: target} = state, current) do
-    if current > target do
-      {true, state}
-    else
-      Logger.info(@log_prefix <> "Decay target reached, holding at #{target}.")
-      {false, %State{state | allow_decay: false}}
+  defp tick_drift(%State{drift: {drift, started}} = state) do
+    case Drift.current_value(drift) do
+      :not_started ->
+        state
+
+      {:complete, target} ->
+        Logger.notice(@log_prefix <> "Drift completed, target is now #{target}.")
+        %State{state | target: target, drift: nil}
+
+      {:drifting, target} ->
+        case started do
+          true ->
+            %State{state | target: target}
+
+          false ->
+            Logger.notice(
+              @log_prefix <>
+                "Beginning drift from #{drift.start_factor} to #{drift.core_factor} ..."
+            )
+
+            %State{state | target: target, drift: {drift, true}}
+        end
     end
   end
 
