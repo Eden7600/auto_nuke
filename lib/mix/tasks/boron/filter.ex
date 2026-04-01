@@ -37,9 +37,8 @@ defmodule Mix.Tasks.AutoNuke.Boron.Filter do
   defp filter_boron(target, excess, max_speed) do
     UI.console("Chemical Treatment")
 
-    UI.set("Ion Exchange Inlet", "OPEN")
-    UI.set("Ion Exchange Outlet", "OPEN")
-    IO.gets("Press enter when valves are opened ...")
+    UI.wait("Ion Exchange Inlet", "OPEN", &ion_inlet_open?/0)
+    UI.wait("Ion Exchange Outlet", "OPEN", &ion_outlet_open?/0)
 
     try do
       set_pump_speed(1)
@@ -88,4 +87,19 @@ defmodule Mix.Tasks.AutoNuke.Boron.Filter do
   def get_boron_ppm do
     API.get_float("CHEM_BORON_PPM")
   end
+
+  defp valve_data(key) do
+    API.get_json("VALVE_PANEL_JSON")
+    |> Map.fetch!("valves")
+    |> Map.fetch!(key)
+  end
+
+  defp valve_open?(key) do
+    valve_data(key)
+    |> Map.fetch!("State")
+    |> Map.fetch!("IsOpened")
+  end
+
+  defp ion_inlet_open?, do: valve_open?("Core_Valve_01")
+  defp ion_outlet_open?, do: valve_open?("Core_Valve_02")
 end
