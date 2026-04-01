@@ -40,8 +40,11 @@ defmodule AutoNuke.Operator.CoreFactor do
   end
 
   def drift(opts, pid \\ __MODULE__) do
-    drift = Drift.new(opts)
-    GenServer.call(pid, {:drift, drift})
+    opts
+    |> Keyword.put_new(:start_time, :now)
+    |> Keyword.put_new_lazy(:start_factor, fn -> get_target(pid) end)
+    |> Drift.new()
+    |> then(&GenServer.call(pid, {:drift, &1}))
   end
 
   def stop_drift(pid \\ __MODULE__) do
