@@ -13,12 +13,12 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   # Range of allowed speeds.
   @speeds 10..100
-  # Violation threshold is 5°C above ambient.
-  @above_ambient 5.0
-  # Wait 15 in-game minutes after a violation to begin probing lower speeds:
-  @wait_after_violation 15 * AutoNuke.Ticker.ticks_per_minute()
-  # While probing, wait five in-game minutes per 1% speed drop:
-  @wait_while_probing 5 * AutoNuke.Ticker.ticks_per_minute()
+  # Violation threshold is 10°C above ambient.
+  @above_ambient 10.0
+  # Wait 30 in-game minutes after a violation to begin probing lower speeds:
+  @wait_after_violation 30 * AutoNuke.Ticker.ticks_per_minute()
+  # While probing, wait 10 in-game minutes per 1% speed drop:
+  @wait_while_probing 10 * AutoNuke.Ticker.ticks_per_minute()
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
