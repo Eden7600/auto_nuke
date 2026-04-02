@@ -14,7 +14,8 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     core_factor: {AutoNuke.Operator.CoreFactor, "Core Factor Operator"},
     core_temp: {AutoNuke.Operator.CoreTemp, "Core Temperature Operator"},
     steam_flow: {AutoNuke.Operator.SteamFlow, "Steam Flow Operator"},
-    vacuum_tank: {AutoNuke.Operator.VacuumTank, "Vacuum Tank Operator"}
+    vacuum_tank: {AutoNuke.Operator.VacuumTank, "Vacuum Tank Operator"},
+    condenser_cooling: {AutoNuke.Operator.CondenserCooling, "Condenser Cooling Operator"}
   }
 
   def run([]) do
@@ -28,6 +29,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
     Startup.enable_resistor_bank()
     open_breakers()
+    set_shutdown_mode()
 
     disable_remotes(node, [:core_factor, :core_temp, :steam_flow])
     insert_control_rods()
@@ -41,6 +43,10 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
     wait_core_cooldown()
     stop_pressurizer()
+
+    disable_remotes(node, [:condenser_cooling])
+    stop_all_pumps()
+    disable_resistor_banks()
   end
 
   defp open_breakers do
@@ -52,6 +58,17 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         API.get_boolean("GENERATOR_#{loop - 1}_BREAKER")
       end)
     end)
+  end
+
+  defp set_shutdown_mode do
+    UI.console("Fuel")
+
+    UI.set_wait(
+      "Operating Mode",
+      "SHUTDOWN",
+      fn -> API.get_string("CORE_OPERATION_MODE") == "SHUTDOWN" end,
+      fn -> API.put("CORE_OPERATION_MODE", "SHUTDOWN") end
+    )
   end
 
   defp disable_remotes(node, remotes) do
@@ -119,14 +136,16 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
     @loops
     |> Enum.each(fn loop ->
-      set_and_forget(
-        loop: loop,
-        name: "Circulation Pump 0#{loop}",
-        action: "SET TO 100",
-        value: 100,
-        get: &get_primary_pump/1,
-        put: &set_primary_pump/2
-      )
+      if get_primary_pump(loop) > 0 do
+        set_and_forget(
+          loop: loop,
+          name: "Circulation Pump 0#{loop}",
+          action: "SET TO 50",
+          value: 50,
+          get: &get_primary_pump/1,
+          put: &set_primary_pump/2
+        )
+      end
     end)
   end
 
@@ -218,6 +237,70 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       fn -> get_actuator(valve) == "OPEN" end,
       fn -> set_actuator(valve, "OPEN") end
     )
+
+    UI.wait("Core Pressure", "WAIT FOR 1 bar", fn ->
+      API.get_float("CORE_PRESSURE") < 1.1
+    end)
+  end
+
+  defp stop_all_pumps do
+    UI.console("Coolant System")
+
+    @loops
+    |> Enum.each(fn loop ->
+      UI.set_wait(
+        "Circulation Pump 0#{loop}",
+        "OFF",
+        # We set it to 1 to calm it down, but we also want the user to flip the switch.
+        fn -> get_primary_pump(loop) < 0.9 end,
+        fn -> set_primary_pump(loop, 1) end
+      )
+    end)
+
+    UI.console("Steam Generator")
+
+    @loops
+    |> Enum.each(fn loop ->
+      UI.set_wait(
+        "Secondary Pump 0#{loop}",
+        "OFF",
+        # We set it to 1 to calm it down, but we also want the user to flip the switch.
+        fn -> get_secondary_pump(loop) < 0.9 end,
+        fn -> set_secondary_pump(loop, 1) end
+      )
+    end)
+
+    UI.console("Condenser")
+
+    UI.set_wait(
+      "Cooling Pump",
+      "OFF",
+      fn -> API.get_boolean("CONDENSER_CIRCULATION_PUMP_SWITCH") end,
+      fn -> API.put("CONDENSER_CIRCULATION_PUMP_SWITCH", false) end
+    )
+  end
+
+  def disable_resistor_banks do
+    UI.console("Generation & Distribution")
+
+    UI.set_wait(
+      "Resistor Bank Main Switch",
+      "OFF",
+      fn -> !API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH") end,
+      fn -> API.put("RESISTOR_BANKS_MAIN_SWITCH", false) end
+    )
+
+    1..4
+    |> Enum.each(fn bank ->
+      UI.set_wait(
+        "Resistor Bank Switch 0#{bank}",
+        "OFF",
+        fn -> !API.get_boolean("RESISTOR_BANK_0#{bank}_SWITCH") end,
+        fn -> API.put("RESISTOR_BANK_0#{bank}_SWITCH", false) end
+      )
+    end)
+
+    UI.notice("Reminder: Transformers may need to be disabled for maintenance.")
   end
 
   defp set_and_forget(opts) do
@@ -313,6 +396,12 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   defp set_primary_pump(loop, v),
     do: API.put("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", v)
+
+  defp get_secondary_pump(loop),
+    do: API.get_float("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_SPEED")
+
+  defp set_secondary_pump(loop, v),
+    do: API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", v)
 
   defp valve_data(key) do
     API.get_json("VALVE_PANEL_JSON")
