@@ -7,6 +7,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
     defstruct(@enforce_keys)
   end
 
+  alias AutoNuke.API
+
   @tank_size 60000.0
 
   # Target between 49% and 51% fill.
@@ -44,7 +46,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
     if is_installed?(loop) do
       do_init(loop)
     else
-      Logger.info(log_prefix(loop) <> "Steam generator is not installed.")
+      Logger.info(log_prefix(loop) <> "Loop is not operational.")
       {:ok, nil}
     end
   end
@@ -115,27 +117,30 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   defp get_current_fill_percent(loop) do
-    AutoNuke.API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
+    API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
   end
 
   defp is_installed?(loop) do
-    AutoNuke.API.get_integer("STEAM_GEN_#{loop - 1}_STATUS") == 2
+    API.get_json("INSTALLED_LOOPS_JSON")
+    |> Map.fetch!("Loop_#{loop - 1}")
+    |> Map.values()
+    |> Enum.all?()
   end
 
   defp get_capacity(loop) do
-    AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
+    API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
   end
 
   defp get_steam_outlet(loop) do
-    AutoNuke.API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+    API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   end
 
   defp get_speed(loop) do
-    AutoNuke.API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED")
+    API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED")
   end
 
   defp set_speed(loop, value) do
-    AutoNuke.API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
+    API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
   end
 
   def axis_to_speed(output), do: round(50 + output * 50)
