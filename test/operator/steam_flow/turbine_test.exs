@@ -11,6 +11,8 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
 
   describe "new/2" do
     test "determines power level based on MSCV" do
+      API.mock_get("COOLANT_CORE_CIRCULATION_PUMP_2_CAPACITY", 200)
+      API.mock_get("COOLANT_SEC_CIRCULATION_PUMP_2_CAPACITY", 200)
       API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0, times: 2)
       API.mock_get("MSCV_2_OPENING_ACTUAL", 4)
 
@@ -39,9 +41,10 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
 
     test "sets power level", %{turbine: turbine} do
       API.mock_get("STEAM_TURBINE_0_BYPASS_ACTUAL", 0)
-      new_power = Enum.random(1..100)
+      new_power = Enum.random(2..30)
       assert %Turbine{} = turbine = Turbine.set_power_level(turbine, new_power)
       assert turbine.power_level == new_power
+      assert ^new_power = API.mock_put_value("MSCV_0_OPENING_ORDERED")
     end
   end
 
@@ -53,6 +56,16 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     test "returns one level higher than current steam output", %{turbine: turbine} do
       API.mock_get("STEAM_GEN_0_OUTLET", 40)
       assert Turbine.max_power_level(turbine) == 5
+    end
+
+    test "maxes out at one tenth of the pump capacity", %{turbine: %Turbine{} = turbine} do
+      API.mock_get("STEAM_GEN_0_OUTLET", 10000, times: 2)
+
+      turbine = %Turbine{turbine | secondary_capacity: 200}
+      assert Turbine.max_power_level(turbine) == 20
+
+      turbine = %Turbine{turbine | secondary_capacity: 300}
+      assert Turbine.max_power_level(turbine) == 30
     end
   end
 

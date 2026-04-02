@@ -3,6 +3,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   require Logger
 
   alias AutoNuke.Smoother
+  alias AutoNuke.Operator.SteamFlow.Turbine
 
   defmodule State do
     # Give us the average of the last 5 ticks (1 sec) of generation:
@@ -17,9 +18,27 @@ defmodule AutoNuke.Operator.SteamFlow do
     )
   end
 
+  defmodule PowerLevel do
+    @enforce_keys [:loop, :capacity, :power_level, :max_power_level]
+    defstruct(@enforce_keys)
+
+    @min_power_level Turbine.allowed_power_levels().first
+
+    def at_max?(%PowerLevel{power_level: p, max_power_level: m}), do: p >= m
+    def power_ratio(%PowerLevel{capacity: c, power_level: p}), do: p / c
+
+    def change_power_level(%PowerLevel{} = pl, change) do
+      new_power =
+        (pl.power_level + change)
+        |> min(pl.max_power_level)
+        |> max(@min_power_level)
+
+      %PowerLevel{pl | power_level: new_power}
+    end
+  end
+
   alias AutoNuke.API
   alias AutoNuke.ControlAxis
-  alias AutoNuke.Operator.SteamFlow.Turbine
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
@@ -81,9 +100,9 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     axis =
       ControlAxis.new(
-        kp: 0.1,
-        ki: 0.01,
-        kd: 0.005,
+        kp: 0.3,
+        ki: 0.03,
+        kd: 0.015,
         deadzone: @deadzone,
         to_value_fn: &Function.identity/1,
         offset: initial,
@@ -253,10 +272,15 @@ defmodule AutoNuke.Operator.SteamFlow do
     power_levels =
       old_turbines
       |> Enum.map(fn %Turbine{} = t ->
-        {t.loop, t.power_level, Turbine.max_power_level(t)}
+        %PowerLevel{
+          loop: t.loop,
+          capacity: t.primary_capacity,
+          power_level: t.power_level,
+          max_power_level: Turbine.max_power_level(t)
+        }
       end)
 
-    current_total = power_levels |> Enum.sum_by(fn {_, power, _} -> power end)
+    current_total = power_levels |> Enum.sum_by(& &1.power_level)
 
     if current_total == target_total do
       {:ok, old_turbines}
@@ -265,20 +289,21 @@ defmodule AutoNuke.Operator.SteamFlow do
 
       new_power_levels =
         allocate_power(power_levels, delta)
-        |> Enum.sort()
+        |> Enum.sort_by(& &1.loop)
 
       new_turbines =
         old_turbines
         |> Enum.zip_with(new_power_levels, fn
-          %Turbine{loop: loop, power_level: power} = turbine, {loop, power, _max} ->
+          %Turbine{loop: loop, power_level: power} = turbine,
+          %PowerLevel{loop: loop, power_level: power} ->
             # Power unchanged.
             turbine
 
-          %Turbine{loop: loop} = turbine, {loop, power, _max} ->
+          %Turbine{loop: loop} = turbine, %PowerLevel{loop: loop, power_level: power} ->
             turbine |> Turbine.set_power_level(power)
         end)
 
-      new_total = new_power_levels |> Enum.sum_by(fn {_, power, _} -> power end)
+      new_total = new_power_levels |> Enum.sum_by(& &1.power_level)
 
       cond do
         new_total == target_total -> {:ok, new_turbines}
@@ -290,87 +315,58 @@ defmodule AutoNuke.Operator.SteamFlow do
   defp allocate_power(power_levels, 0), do: power_levels
 
   # Single turbine case is very simple, just allocate whatever we can.
-  defp allocate_power([{loop, old_power, max}], to_allocate) do
-    new_power =
-      (old_power + to_allocate)
-      |> min(max)
-
-    [{loop, new_power, max}]
+  defp allocate_power([%PowerLevel{} = old_pl], to_allocate) do
+    new_pl = PowerLevel.change_power_level(old_pl, to_allocate)
+    [new_pl]
   end
 
   defp allocate_power(power_levels, to_allocate) when to_allocate < 0 do
     power_levels
-    |> Enum.sort_by(fn {_loop, power, max} ->
-      # Over-max powers come first so we can lower them ASAP
-      over_max_first = if power > max, do: 1, else: 2
-      # Otherwise, sort by highest power first.
-      {over_max_first, -power}
+    |> Enum.sort_by(fn %PowerLevel{} = pl ->
+      {
+        # Over-max powers come first so we can lower them ASAP
+        if(PowerLevel.at_max?(pl), do: 1, else: 2),
+        # Otherwise, sort by highest power ratio first.
+        -PowerLevel.power_ratio(pl)
+      }
     end)
-    |> then(fn
-      [first, second | rest] ->
-        {first_loop, old_first_power, first_max} = first
-        {_, second_power, _} = second
+    |> then(fn [old_pl | rest] ->
+      new_pl = PowerLevel.change_power_level(old_pl, -1)
+      new_power_levels = [new_pl | rest]
 
-        # Try to reduce as much power as we can,
-        # ... but don't go lower than -1 below the next option,
-        # ... unless our max is even lower than both of the above.
-        new_first_power =
-          (old_first_power + to_allocate)
-          |> max(second_power - 1)
-          |> min(first_max)
-
-        new_power_levels = [
-          {first_loop, new_first_power, first_max},
-          second | rest
-        ]
-
-        to_allocate = to_allocate - (new_first_power - old_first_power)
-
-        allocate_power(new_power_levels, to_allocate)
+      if new_pl.power_level == old_pl.power_level do
+        # Can't reduce anything, give up.
+        new_power_levels
+      else
+        allocate_power([new_pl | rest], to_allocate + 1)
+      end
     end)
   end
 
   defp allocate_power(power_levels, to_allocate) when to_allocate > 0 do
     power_levels
-    # Lowest power first, BUT maxed-out powers go last.
-    |> Enum.sort_by(fn {_loop, power, max} ->
-      # Under-max powers come first, we can't increase maxed out ones
-      under_max_first = if power < max, do: 1, else: 2
-      # Otherwise, sort by lowest power first.
-      {under_max_first, power}
+    # Lowest power ratio first, BUT maxed-out powers go last.
+    |> Enum.sort_by(fn pl ->
+      {
+        # Under-max powers come first, we can't increase maxed out ones
+        if(PowerLevel.at_max?(pl), do: 2, else: 1),
+        # Otherwise, sort by lowest power ratio first.
+        PowerLevel.power_ratio(pl)
+      }
     end)
-    |> then(fn
-      [{_turbine, power, max} | _] when power >= max ->
-        # Our best choice is already at max, so we can't allocate anything.
+    |> then(fn [old_pl | rest] ->
+      if PowerLevel.at_max?(old_pl) do
+        # Can't increase anything.
         power_levels
+      else
+        new_pl = PowerLevel.change_power_level(old_pl, +1)
 
-      [first, second | rest] ->
-        {first_loop, old_first_power, first_max} = first
-        {_, second_power, second_max} = second
+        if new_pl.power_level == old_pl.power_level do
+          raise "Can't increase power level: #{inspect(old_pl)}"
+        end
 
-        # Try to add as much power as we can,
-        # ... but don't go over max,
-        # ... and don't go more than +1 over the next option,
-        #     UNLESS the next option (and thus, all other options) 
-        #     are already at max.
-        new_first_power =
-          (old_first_power + to_allocate)
-          |> min(first_max)
-          |> then(fn v ->
-            case second_power < second_max do
-              true -> v |> min(second_power + 1)
-              false -> v
-            end
-          end)
-
-        new_power_levels = [
-          {first_loop, new_first_power, first_max},
-          second | rest
-        ]
-
-        to_allocate = to_allocate - (new_first_power - old_first_power)
-
-        allocate_power(new_power_levels, to_allocate)
+        allocate_power([new_pl | rest], to_allocate - 1)
+      end
     end)
   end
 end

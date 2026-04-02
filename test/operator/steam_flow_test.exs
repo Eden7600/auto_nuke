@@ -11,21 +11,21 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
     end
 
-    test "is power level 51 for mid-axis" do
-      assert SteamFlow.axis_to_total_power(+0.0, 1) == 51
+    test "is power level 16 for mid-axis" do
+      assert SteamFlow.axis_to_total_power(+0.0, 1) == 16
     end
 
-    test "is power level 100 for max axis" do
-      assert SteamFlow.axis_to_total_power(+1.0, 1) == 100
+    test "is power level 30 for max axis" do
+      assert SteamFlow.axis_to_total_power(+1.0, 1) == 30
     end
 
     test "is based on the number of turbines" do
       assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
       assert SteamFlow.axis_to_total_power(-1.0, 2) == 4
       assert SteamFlow.axis_to_total_power(-1.0, 3) == 6
-      assert SteamFlow.axis_to_total_power(1.0, 1) == 100
-      assert SteamFlow.axis_to_total_power(1.0, 2) == 200
-      assert SteamFlow.axis_to_total_power(1.0, 3) == 300
+      assert SteamFlow.axis_to_total_power(1.0, 1) == 30
+      assert SteamFlow.axis_to_total_power(1.0, 2) == 60
+      assert SteamFlow.axis_to_total_power(1.0, 3) == 90
     end
   end
 
@@ -34,12 +34,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert SteamFlow.total_power_to_axis(2, 1) == -1.0
     end
 
-    test "is roughly mid-axis for power level 51" do
-      assert_in_delta SteamFlow.total_power_to_axis(51, 1), -0.01, 0.01
+    test "is roughly mid-axis for power level 16" do
+      assert_in_delta SteamFlow.total_power_to_axis(16, 1), -0.01, 0.01
     end
 
-    test "is power level 100 for max axis" do
-      assert SteamFlow.total_power_to_axis(100, 1) == +1.0
+    test "is max axis for power level 30" do
+      assert SteamFlow.total_power_to_axis(30, 1) == +1.0
     end
 
     test "is based on the number of turbines" do
@@ -47,12 +47,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert SteamFlow.total_power_to_axis(4, 2) == -1.0
       assert SteamFlow.total_power_to_axis(6, 3) == -1.0
 
-      assert SteamFlow.total_power_to_axis(100, 1) == +1.0
-      assert SteamFlow.total_power_to_axis(200, 2) == +1.0
-      assert SteamFlow.total_power_to_axis(300, 3) == +1.0
+      assert SteamFlow.total_power_to_axis(30, 1) == +1.0
+      assert SteamFlow.total_power_to_axis(60, 2) == +1.0
+      assert SteamFlow.total_power_to_axis(90, 3) == +1.0
 
-      assert_in_delta SteamFlow.total_power_to_axis(100, 2), -0.02, 0.01
-      assert_in_delta SteamFlow.total_power_to_axis(100, 3), -0.36, 0.01
+      assert_in_delta SteamFlow.total_power_to_axis(32, 2), 0, 0.01
+      assert_in_delta SteamFlow.total_power_to_axis(32, 3), -0.38, 0.01
     end
   end
 
@@ -148,14 +148,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
-  describe "tick with three loops" do
+  describe "tick with three loops of equal capacity" do
     setup do
+      pump = [200, 300, 600] |> Enum.random()
+
       [
         pid:
           start_steam_flow(
-            turbine1: [power_level: 3],
-            turbine2: [power_level: 5],
-            turbine3: [power_level: 4]
+            turbine1: [power_level: 3, primary_pump: pump],
+            turbine2: [power_level: 5, primary_pump: pump],
+            turbine3: [power_level: 4, primary_pump: pump]
           )
       ]
     end
@@ -321,13 +323,119 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
-  describe "tick with two loops" do
+  describe "tick with three loops of uneven capacity" do
     setup do
       [
         pid:
           start_steam_flow(
-            turbine1: [power_level: 3],
-            turbine2: [power_level: 5],
+            turbine1: [power_level: 3, primary_pump: 200],
+            turbine2: [power_level: 5, primary_pump: 300],
+            turbine3: [power_level: 4, primary_pump: 600]
+          )
+      ]
+    end
+
+    test "maintains current power when demand is met", %{pid: pid} do
+      assert power_levels(pid) == [3, 5, 4]
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Ensure supply (kW) is 105% of demand (MW).
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
+      # Steam output and pressure gets queried by `Turbine.tick/1`.
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [3, 5, 4]
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+    end
+
+    test "increases power when supply does not meet demand", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 1.20 / 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) > 12
+      # Only loops 3 is increased, because it has much higher capacity.
+      assert 7 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert [3, 5, 7] = power_levels(pid)
+    end
+
+    test "decreases power when supply exceeds demand", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
+
+      send(pid, {:tick, 1})
+
+      assert total_power(pid) < 12
+      # Only loops 1 and 2 are decreased, 
+      # loop 3 (with its high capacity) is low enough already.
+      assert 2 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 3 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert [2, 3, 4] = power_levels(pid)
+    end
+
+    test "does not increase power beyond current steam level plus one", %{pid: pid} do
+      assert total_power(pid) == 12
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 2.0 / 1000)
+      API.mock_get("STEAM_GEN_0_OUTLET", 44, times: 2)
+      API.mock_get("STEAM_GEN_1_OUTLET", 60, times: 2)
+      API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
+      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
+
+      send(pid, {:tick, 1})
+
+      assert power_levels(pid) == [5, 7, 6]
+    end
+  end
+
+  describe "tick with two loops of equal capacity" do
+    setup do
+      pump = [200, 300, 600] |> Enum.random()
+
+      [
+        pid:
+          start_steam_flow(
+            turbine1: [power_level: 3, primary_pump: pump],
+            turbine2: [power_level: 5, primary_pump: pump],
             turbine3: false
           )
       ]

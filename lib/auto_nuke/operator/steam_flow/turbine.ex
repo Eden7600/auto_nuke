@@ -1,22 +1,26 @@
 defmodule AutoNuke.Operator.SteamFlow.Turbine do
-  @enforce_keys [:loop, :steam_axis, :pressure_axis, :bypass, :power_level, :min_steam]
-  defstruct(
+  @enforce_keys [
     # Loop number
-    loop: nil,
+    :loop,
     # ControlAxis controlling turbine bypass needed to reach min_steam
-    steam_axis: nil,
+    :steam_axis,
     # ControlAxis controlling turbine bypass needed to stay at a safe pressure
-    pressure_axis: nil,
+    :pressure_axis,
+    # Primary pump capacity, used to determine our PL ratio compared to other turbines
+    :primary_capacity,
+    # Secondary pump capacity, used to determine our max power level
+    :secondary_capacity,
     # Current bypass setting
-    bypass: nil,
+    :bypass,
     # Target power level, assigned by parent (based on power requirements)
-    power_level: nil,
+    :power_level,
     # Minimum steam requirement, assigned by parent (based on number of turbines)
-    min_steam: nil
-  )
+    :min_steam
+  ]
+  defstruct(@enforce_keys)
 
   # Allowed power levels:
-  @power_levels 2..100
+  @power_levels 2..30
   def allowed_power_levels, do: @power_levels
   # Keep pressure under 65 bar.
   @max_pressure 65
@@ -53,6 +57,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       loop: loop,
       steam_axis: steam_axis,
       pressure_axis: pressure_axis,
+      primary_capacity: get_capacity("CORE", loop),
+      secondary_capacity: get_capacity("SEC", loop),
       bypass: get_bypass(loop),
       power_level: get_mscv(loop) |> round() |> mscv_to_power_level(),
       min_steam: min_steam
@@ -71,11 +77,12 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | power_level: new}
   end
 
-  def max_power_level(%Turbine{loop: loop}) do
+  def max_power_level(%Turbine{loop: loop, secondary_capacity: capacity}) do
     get_steam_outlet(loop)
     |> Kernel./(10)
     |> round()
     |> Kernel.+(1)
+    |> min(div(capacity, 10))
   end
 
   def tick(%Turbine{loop: loop} = turbine) do
@@ -137,4 +144,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   defp mscv_to_power_level(0), do: 2
   defp mscv_to_power_level(1), do: 2
   defp mscv_to_power_level(n) when n in @power_levels, do: n
+
+  defp get_capacity(type, loop) do
+    API.get_integer("COOLANT_#{type}_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
+  end
 end
