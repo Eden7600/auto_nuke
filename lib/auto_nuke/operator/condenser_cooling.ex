@@ -93,7 +93,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
     new = (get_pump_speed() + amount) |> min(@speeds.last)
 
     Logger.info(
-      @log_prefix <> "Temperature violation at #{temp}°C, backing off from #{old} to #{new}."
+      @log_prefix <>
+        "Temperature violation at #{Float.round(temp, 1)}°C, backing off from #{old}% to #{new}%."
     )
 
     set_pump_speed(new)
@@ -114,7 +115,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   defp maybe_probe(%State{} = state, temp) do
     new = state.speed - 1
-    Logger.info(@log_prefix <> "Temperature steady at #{temp}°C, probing down to #{new}.")
+    Logger.info(@log_prefix <> "Steady at #{Float.round(temp, 1)}°C, trying #{new}%.")
     set_pump_speed(new)
     %State{state | speed: new, probe_timer: @wait_while_probing}
   end

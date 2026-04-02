@@ -97,10 +97,14 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   @impl true
   def handle_call({:drift, drift}, _from, %State{} = state) do
-    Logger.info(
-      @log_prefix <>
-        "Now planning to drift from #{drift.start_factor} at #{drift.start_time} to #{drift.end_factor} at #{drift.end_time}."
-    )
+    Logger.info([
+      @log_prefix,
+      "Now planning to drift from #{drift.start_factor} at ",
+      Drift.timestamp_to_string(drift.start_time),
+      " to #{drift.end_factor} at ",
+      Drift.timestamp_to_string(drift.end_time),
+      "."
+    ])
 
     {:reply, :ok, %State{state | drift: {drift, false}}}
   end

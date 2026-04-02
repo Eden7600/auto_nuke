@@ -117,4 +117,21 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
 
   defp parse_duration(str, start_time) when is_binary(str),
     do: start_time + parse_time(str, 0)
+
+  def timestamp_to_string(ts) when is_integer(ts) do
+    {dd, ts} = div_rem(ts, @day)
+    {hh, mm} = div_rem(ts, @hour)
+
+    [hh, mm] =
+      [hh, mm]
+      |> Enum.map(fn n ->
+        n
+        |> Integer.to_string()
+        |> String.pad_leading(2, "0")
+      end)
+
+    "#{dd}+#{hh}:#{mm}"
+  end
+
+  defp div_rem(a, b), do: {div(a, b), rem(a, b)}
 end
