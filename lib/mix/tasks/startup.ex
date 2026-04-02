@@ -7,7 +7,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   alias AutoNuke.TaskUI, as: UI
 
   # Target PPM for boron injection:
-  @boron_target 2800
+  @boron_target 3000
   # How carefully to inject boron (higher = more):
   @boron_easing 3
   # At easing of 3, we start slowing down when boron PPM is
@@ -25,7 +25,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Stop drift prematurely once we reach this temperature (°C):
   @startup_temp 300
   # Wait for this temperature before starting turbines:
-  @turbine_temp 270
+  @turbine_temp 250
   # Open or close MSCV to this (%):
   @startup_mscv 10
 
@@ -113,6 +113,41 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp start_pressurizer do
     UI.console("Pressurizer")
+
+    valves = [
+      {"PZR Vent", "Valvula_Pressurizer_Vent"},
+      {"PZR Cooling", "Valvula_Pressurizer_Spray"}
+    ]
+
+    valves
+    |> Enum.each(fn {name, key} ->
+      UI.set_wait(
+        name <> " Valve",
+        "CLOSE",
+        fn -> get_actuator(key) == "CLOSE" end,
+        fn -> set_actuator(key, "CLOSE") end
+      )
+    end)
+
+    valves
+    |> Enum.each(fn {name, key} ->
+      UI.progress_loop(
+        label: name,
+        fetch: fn -> get_valve_closed_percent(key) end,
+        max: 100
+      )
+    end)
+
+    valves
+    |> Enum.each(fn {name, key} ->
+      UI.set_wait(
+        name <> " Valve",
+        "OFF",
+        fn -> get_actuator(key) == "OFF" end,
+        fn -> set_actuator(key, "OFF") end
+      )
+    end)
+
     UI.set("Thermostat", "ON")
     UI.set("Heating Power", "ON")
 
@@ -468,6 +503,16 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   def start_secondary_circulation(loops) do
     UI.console("Steam Generator")
 
+    loops
+    |> Enum.each(fn loop ->
+      UI.set_wait(
+        "Pressure Relief Vent 0#{loop}",
+        "SHUT",
+        fn -> get_vent_open?(loop) end,
+        fn -> set_vent_open(loop, false) end
+      )
+    end)
+
     start_pumps("SEC", "Secondary Pump", loops)
   end
 
@@ -623,4 +668,18 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp using_boron? do
     API.get_integer("CHEMICAL_DOSING_PUMP_STATUS") != 4
   end
+
+  defp valve_data(key) do
+    API.get_json("VALVE_PANEL_JSON")
+    |> Map.fetch!("valves")
+    |> Map.fetch!(key)
+  end
+
+  defp get_actuator(key), do: valve_data(key) |> Map.fetch!("Actuator")
+  defp set_actuator(key, action), do: API.put("VALVE_#{action}", key)
+  defp get_valve_open_percent(key), do: valve_data(key) |> Map.fetch!("Value") |> round()
+  defp get_valve_closed_percent(key), do: 100 - get_valve_open_percent(key)
+
+  defp get_vent_open?(loop), do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
+  defp set_vent_open(loop, open), do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
 end
