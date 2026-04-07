@@ -7,7 +7,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator.SteamFlow
-  alias Mix.Tasks.AutoNuke.Loop.Start
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -22,7 +21,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     remote_node = ping_remote()
     steam_flow_pid = {SteamFlow, remote_node}
 
-    {:ok, _} = Application.ensure_all_started([:pubsub, :req])
+    UI.init()
     IO.puts("#{@loop_emoji} Stopping loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
 
@@ -46,25 +45,11 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
 
     UI.console("Generation & Distribution")
 
-    Start.change_valve(
-      loop: loop,
-      name: "Turbine Bypass 0#{loop}",
-      short_name: "Bypass 0#{loop}",
-      target: 100,
-      get: &get_bypass/1,
-      put: &set_bypass/2
-    )
+    UI.console("Generation & Distribution")
+    UI.Valves.set({:bypass, loop}, 100)
 
     UI.console("Steam Generator")
-
-    Start.change_valve(
-      loop: loop,
-      name: "Main Steam Control Valve 0#{loop}",
-      short_name: "MSCV 0#{loop}",
-      target: 0,
-      get: &get_mscv/1,
-      put: &set_mscv/2
-    )
+    UI.Valves.set({:mscv, loop}, 0)
 
     UI.console("Coolant System")
 
@@ -116,11 +101,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   end
 
   defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-  defp get_mscv(loop), do: API.get_float("MSCV_#{loop - 1}_OPENING_ACTUAL")
-  defp set_mscv(loop, value), do: API.put("MSCV_#{loop - 1}_OPENING_ORDERED", value)
-  defp get_bypass(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL") |> round()
-  defp set_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
-
   defp get_vent_open?(loop), do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
   defp set_vent_open(loop, open), do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
 end

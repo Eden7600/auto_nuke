@@ -6,3 +6,5 @@ config :auto_nuke,
   api_backend: AutoNuke.Test.MockAPI
 
 config :logger, level: :warning
+
+config :memoize, cache_strategy: AutoNuke.Test.NullCacheStrategy

@@ -6,6 +6,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   alias AutoNuke.Test.TurbineFactory
   alias AutoNuke.Test.MockAPI, as: API
 
+  @tick 2..10000//5
+
   describe "axis_to_total_power/2" do
     test "is power level 2 for min axis" do
       assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
@@ -179,7 +181,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [3, 5, 4]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
@@ -200,7 +202,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) > 12
       # Only loops 1 and 3 are increased.  Loop 2 is already high enough.
@@ -228,7 +230,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) < 12
       # Only loops 2 and 3 are decreased, loop 1 is low enough already.
@@ -256,7 +258,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [5, 7, 6]
     end
@@ -279,7 +281,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) > 12
     end
 
@@ -307,18 +309,18 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       # Tick 1, nothing changes:
       mock_power.()
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) == 12
 
       # Tick 2, nothing changes:
       mock_power.()
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) == 12
 
       # Tick 3, we override the target to 1.3:
       SteamFlow.set_target_override(1.3, pid)
       mock_power.()
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) > 12
     end
   end
@@ -352,7 +354,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [3, 5, 4]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
@@ -373,7 +375,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) > 12
       # Only loops 3 is increased, because it has much higher capacity.
@@ -396,7 +398,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) < 12
       # Only loops 1 and 2 are decreased, 
@@ -421,7 +423,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [5, 7, 6]
     end
@@ -454,7 +456,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [3, 5]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
@@ -473,7 +475,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) > 8
       assert new_power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
@@ -494,7 +496,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) < 8
       # Loop 1 is already low enough, was not decreased.
@@ -518,7 +520,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [4, 9]
     end
@@ -547,7 +549,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_2_OUTLET", 1000)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [4]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
@@ -562,7 +564,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert [power3] = power_levels(pid)
       assert power3 > 4
@@ -578,7 +580,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert [power3] = power_levels(pid)
       assert power3 < 4
@@ -594,7 +596,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
-      send(pid, {:tick, 1})
+      send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [6]
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == 6

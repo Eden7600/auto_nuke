@@ -3,17 +3,27 @@ defmodule AutoNuke do
   require Logger
 
   def start(_type, _args) do
-    children = app_children() ++ testing_children()
+    children =
+      if Application.get_env(:auto_nuke, :testing, false) do
+        testing_children()
+      else
+        base_children() ++ automation_children()
+      end
 
     opts = [strategy: :one_for_one, name: AutoNuke.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  defp app_children do
+  defp base_children do
+    [
+      PubSub,
+      AutoNuke.Ticker
+    ]
+  end
+
+  defp automation_children do
     if do_start?() do
       [
-        PubSub,
-        AutoNuke.Ticker,
         AutoNuke.Operator.CoreFactor,
         AutoNuke.Operator.CoreTemp,
         AutoNuke.Operator.SteamFlow,
@@ -29,13 +39,9 @@ defmodule AutoNuke do
   end
 
   defp testing_children do
-    if Application.get_env(:auto_nuke, :testing, false) do
-      [
-        AutoNuke.Test.MockAPI
-      ]
-    else
-      []
-    end
+    [
+      AutoNuke.Test.MockAPI
+    ]
   end
 
   defp do_start? do

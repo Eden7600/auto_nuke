@@ -1,4 +1,6 @@
 defmodule AutoNuke.API.Web do
+  use Memoize
+
   defp api_url do
     case System.fetch_env("NUKE_URL") do
       {:ok, url} -> url

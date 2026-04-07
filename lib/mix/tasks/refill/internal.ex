@@ -6,107 +6,98 @@ defmodule Mix.Tasks.AutoNuke.Refill.Internal do
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
 
-  defmodule Tank do
-    @enforce_keys [:name, :key, :valve, :valve_key]
-    defstruct(
-      name: nil,
-      key: nil,
-      valve: nil,
-      valve_key: nil,
-      open?: nil,
-      fill_level: nil,
-      capacity: nil
-    )
-  end
+  @pump API.Pumps.internal_freight()
+  @target_percent 99.0
 
-  @target_percent 100
-
-  def tanks do
-    [
-      %Tank{
-        name: "Rinse Tank",
-        key: "RINSE TANK",
-        valve: "M01",
-        valve_key: "Valve_Q_TANQUE_AGUA"
-      },
-      %Tank{
-        name: "Primary Circuit Storage Tank",
-        key: "PRIMARY CIRCUIT STORAGE TANK",
-        valve: "M02",
-        valve_key: "Valve_Q_TANQUE_AGUA_MAIN"
-      },
-      %Tank{
-        name: "Core Pool Storage Tank",
-        key: "CORE POOL STORAGE TANK",
-        valve: "M03",
-        valve_key: "Valve_Q_TANQUE_AGUA_CORE_EXTERNO"
-      }
-    ]
-  end
+  @all_tanks [
+    {API.Valves.valve_m01(), API.Vessels.rinse_tank()},
+    {API.Valves.valve_m02(), API.Vessels.primary_cst()},
+    {API.Valves.valve_m03(), API.Vessels.core_pool_storage()}
+  ]
 
   def run([]) do
-    AutoNuke.Tasks.Refill.refill(
-      pre_check: &check_valves/0,
-      pump_name: "Internal Freight Pump",
-      tank_description: "All Tanks",
-      pump_get_active: &is_pump_active?/0,
-      pump_set_enabled: &set_pump_enabled/1,
-      tank_get_level: &get_percent_full/0,
-      target_level: @target_percent
-    )
-  end
+    UI.init()
 
-  defp check_valves do
-    tanks_status()
-    |> Enum.map(fn tank ->
-      case tank.open? do
-        true -> UI.wait("Valve #{tank.valve}", "IS OPEN", fn -> true end)
-        false -> UI.set("Valve #{tank.valve}", "IS CLOSED")
-      end
-
-      tank.open?
-    end)
-    |> then(fn open ->
-      unless Enum.any?(open) do
-        raise "No tanks open, can't start pump"
-      end
-    end)
-
+    tanks_status = get_tanks_status()
+    show_tanks_status(tanks_status)
     UI.notice("You can safely open and close valves while this task is running.")
+
+    try do
+      UI.Pumps.start(@pump)
+
+      fill_loop(tanks_status)
+    after
+      UI.Pumps.stop(@pump)
+    end
   end
 
-  @switch "FREIGHT_PUMP_INTERNAL_SWITCH"
-  @active "FREIGHT_PUMP_INTERNAL_ACTIVE"
-  defp is_pump_active?, do: API.get_boolean(@active)
-  defp set_pump_enabled(true), do: API.put(@switch, "True")
-  defp set_pump_enabled(false), do: API.put(@switch, "False")
+  defp get_tanks_status do
+    @all_tanks
+    |> Map.new(fn {valve, tank} ->
+      is_open = API.Valves.get_opened?(valve)
+      is_full = API.Vessels.get_fill_percent(tank) >= @target_percent
+      {tank, {is_open, is_full}}
+    end)
+  end
 
-  defp get_percent_full do
-    tanks_status()
-    |> Enum.filter(fn tank -> tank.open? end)
+  defp show_tanks_status(new, old \\ %{}) do
+    @all_tanks
+    |> Enum.map(fn {valve, tank} ->
+      {was_open, was_full} = Map.get(old, tank, {nil, nil})
+      {is_open, is_full} = Map.fetch!(new, tank)
+
+      if is_open != was_open, do: UI.set(valve.name, if(is_open, do: "OPEN", else: "CLOSED"))
+      if is_full != was_full, do: UI.set(tank.name, if(is_full, do: "FULL", else: "NOT FULL"))
+
+      is_open && !is_full
+    end)
     |> then(fn
-      [] ->
-        100.0
-
-      tanks ->
-        tanks
-        |> Enum.map(fn tank -> tank.fill_level / tank.capacity * 100 end)
-        |> Statistex.average()
+      [] -> UI.warn("No valves open or all tanks full, can't run pump!")
+      _ -> :ok
     end)
-    |> Float.ceil(1)
   end
 
-  defp tanks_status do
-    %{"valves" => valves, "vessels" => vessels} = API.get_json("VALVE_PANEL_JSON")
+  defp fill_loop(tanks_status) do
+    label =
+      @all_tanks
+      |> Enum.filter(fn {_, tank} ->
+        {open, full} = Map.fetch!(tanks_status, tank)
+        open && !full
+      end)
+      |> Enum.map(fn {valve, _} -> valve.short_name end)
+      |> Enum.join("+")
 
-    tanks()
-    |> Enum.map(fn %Tank{} = tank ->
-      vessel = Map.fetch!(vessels, tank.key)
-      valve = Map.fetch!(valves, tank.valve_key)
-      open = Map.fetch!(valve, "State") |> Map.fetch!("IsOpened")
-      [fill_level, capacity] = Map.fetch!(vessel, "Volume")
+    active_tanks =
+      tanks_status
+      |> Enum.filter(fn {_, {open, full}} -> open && !full end)
+      |> Enum.map(fn {tank, _} -> tank end)
 
-      %Tank{tank | open?: open, fill_level: fill_level, capacity: capacity}
-    end)
+    unless Enum.empty?(active_tanks) do
+      UI.ProgressBar.wait(
+        config: UI.ProgressBar.Config.percent(),
+        label: label,
+        current_fn: fn ->
+          active_tanks
+          |> Enum.map(&API.Vessels.get_fill_percent/1)
+          |> Statistex.average()
+        end,
+        done_fn: fn percent ->
+          if tanks_status != get_tanks_status() do
+            :abort
+          else
+            percent >= @target_percent
+          end
+        end
+      )
+
+      new_tanks_status = get_tanks_status()
+
+      if new_tanks_status != tanks_status do
+        show_tanks_status(new_tanks_status, tanks_status)
+        fill_loop(new_tanks_status)
+      else
+        :done
+      end
+    end
   end
 end

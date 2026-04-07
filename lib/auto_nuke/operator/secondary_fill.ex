@@ -2,14 +2,16 @@ defmodule AutoNuke.Operator.SecondaryFill do
   use GenServer
   require Logger
 
+  # Run on the fourth tick each second:
+  defguard is_my_tick(t) when rem(t, 5) == 3
+
   defmodule State do
-    @enforce_keys [:loop, :speed, :capacity]
+    @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.API
-
-  @tank_size 60000.0
+  alias AutoNuke.API.{SteamGen, Pumps, Vessels}
 
   # Target between 49% and 51% fill.
   @fill_target_min 0.49
@@ -52,42 +54,54 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   defp do_init(loop) do
-    capacity = get_capacity(loop)
-    speed = get_speed(loop)
-    fill_level = (get_current_fill_percent(loop) * 100) |> Float.round(2)
+    steam_gen = SteamGen.for_loop(loop)
+    pump = steam_gen.pump
+    capacity = Pumps.get_capacity(pump)
+    speed = Pumps.get_ordered_speed(pump)
 
     state = %State{
       loop: loop,
+      steam_gen: steam_gen,
       speed: speed,
-      capacity: capacity
+      pump_capacity: capacity
     }
 
     PubSub.subscribe(self(), :ticker)
 
-    Logger.info(
-      log_prefix(loop) <>
-        "Started with pump capacity #{capacity} and fill level of #{fill_level}%."
-    )
+    Logger.info([
+      log_prefix(loop),
+      "Started with pump capacity #{capacity}",
+      " and fill level of ",
+      steam_gen.vessel
+      |> Vessels.get_fill_percent()
+      |> Float.round(2)
+      |> Float.to_string(),
+      "%."
+    ])
 
     {:ok, state}
   end
 
   @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
+
+  @impl true
   def handle_info({:tick, _}, %State{loop: loop, speed: old_speed} = state) do
-    new_speed = calculate_speed(loop, state.capacity)
+    steam_gen = state.steam_gen
+    new_speed = calculate_speed(steam_gen, state.pump_capacity)
 
     if new_speed != old_speed do
       Logger.info(log_prefix(loop) <> "Changing speed from #{old_speed} to #{new_speed}.")
-      set_speed(loop, new_speed)
+      Pumps.set_speed(steam_gen.pump, new_speed)
       {:noreply, %State{state | speed: new_speed}}
     else
       {:noreply, state}
     end
   end
 
-  defp calculate_speed(loop, capacity) do
-    ideal = get_steam_outlet(loop) / capacity * 100
-    fill_level = get_current_fill_percent(loop)
+  defp calculate_speed(%SteamGen{} = steam_gen, pump_capacity) do
+    ideal = SteamGen.get_outlet(steam_gen) / pump_capacity * 100
+    fill_level = Vessels.get_fill_ratio(steam_gen.vessel)
 
     cond do
       fill_level < @fill_limit_min ->
@@ -116,31 +130,11 @@ defmodule AutoNuke.Operator.SecondaryFill do
     |> min(100)
   end
 
-  defp get_current_fill_percent(loop) do
-    API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME") / @tank_size
-  end
-
   defp is_installed?(loop) do
     API.get_json("INSTALLED_LOOPS_JSON")
     |> Map.fetch!("Loop_#{loop - 1}")
     |> Map.values()
     |> Enum.all?()
-  end
-
-  defp get_capacity(loop) do
-    API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
-  end
-
-  defp get_steam_outlet(loop) do
-    API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
-  end
-
-  defp get_speed(loop) do
-    API.get_integer("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED")
-  end
-
-  defp set_speed(loop, value) do
-    API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
   end
 
   def axis_to_speed(output), do: round(50 + output * 50)

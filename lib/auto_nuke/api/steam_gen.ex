@@ -1,0 +1,26 @@
+defmodule AutoNuke.API.SteamGen do
+  alias AutoNuke.API
+
+  @enforce_keys [:loop, :vessel, :pump, :mscv, :bypass]
+  defstruct(@enforce_keys)
+  alias __MODULE__
+
+  @loops 1..3
+  def for_loop(loop) when loop in @loops do
+    %SteamGen{
+      loop: loop,
+      vessel: API.Vessels.steam_generator(loop),
+      pump: API.Pumps.secondary(loop),
+      mscv: API.Valves.mscv(loop),
+      bypass: API.Valves.turbine_bypass(loop)
+    }
+  end
+
+  def all, do: @loops |> Enum.map(&for_loop/1)
+
+  def get_outlet(%SteamGen{loop: loop}) do
+    API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+  end
+
+  def get_pressure(%SteamGen{vessel: vessel}), do: API.Vessels.get_pressure(vessel)
+end

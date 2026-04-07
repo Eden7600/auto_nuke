@@ -6,8 +6,13 @@ defmodule Mix.Tasks.AutoNuke.Refill.CoreVessel do
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
 
-  @tank_size 2500
-  # I have no idea how 1L in the primary CST tank results 
+  @core API.Vessels.core_vessel()
+  @pcst API.Vessels.primary_cst()
+  @pump API.Pumps.primary_circuit()
+
+  @max UI.Vessels.gauge_capacity(@core)
+
+  # I have no idea how 1 kL in the primary CST tank results 
   # in 20M³ in the core vessel, but that's just how it is.
   @primary_cst_factor 20
 
@@ -17,42 +22,20 @@ defmodule Mix.Tasks.AutoNuke.Refill.CoreVessel do
     |> refill()
   end
 
-  def refill(target) when target >= 0 and target < @tank_size do
-    AutoNuke.Tasks.Refill.refill(
-      pre_check: fn -> check_primary_cst_level(target) end,
-      pump_name: "Primary Circuit Pump",
-      tank_description: "Core Vessel Level",
-      pump_get_active: &is_pump_active?/0,
-      pump_set_enabled: &set_pump_enabled/1,
-      tank_get_level: &get_tank_volume/0,
-      target_level: target
-    )
-  end
-
-  @switch "FREIGHT_PUMP_FEEDWATER_SWITCH"
-  @active "FREIGHT_PUMP_FEEDWATER_ACTIVE"
-  defp is_pump_active?, do: API.get_boolean(@active)
-  defp set_pump_enabled(true), do: API.put(@switch, "True")
-  defp set_pump_enabled(false), do: API.put(@switch, "False")
-
-  defp get_tank_volume do
-    API.get_float("COOLANT_CORE_PRIMARY_LOOP_LEVEL")
-    |> Kernel.*(@tank_size / 100)
-    |> floor()
+  def refill(target) when target >= 0 and target < @max do
+    UI.init()
+    check_primary_cst_level(target)
+    UI.Refill.refill(pump: @pump, vessel: @core, target_level: target)
   end
 
   defp check_primary_cst_level(core_target) do
-    core_missing = (core_target - get_tank_volume()) |> max(0)
-    pcst_target = (core_missing / @primary_cst_factor) |> ceil()
+    core_missing = core_target - API.Vessels.get_fill_gauge(@core)
+    pcst_target = (core_missing / @primary_cst_factor) |> ceil() |> max(0)
 
     UI.wait(
       "Primary Core Storage Tank",
       "FILL TO #{pcst_target} kL",
-      fn -> get_primary_cst_level() >= pcst_target * 1000 end
+      fn -> API.Vessels.get_fill_volume(@pcst) >= pcst_target * 1000 end
     )
-  end
-
-  defp get_primary_cst_level do
-    API.get_float("CORE_PRIMARY_CIRCUIT_COOLING_TANK_VOLUME")
   end
 end

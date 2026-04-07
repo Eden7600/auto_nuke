@@ -2,6 +2,9 @@ defmodule AutoNuke.Operator.SteamFlow do
   use GenServer
   require Logger
 
+  # Run on the third tick each second:
+  defguard is_my_tick(t) when rem(t, 5) == 2
+
   alias AutoNuke.Smoother
   alias AutoNuke.Operator.SteamFlow.Turbine
 
@@ -43,7 +46,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   @log_prefix "[#{inspect(__MODULE__)}] "
 
   # Valid loop numbers:
-  @all_loops 1..3
+  @loops 1..3
 
   # Unless overridden, we target between 95% and 110% demand.
   #
@@ -70,11 +73,11 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
-  def add_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
+  def add_loop(loop, pid \\ __MODULE__) when loop in @loops do
     GenServer.call(pid, {:add_loop, loop})
   end
 
-  def remove_loop(loop, pid \\ __MODULE__) when loop in @all_loops do
+  def remove_loop(loop, pid \\ __MODULE__) when loop in @loops do
     GenServer.call(pid, {:remove_loop, loop})
   end
 
@@ -181,6 +184,9 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
+
+  @impl true
   def handle_info(
         {:tick, _},
         %State{
@@ -224,8 +230,8 @@ defmodule AutoNuke.Operator.SteamFlow do
     smoothed = smoothed |> Smoother.add(get_generation_kw(state))
 
     generated_kw = Smoother.average(smoothed)
-    used_kw = API.get_float("POWER_FROM_TURBINE_KW")
-    demand_kw = API.get_float("POWER_DEMAND_MW") * 1000
+    used_kw = API.Power.get_used_kw()
+    demand_kw = API.Power.get_demand_kw()
     ratio = (generated_kw - used_kw) / demand_kw
 
     {ratio, smoothed}
@@ -237,16 +243,12 @@ defmodule AutoNuke.Operator.SteamFlow do
     do: {override, @override_deadzone}
 
   defp get_closed_breakers do
-    @all_loops
-    # true = open, false = closed
-    |> Enum.reject(&API.get_boolean("GENERATOR_#{&1 - 1}_BREAKER"))
+    @loops |> Enum.filter(&API.Generator.get_is_connected/1)
   end
 
   defp get_generation_kw(%State{turbines: turbines}) do
     turbines
-    |> Enum.map(fn %Turbine{loop: loop} ->
-      API.get_float("GENERATOR_#{loop - 1}_KW")
-    end)
+    |> Enum.map(&Turbine.get_generated_power/1)
     |> Enum.sum()
   end
 

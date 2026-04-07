@@ -10,6 +10,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :primary_capacity,
     # Secondary pump capacity, used to determine our max power level
     :secondary_capacity,
+    # Steam generator, used to access outlet and valves
+    :steam_gen,
     # Current bypass setting
     :bypass,
     # Target power level, assigned by parent (based on power requirements)
@@ -27,11 +29,13 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
   require Logger
   alias __MODULE__
-  alias AutoNuke.API
+  alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator}
   alias AutoNuke.ControlAxis
 
   def new(loop, min_steam) when loop in 1..3 and min_steam > 0 do
-    bypass = get_bypass(loop)
+    steam_gen = SteamGen.for_loop(loop)
+    mscv = Valves.get_open_percent(steam_gen.mscv) |> round()
+    bypass = Valves.get_open_percent(steam_gen.bypass) |> round()
 
     steam_axis =
       ControlAxis.new(
@@ -57,10 +61,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       loop: loop,
       steam_axis: steam_axis,
       pressure_axis: pressure_axis,
-      primary_capacity: get_capacity("CORE", loop),
-      secondary_capacity: get_capacity("SEC", loop),
-      bypass: get_bypass(loop),
-      power_level: get_mscv(loop) |> round() |> mscv_to_power_level(),
+      primary_capacity: Pumps.primary(loop) |> Pumps.get_capacity(),
+      secondary_capacity: Pumps.secondary(loop) |> Pumps.get_capacity(),
+      steam_gen: steam_gen,
+      bypass: bypass,
+      power_level: mscv |> mscv_to_power_level(),
       min_steam: min_steam
     }
   end
@@ -70,33 +75,36 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | min_steam: new}
   end
 
-  def set_power_level(%Turbine{loop: loop, power_level: old} = turbine, new)
+  def set_power_level(%Turbine{loop: loop, power_level: old, steam_gen: steam_gen} = turbine, new)
       when new in @power_levels do
     Logger.info(log_prefix(loop) <> "Changing power level from #{old} to #{new}.")
-    set_mscv(loop, mscv_setting(new))
+    Valves.set_open_percent(steam_gen.mscv, new)
     %Turbine{turbine | power_level: new}
   end
 
-  def max_power_level(%Turbine{loop: loop, secondary_capacity: capacity}) do
-    get_steam_outlet(loop)
+  def max_power_level(%Turbine{steam_gen: steam_gen, secondary_capacity: capacity}) do
+    steam_gen
+    |> SteamGen.get_outlet()
     |> Kernel./(10)
     |> round()
     |> Kernel.+(1)
     |> min(div(capacity, 10))
   end
 
-  def tick(%Turbine{loop: loop} = turbine) do
+  def get_generated_power(%Turbine{loop: loop}), do: Generator.get_power_kw(loop)
+
+  def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
     {steam_bypass, steam_axis} =
       step_axis(
         turbine.steam_axis,
-        get_steam_outlet(loop),
+        SteamGen.get_outlet(steam_gen),
         turbine.min_steam
       )
 
     {pressure_bypass, pressure_axis} =
       step_axis(
         turbine.pressure_axis,
-        get_pressure(loop),
+        SteamGen.get_pressure(steam_gen),
         @max_pressure
       )
 
@@ -111,7 +119,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
     if old != new do
       Logger.info(log_prefix(loop) <> "Changing bypass from #{old} to #{new} due to #{reason}.")
-      set_bypass(loop, new)
+      Valves.set_open_percent(steam_gen.bypass, new)
     end
 
     %Turbine{turbine | steam_axis: steam_axis, pressure_axis: pressure_axis, bypass: new}
@@ -124,28 +132,12 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     end
   end
 
-  defp mscv_setting(n) when n in @power_levels, do: n
-
-  defp get_steam_outlet(loop), do: API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
-  defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-
-  defp get_bypass(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL")
-  defp set_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
-
-  defp get_mscv(loop), do: API.get_float("MSCV_#{loop - 1}_OPENING_ACTUAL")
-  defp set_mscv(loop, value), do: API.put("MSCV_#{loop - 1}_OPENING_ORDERED", value)
-
   @module_name inspect(__MODULE__)
   defp log_prefix(loop) when loop in 1..3, do: "[#{@module_name}.L#{loop}] "
 
   defp axis_to_bypass(output), do: round(output * 50) + 50
   defp bypass_to_axis(bypass), do: (bypass - 50) / 50
 
-  defp mscv_to_power_level(0), do: 2
-  defp mscv_to_power_level(1), do: 2
   defp mscv_to_power_level(n) when n in @power_levels, do: n
-
-  defp get_capacity(type, loop) do
-    API.get_integer("COOLANT_#{type}_CIRCULATION_PUMP_#{loop - 1}_CAPACITY")
-  end
+  defp mscv_to_power_level(n), do: n |> max(@power_levels.first) |> min(@power_levels.last)
 end

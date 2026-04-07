@@ -5,12 +5,14 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   use Mix.Task
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
+  alias AutoNuke.TaskUI.ProgressBar.Config, as: PBConfig
 
-  @core_storage_tank_size 80_000
+  @core_pool API.Vessels.core_pool()
+  @storage_tank API.Vessels.core_pool_storage()
   # Start pumping once core pool storage is 25% full.
-  @min_core_storage_start @core_storage_tank_size * 0.25
+  @min_core_storage_start @storage_tank.capacity * 0.25
   # Stop pumping if it drops below 5% full.
-  @min_core_storage_stop @core_storage_tank_size * 0.05
+  @min_core_storage_stop @storage_tank.capacity * 0.05
 
   defmodule Tank do
     @enforce_keys [:name, :key, :valve, :valve_key]
@@ -31,9 +33,9 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   end
 
   defp fill_or_empty(target) when target >= 0.0 and target <= 100.0 do
-    {:ok, _} = Application.ensure_all_started([:req])
+    UI.init()
 
-    if target < get_pool_fill_percent() do
+    if target < API.Vessels.get_fill_percent(@core_pool) do
       empty(target)
     else
       fill_loop(target)
@@ -41,7 +43,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   end
 
   defp empty(target) do
-    AutoNuke.Tasks.Refill.refill(
+    UI.Refill.refill(
       pump_name: "Core Pool Pump",
       tank_description: "Pool Emptying",
       pump_get_active: fn -> get_pump_state() == 1 end,
@@ -55,21 +57,29 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   end
 
   defp fill_loop(target) do
+    check_core_storage_tank()
+
     try do
-      AutoNuke.Tasks.Refill.refill(
-        pre_check: &check_core_storage_tank/0,
-        pump_name: "Core Pool Pump",
-        tank_description: "Pool Filling",
-        pump_get_active: fn -> get_pump_state() == 3 end,
-        pump_set_enabled: fn
-          true -> set_pump("LOAD")
-          false -> set_pump("OFF")
-        end,
-        tank_get_level: &fill_check_get_percent/0,
-        target_level: target
+      UI.wait(
+        "Core Pool Pump",
+        "LOAD",
+        fn -> set_pump("LOAD") end
+      )
+
+      UI.ProgressBar.wait(
+        config: %PBConfig{PBConfig.percent() | right: target},
+        label: @core_pool.short_name,
+        current_fn: fn -> API.Vessels.get_fill_percent(@core_pool) end,
+        done_fn: &fill_check(&1, target)
       )
     catch
       :empty_tank -> :ok
+    after
+      UI.wait(
+        "Core Pool Pump",
+        "OFF",
+        fn -> set_pump("OFF") end
+      )
     end
 
     if target > get_pool_fill_percent() do
@@ -87,11 +97,11 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
     )
   end
 
-  defp fill_check_get_percent do
+  defp fill_check(percent, target) do
     if get_core_storage_fill() < @min_core_storage_stop do
-      throw(:empty_tank)
+      true
     else
-      get_pool_fill_percent()
+      percent >= target
     end
   end
 

@@ -6,14 +6,16 @@ defmodule AutoNuke.Ticker do
 
   # Track time in 200ms increments:
   @loop_ms 200
-  # Emit ticks every 5 loops (1 second):
-  @tick_loops 5
   # If paused, wait 50ms to check if unpaused:
   @pause_wait 50
 
-  # Net result: Eight ticks per in-game minute.
+  # Net result:
+  #  - Five ticks per in-game second.
+  #  - Eight in-game seconds per in-game minute.
+  #  - Thus, forty ticks per in-game minute.
   # (Knowing this may be important for some rate-of-change controllers.)
-  def ticks_per_minute, do: 8
+  def ticks_per_second, do: 5
+  def ticks_per_minute, do: 40
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)
@@ -23,20 +25,15 @@ defmodule AutoNuke.Ticker do
   def init(nil) do
     schedule_next()
     Logger.info(@log_prefix <> "Started ticking.")
-    {:ok, {0, @tick_loops}}
+    {:ok, 0}
   end
 
   @impl true
-  def handle_info(:tick, {counter, 0}) do
+  def handle_info(:tick, counter) do
+    Memoize.invalidate(AutoNuke.API)
     PubSub.publish(:ticker, {:tick, counter})
     schedule_next()
-    {:noreply, {counter + 1, @tick_loops}}
-  end
-
-  @impl true
-  def handle_info(:tick, {counter, loops}) when loops in 1..@tick_loops do
-    schedule_next()
-    {:noreply, {counter, loops - 1}}
+    {:noreply, counter + 1}
   end
 
   @impl true
@@ -45,7 +42,10 @@ defmodule AutoNuke.Ticker do
     {:noreply, state}
   end
 
-  defp get_sim_speed, do: AutoNuke.API.get_integer("GAME_SIM_SPEED")
+  defp get_sim_speed do
+    Memoize.invalidate(AutoNuke.API, :get_integer, ["GAME_SIM_SPEED"])
+    AutoNuke.API.get_integer("GAME_SIM_SPEED")
+  end
 
   defp schedule_next do
     {lag, speed} = :timer.tc(&get_sim_speed/0, :millisecond)

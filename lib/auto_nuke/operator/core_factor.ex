@@ -2,6 +2,9 @@ defmodule AutoNuke.Operator.CoreFactor do
   use GenServer
   require Logger
 
+  # Run on the first tick each second:
+  defguard is_my_tick(t) when rem(t, 5) == 0
+
   defmodule State do
     @enforce_keys [:target, :axis, :smoothed, :last_core_factor]
     defstruct(
@@ -114,6 +117,9 @@ defmodule AutoNuke.Operator.CoreFactor do
     Logger.info(@log_prefix <> "Cancelling drift.")
     {:reply, :ok, %State{state | drift: nil}}
   end
+
+  @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do

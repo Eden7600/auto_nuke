@@ -57,7 +57,7 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
     }
   end
 
-  def get_current_time, do: AutoNuke.API.get_integer("TIME_STAMP")
+  def get_current_time, do: AutoNuke.API.Misc.get_time_stamp()
 
   @minute 1
   @hour 60 * @minute

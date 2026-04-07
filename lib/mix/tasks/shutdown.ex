@@ -21,11 +21,8 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   def run([]) do
     node = ping_remote()
 
-    {:ok, _} = Application.ensure_all_started([:pubsub, :req])
+    UI.init()
     UI.log_to_file("startup.log")
-
-    {:ok, _} = PubSub.start_link()
-    {:ok, _} = AutoNuke.Ticker.start_link()
 
     Startup.enable_resistor_bank()
     open_breakers()
@@ -211,12 +208,13 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     UI.set("Internal Temperature", "COOL TO 100°C")
 
     initial = get_core_temp()
-    delta = (initial - 100) |> ceil()
+    target = 100
 
-    UI.progress_loop(
-      label: "Primary Temperature",
-      fetch: fn -> (initial - get_core_temp()) |> ceil() end,
-      max: delta
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(initial, target, "°C"),
+      label: "Core Temp",
+      current_fn: &get_core_temp/0,
+      done_fn: &(&1 <= target)
     )
 
     UI.wait("Status", "WAIT FOR BELOW CRITICAL MASS", fn ->
@@ -226,17 +224,10 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   defp stop_pressurizer do
     UI.console("Pressurizer")
+    API.Valves.pzr_cooling() |> UI.Valves.open()
+
     UI.set("Heating Power", "OFF")
     UI.set("Thermostat", "OFF")
-
-    valve = "Valvula_Pressurizer_Spray"
-
-    UI.set_wait(
-      "PZR Cooling Valve",
-      "OPEN",
-      fn -> get_actuator(valve) == "OPEN" end,
-      fn -> set_actuator(valve, "OPEN") end
-    )
 
     UI.wait("Core Pressure", "WAIT FOR 1 bar", fn ->
       API.get_float("CORE_PRESSURE") < 1.1
@@ -402,13 +393,4 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   defp set_secondary_pump(loop, v),
     do: API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", v)
-
-  defp valve_data(key) do
-    API.get_json("VALVE_PANEL_JSON")
-    |> Map.fetch!("valves")
-    |> Map.fetch!(key)
-  end
-
-  defp get_actuator(key), do: valve_data(key) |> Map.fetch!("Actuator")
-  defp set_actuator(key, action), do: API.put("VALVE_#{action}", key)
 end

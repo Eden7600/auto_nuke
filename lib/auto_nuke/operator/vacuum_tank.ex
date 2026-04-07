@@ -2,6 +2,9 @@ defmodule AutoNuke.Operator.VacuumTank do
   use GenServer
   require Logger
 
+  # Run on the fifth and final tick each second:
+  defguard is_my_tick(t) when rem(t, 5) == 4
+
   alias AutoNuke.ControlAxis
   alias AutoNuke.API
 
@@ -16,9 +19,14 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   @log_prefix "[#{inspect(__MODULE__)}] "
 
+  @retention_tank API.Vessels.retention_tank()
+  @steam_gens API.SteamGen.all()
+  @omsi API.Valves.omsi()
+  @smsi API.Valves.smsi()
+  @crv API.Valves.crv()
+
   # In pump mode, we try to keep the retention tank half full:
-  @tank_size 40000.0
-  @target_fill_percent 0.5
+  @target_fill_ratio 0.5
   # In CRV mode, we try to keep vacuum at 99% (as opposed to 99.9%):
   @target_vacuum_level 0.99
   # Vacuum level is a lot more precise than tank fill level,
@@ -31,8 +39,6 @@ defmodule AutoNuke.Operator.VacuumTank do
   @steam_high_mark 130
   # If running in CRV mode and steam drops below this (kg/min), switch to pump mode.
   @steam_low_mark 110
-
-  def tank_size, do: @tank_size
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -56,10 +62,13 @@ defmodule AutoNuke.Operator.VacuumTank do
     state = %State{axis: axis}
 
     PubSub.subscribe(self(), :ticker)
-    fill_level = get_fill_percent() |> Float.round(2)
+    fill_level = get_fill_ratio() |> Float.round(2)
     Logger.info(@log_prefix <> "Started with fill level of #{fill_level * 100}%.")
     {:ok, state}
   end
+
+  @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
@@ -109,12 +118,12 @@ defmodule AutoNuke.Operator.VacuumTank do
       get_crv_actual() > 0 ->
         state
 
-      !get_vacuum_pump_active() ->
+      !API.VacuumPump.get_active?() ->
         Logger.notice(@log_prefix <> "CRV closed, starting vacuum pump ...")
-        set_vacuum_pump(true)
+        API.VacuumPump.start()
         state
 
-      get_vacuum_level() < 0.999 ->
+      API.VacuumPump.get_vacuum_level() < 0.999 ->
         state
 
       true ->
@@ -125,9 +134,9 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   defp wait_for_switch(%State{mode: :crv, switching: true} = state) do
     cond do
-      get_vacuum_pump_active() ->
+      API.VacuumPump.get_active?() ->
         Logger.notice(@log_prefix <> "Steam is high: Disabling pump and switching to CRV...")
-        set_vacuum_pump(false)
+        API.VacuumPump.stop()
         state
 
       get_crv_ordered() < 100 ->
@@ -144,12 +153,12 @@ defmodule AutoNuke.Operator.VacuumTank do
     end
   end
 
-  defp get_control_metrics(:pump), do: {@target_fill_percent, get_fill_percent()}
+  defp get_control_metrics(:pump), do: {@target_fill_ratio, get_fill_ratio()}
 
   defp get_control_metrics(:crv),
     do: {
       @target_vacuum_level * @crv_target_factor,
-      get_vacuum_level() * @crv_target_factor
+      API.VacuumPump.get_vacuum_level() * @crv_target_factor
     }
 
   defp change_msi({old_omsi, old_smsi}, {new_omsi, new_smsi}) do
@@ -164,35 +173,22 @@ defmodule AutoNuke.Operator.VacuumTank do
     end
   end
 
-  defp get_fill_percent do
-    API.get_float("VACUUM_RETENTION_TANK_VOLUME") / @tank_size
-  end
+  defp get_fill_ratio, do: API.Vessels.get_fill_ratio(@retention_tank)
 
-  defp get_vacuum_level, do: API.get_float("CONDENSER_VACUUM")
-
-  @omsi "STEAM_EJECTOR_OPERATIONAL_MOTIVE_VALVE"
-  @smsi "STEAM_EJECTOR_STARTUP_MOTIVE_VALVE"
-  @crv "STEAM_EJECTOR_CONDENSER_RETURN_VALVE"
-
-  defp get_omsi, do: API.get_integer(@omsi <> "_ORDERED")
-  defp get_smsi, do: API.get_integer(@smsi <> "_ORDERED")
+  defp get_omsi, do: API.Valves.get_open_percent(@omsi)
+  defp get_smsi, do: API.Valves.get_open_percent(@smsi)
   defp get_msi, do: {get_omsi(), get_smsi()}
 
-  defp set_omsi(value) when is_integer(value), do: API.put(@omsi, value)
-  defp set_smsi(value) when is_integer(value), do: API.put(@smsi, value)
-  defp set_crv(value) when is_integer(value), do: API.put(@crv, value)
+  defp set_omsi(value) when is_integer(value), do: API.Valves.set_open_percent(@omsi, value)
+  defp set_smsi(value) when is_integer(value), do: API.Valves.set_open_percent(@smsi, value)
+  defp set_crv(value) when is_integer(value), do: API.Valves.set_open_percent(@crv, value)
 
-  defp get_crv_ordered, do: API.get_integer("#{@crv}_ORDERED")
-  defp get_crv_actual, do: API.get_integer("#{@crv}_ACTUAL")
-
-  @vacuum_pump "CONDENSER_VACUUM_PUMP_START_STOP"
-  defp set_vacuum_pump(true), do: API.put(@vacuum_pump, "START")
-  defp set_vacuum_pump(false), do: API.put(@vacuum_pump, "STOP")
-  defp get_vacuum_pump_active, do: API.get_boolean("CONDENSER_VACUUM_PUMP_ACTIVE")
+  defp get_crv_ordered, do: API.Valves.get_ordered_open_percent(@crv)
+  defp get_crv_actual, do: API.Valves.get_open_percent(@crv)
 
   defp get_total_steam do
-    0..2
-    |> Enum.map(fn loop -> API.get_float_or_nil("STEAM_GEN_#{loop}_OUTLET", 0) end)
+    @steam_gens
+    |> Enum.map(&API.SteamGen.get_outlet/1)
     |> Enum.sum()
   end
 

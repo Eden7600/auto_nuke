@@ -7,40 +7,40 @@ defmodule Mix.Tasks.AutoNuke.Valve do
 
   @base_valves %{
     # Core to primary pump
-    "A1" => "VALVULA_ENTRADA_NUCLEO_01",
-    "B1" => "VALVULA_ENTRADA_NUCLEO_02",
-    "C1" => "VALVULA_ENTRADA_NUCLEO_03",
+    "A1" => API.Valves.valve_a1(),
+    "B1" => API.Valves.valve_b1(),
+    "C1" => API.Valves.valve_c1(),
     # Steam generator return to core
-    "A2" => "VALVULA_SALIDA_NUCLEO_01",
-    "B2" => "VALVULA_SALIDA_NUCLEO_02",
-    "C2" => "VALVULA_SALIDA_NUCLEO_03",
+    "A2" => API.Valves.valve_a2(),
+    "B2" => API.Valves.valve_b2(),
+    "C2" => API.Valves.valve_c2(),
     # Primary pump to steam generator
-    "A3" => "VALVULA_ENTRE_BC_Y_EVA_01",
-    "B3" => "VALVULA_ENTRE_BC_Y_EVA_02",
-    "C3" => "VALVULA_ENTRE_BC_Y_EVA_03",
+    "A3" => API.Valves.valve_a3(),
+    "B3" => API.Valves.valve_b3(),
+    "C3" => API.Valves.valve_c3(),
     # Steam generator to turbine (MSCV)
-    "A4" => "VALVULA_ENTRADA_TURBINA_01",
-    "B4" => "VALVULA_ENTRADA_TURBINA_02",
-    "C4" => "VALVULA_ENTRADA_TURBINA_03",
+    "A4" => API.Valves.valve_a4(),
+    "B4" => API.Valves.valve_b4(),
+    "C4" => API.Valves.valve_c4(),
     # Turbine to condenser
-    "A5" => "VALVULA_ENTRADA_CONDENSADOR_01",
-    "B5" => "VALVULA_ENTRADA_CONDENSADOR_02",
-    "C5" => "VALVULA_ENTRADA_CONDENSADOR_03",
+    "A5" => API.Valves.valve_a5(),
+    "B5" => API.Valves.valve_b5(),
+    "C5" => API.Valves.valve_c5(),
     # Condenser to secondary pump
-    "A6" => "VALVULA_SALIDA_CONDENSADOR_01",
-    "B6" => "VALVULA_SALIDA_CONDENSADOR_02",
-    "C6" => "VALVULA_SALIDA_CONDENSADOR_03"
+    "A6" => API.Valves.valve_a6(),
+    "B6" => API.Valves.valve_b6(),
+    "C6" => API.Valves.valve_c6()
   }
 
   @other_valves %{
     # Other valves with actuators
-    "PZR COOLING" => "Valvula_Pressurizer_Spray",
-    "PZR VENT" => "Valvula_Pressurizer_Vent",
-    "RCV" => "Valvula_Descargar_REF",
-    "CST DRAIN" => "Valvula_Purgar_Coolant",
-    "TURBINE A VENT" => "VALVULA_VENT_TURBINA_01",
-    "TURBINE B VENT" => "VALVULA_VENT_TURBINA_02",
-    "TURBINE C VENT" => "VALVULA_VENT_TURBINA_03"
+    "PZR COOLING" => API.Valves.pzr_cooling(),
+    "PZR VENT" => API.Valves.pzr_vent(),
+    "RCV" => API.Valves.rcv(),
+    "CST DRAIN" => API.Valves.cst_drain(),
+    "TURBINE A VENT" => API.Valves.turbine_vent(1),
+    "TURBINE B VENT" => API.Valves.turbine_vent(2),
+    "TURBINE C VENT" => API.Valves.turbine_vent(3)
   }
 
   @valves Map.merge(@base_valves, @other_valves)
@@ -70,72 +70,63 @@ defmodule Mix.Tasks.AutoNuke.Valve do
   """
 
   def run([name, action]) do
-    name = name |> String.replace(~r{[^a-zA-Z0-9*]+}, " ") |> String.upcase()
-
-    run_group(name, action) || run_valve(name, action) || raise "Unknown valve or group: #{name}"
+    find_valves(name)
+    |> actuate(action)
   end
 
-  defp run_group(name, action) do
-    case Map.fetch(@groups, name) do
-      {:ok, names} ->
-        names |> Enum.each(&run_valve(&1, action))
-        true
+  defp find_valves(name) do
+    name =
+      name
+      |> String.replace(~r{[^a-zA-Z0-9*]+}, " ")
+      |> String.upcase()
 
-      :error ->
-        false
+    cond do
+      group = Map.get(@groups, name) -> group |> Enum.map(&Map.fetch!(@valves, &1))
+      valve = Map.get(@valves, name) -> [valve]
+      true -> Mix.raise("Unknown valve or group: #{name}")
     end
   end
 
-  defp run_valve(name, action) do
-    case Map.fetch(@valves, name) do
-      {:ok, key} ->
-        case action do
-          "open" -> do_valve(name, key, "OPEN", &get_open_percent/1)
-          "close" -> do_valve(name, key, "CLOSE", &get_close_percent/1)
-        end
-
-        true
-
-      :error ->
-        false
-    end
-  end
-
-  defp do_valve(name, key, action, fetch_fn) do
-    {:ok, _} = Application.ensure_all_started([:req])
-
-    UI.set_wait(
-      "Valve #{name} Actuator",
-      action,
-      fn -> get_actuator(key) == action end,
-      fn -> set_actuator(key, action) end
-    )
-
-    UI.progress_loop(
-      label: "Valve #{name}",
-      fetch: fn -> fetch_fn.(key) end,
-      max: 100
-    )
-
-    UI.set_wait(
-      "Valve #{name} Actuator",
-      "OFF",
-      fn -> get_actuator(key) == "OFF" end,
-      fn -> set_actuator(key, "OFF") end
+  defp actuate(valves, "open") do
+    do_actuate(
+      valves,
+      "OPEN",
+      UI.ProgressBar.Config.percent(),
+      fn v -> v >= 100 end
     )
   end
 
-  defp valve_data(key) do
-    API.get_json("VALVE_PANEL_JSON")
-    |> Map.fetch!("valves")
-    |> Map.fetch!(key)
+  defp actuate(valves, "close") do
+    do_actuate(
+      valves,
+      "CLOSE",
+      UI.ProgressBar.Config.reverse_percent(),
+      fn v -> v <= 0 end
+    )
   end
 
-  defp get_actuator(key), do: valve_data(key) |> Map.fetch!("Actuator")
-  defp get_open_percent(key), do: valve_data(key) |> Map.fetch!("Value") |> round()
-  defp get_close_percent(key), do: 100 - get_open_percent(key)
+  defp do_actuate(valves, action, pb_config, done_fn) do
+    UI.init()
 
-  defp set_actuator(key, action) do
-    API.put("VALVE_#{action}", key)
+    label =
+      case valves do
+        [v] -> v.short_name
+        list -> "#{Enum.count(list)} valves"
+      end
+
+    valves |> Enum.each(&UI.Valves.set_actuator(&1, action))
+
+    UI.ProgressBar.wait(
+      config: pb_config,
+      label: label,
+      current_fn: fn ->
+        valves
+        |> Enum.map(&API.Valves.get_open_percent/1)
+        |> Statistex.average()
+      end,
+      done_fn: done_fn
+    )
+
+    valves |> Enum.each(&UI.Valves.set_actuator(&1, "OFF"))
   end
 end

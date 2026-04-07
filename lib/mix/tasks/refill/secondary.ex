@@ -6,53 +6,52 @@ defmodule Mix.Tasks.AutoNuke.Refill.Secondary do
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
 
-  @tank_size 600_000
-  @gauge_factor 100
-  @max div(@tank_size, @gauge_factor)
+  @max API.Vessels.steam_generator(1) |> UI.Vessels.gauge_capacity()
 
-  def run([loop, target]) do
+  def run([target | loops]) do
     target = target |> String.to_integer()
-    loop = UI.parse_loop(loop)
 
-    refill(loop, target)
+    UI.init()
+
+    loops
+    |> Enum.map(&UI.parse_loop/1)
+    |> Enum.map(&API.SteamGen.for_loop/1)
+    |> refill(target)
   end
 
-  def refill(loop, target) when target >= 0 and target < @max do
-    AutoNuke.Tasks.Refill.refill(
-      pump_name: "L#{loop} Secondary Pump",
-      tank_description: "L#{loop} Coolant Volume",
-      pump_get_active: fn -> is_pump_active?(loop) end,
-      pump_set_enabled: &set_pump_enabled(loop, &1),
-      tank_get_level: fn -> get_loop_volume(loop, target) end,
-      target_level: target
+  def refill(steam_gens, target) when target >= 0 and target < @max do
+    steam_gens |> Enum.each(&UI.Pumps.start(&1.pump))
+
+    label =
+      case steam_gens do
+        [sg] -> "SG 0#{sg.loop}"
+        more -> "SGs #{more |> Enum.map(&"0#{&1.loop}") |> Enum.join("+")}"
+      end
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.percent(),
+      label: label,
+      current_fn: fn ->
+        steam_gens
+        |> Enum.map(&adjust_and_percent(&1, target))
+        |> Statistex.average()
+      end,
+      done_fn: &(&1 >= 100)
     )
   end
 
-  defp is_pump_active?(loop), do: get_speed(loop) >= 1
-  defp set_pump_enabled(loop, true), do: set_speed(loop, 1)
-  defp set_pump_enabled(loop, false), do: set_speed(loop, 0)
+  defp adjust_and_percent(steam_gen, target) do
+    gauge = API.Vessels.get_fill_gauge(steam_gen.vessel)
 
-  defp get_speed(loop) do
-    API.get_float("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_SPEED")
-  end
+    # Set pump speed to half of remaining gauge level:
+    (target - gauge)
+    |> Kernel./(2)
+    |> ceil()
+    |> min(100)
+    |> then(&API.Pumps.set_speed(steam_gen.pump, &1))
 
-  defp set_speed(loop, value) do
-    API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", value)
-  end
-
-  defp get_loop_volume(loop, target) do
-    volume =
-      API.get_float("COOLANT_SEC_#{loop - 1}_LIQUID_VOLUME")
-      |> floor()
-      |> div(@gauge_factor)
-
-    pump_speed =
-      (target - volume)
-      |> Kernel./(2)
-      |> ceil()
-      |> min(100)
-
-    set_speed(loop, pump_speed)
-    volume
+    # Return percent completion:
+    (gauge / target * 100)
+    |> min(100.0)
   end
 end

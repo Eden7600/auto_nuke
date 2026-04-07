@@ -2,6 +2,9 @@ defmodule AutoNuke.Operator.CondenserCooling do
   use GenServer
   require Logger
 
+  # Run on the fifth and final tick each second:
+  defguard is_my_tick(t) when rem(t, 5) == 4
+
   defmodule State do
     @enforce_keys [:speed, :last_temp, :last_direction, :probe_timer]
     defstruct(@enforce_keys)
@@ -10,6 +13,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
   alias AutoNuke.API
 
   @log_prefix "[#{inspect(__MODULE__)}] "
+  @condenser API.Vessels.condenser()
+  @pump API.Pumps.condenser_cooling()
 
   # Range of allowed speeds.
   @speeds 10..100
@@ -41,6 +46,9 @@ defmodule AutoNuke.Operator.CondenserCooling do
     Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pump at #{speed}.")
     {:ok, state}
   end
+
+  @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
@@ -120,9 +128,9 @@ defmodule AutoNuke.Operator.CondenserCooling do
     %State{state | speed: new, probe_timer: @wait_while_probing}
   end
 
-  defp get_temperature, do: API.get_float("CONDENSER_TEMPERATURE")
-  defp get_ambient, do: API.get_float("AMBIENT_TEMPERATURE")
+  defp get_temperature, do: API.Vessels.get_temperature(@condenser)
+  defp get_ambient, do: API.Misc.ambient_temperature()
 
-  defp get_pump_speed, do: API.get_float("CONDENSER_CIRCULATION_PUMP_SPEED") |> round()
-  defp set_pump_speed(v), do: API.put("CONDENSER_CIRCULATION_PUMP_ORDERED_SPEED", v)
+  defp get_pump_speed, do: API.Pumps.get_actual_speed(@pump)
+  defp set_pump_speed(v), do: API.Pumps.set_speed(@pump, v)
 end
