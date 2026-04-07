@@ -98,8 +98,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
   end
 
   defp backoff(%State{} = state, amount, temp) do
-    old = state.speed
-    new = (get_pump_speed() + amount) |> min(@speeds.last)
+    old = get_pump_speed()
+    new = (old + amount) |> min(@speeds.last)
 
     Logger.info(
       @log_prefix <>
