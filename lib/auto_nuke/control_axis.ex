@@ -22,7 +22,7 @@ defmodule AutoNuke.ControlAxis do
     %__MODULE__{
       pidc: pidc,
       deadzone: deadzone,
-      to_value_fn: t_v_fn,
+      to_value_fn: wrap_value_fn(t_v_fn),
       last_value: initial
     }
   end
@@ -32,7 +32,7 @@ defmodule AutoNuke.ControlAxis do
     pidc = PIDControl.step(axis.pidc, target, measurement)
 
     old_value = axis.last_value
-    new_value = axis.to_value_fn.(pidc.output)
+    new_value = axis.to_value_fn.(pidc.output, old_value)
     axis = %__MODULE__{axis | pidc: pidc, last_value: new_value}
 
     if old_value != new_value do
@@ -63,4 +63,8 @@ defmodule AutoNuke.ControlAxis do
       measurement
     end
   end
+
+  # Allow axis_to_value functions to use args (new, old) or just (new).
+  defp wrap_value_fn(fun) when is_function(fun, 2), do: fun
+  defp wrap_value_fn(fun) when is_function(fun, 1), do: fn v, _ -> fun.(v) end
 end

@@ -28,6 +28,16 @@ defmodule AutoNuke.Operator.CoreFactor do
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
+  # To try to limit how many 0.1% rod changes we make, we apply a deadband
+  # around each rod setting.
+  #
+  # Going from 44.2% to 44.3% would normally happen the moment you hit 44.25%
+  # or higher.  To limit this, we require that you hit 44.27% or higher to go
+  # up, and then drop to 44.23% or lower to go down.
+  #
+  # This means our deadband is 0.07% in either direction.
+  @rods_deadband 0.07
+
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -65,7 +75,7 @@ defmodule AutoNuke.Operator.CoreFactor do
         kp: 0.02,
         ki: 0.002,
         deadzone: 0.01,
-        to_value_fn: &axis_to_rods/1,
+        to_value_fn: &axis_to_rods/2,
         offset: rods |> rods_to_axis(),
         initial_value: rods
       )
@@ -188,7 +198,21 @@ defmodule AutoNuke.Operator.CoreFactor do
   defp set_rods(value) when value >= 0.0 and value <= 100.0,
     do: API.put("RODS_ALL_POS_ORDERED", value)
 
-  defp axis_to_rods(output), do: (50 - output * 50) |> Float.round(1)
+  defp axis_to_rods(output, old_rods) do
+    # Map -1.0 to 100% rods and +1.0 to 0% rods.
+    new_rods = 50 - output * 50
+
+    # Apply a deadband around the prior value.
+    upper = old_rods + @rods_deadband
+    lower = old_rods - @rods_deadband
+
+    if new_rods >= upper || new_rods <= lower do
+      Float.round(new_rods, 1)
+    else
+      old_rods
+    end
+  end
+
   defp rods_to_axis(rods), do: (50 - rods) / 50
 
   defp maybe_clamp(axis, ordered) do
