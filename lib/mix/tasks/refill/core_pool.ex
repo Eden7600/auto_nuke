@@ -90,6 +90,14 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   defp check_core_storage_tank do
     min = round(@min_core_storage_start / 1000)
 
+    if get_pump_state() != mode_number("OFF") do
+      UI.wait(
+        "Core Pool Pump",
+        "OFF",
+        fn -> set_pump("OFF") end
+      )
+    end
+
     UI.wait(
       "Primary Core Storage Tank",
       "FILL TO #{min} kL",
@@ -123,13 +131,11 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   defp get_pump_state, do: API.get_integer("CORE_POOL_PUMP")
 
   defp set_pump(mode) do
-    API.put("CORE_POOL_PUMP", mode)
-    Process.sleep(100)
-
     if get_pump_state() == mode_number(mode) do
-      :ok
+      true
     else
-      set_pump(mode)
+      API.put("CORE_POOL_PUMP", mode)
+      false
     end
   end
 

@@ -503,8 +503,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       send(me, {:started, name})
 
       ControlAxis.new(
-        kp: -0.1,
-        ki: -0.01,
+        kp: -0.05,
+        ki: -0.005,
         deadzone: 0.5,
         to_value_fn: &axis_to_mscv(loop_count, &1),
         offset: -1.0,

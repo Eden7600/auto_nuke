@@ -55,7 +55,7 @@ defmodule Mix.Tasks.AutoNuke.Valve do
   @moduledoc """
   Opens and closes valves with electronic actuators.
 
-  Usage: `mix auto_nuke.valve <valve> <open|close>`
+  Usage: `mix auto_nuke.valve <open|close> <valves or groups>`
 
   Possible valves:
 
@@ -69,8 +69,10 @@ defmodule Mix.Tasks.AutoNuke.Valve do
   #{@groups |> Enum.map(fn {k, v} -> "- `#{k}` — #{v |> Enum.join(", ")}" end) |> Enum.join("\n")}
   """
 
-  def run([name, action]) do
-    find_valves(name)
+  def run([action | names]) do
+    names
+    |> Enum.flat_map(&find_valves/1)
+    |> Enum.uniq()
     |> actuate(action)
   end
 
