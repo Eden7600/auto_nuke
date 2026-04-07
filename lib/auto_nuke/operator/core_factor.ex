@@ -77,6 +77,7 @@ defmodule AutoNuke.Operator.CoreFactor do
         ki: 0.002,
         deadzone: 0.01,
         to_value_fn: &axis_to_rods/2,
+        to_value_state: rods,
         offset: rods |> rods_to_axis(),
         initial_value: rods
       )
@@ -212,6 +213,9 @@ defmodule AutoNuke.Operator.CoreFactor do
     else
       old_rods
     end
+    |> then(fn value ->
+      {:ok, value, value}
+    end)
   end
 
   defp rods_to_axis(rods), do: (50 - rods) / 50

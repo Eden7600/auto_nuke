@@ -1,5 +1,5 @@
 defmodule AutoNuke.ControlAxis do
-  @enforce_keys [:pidc, :deadzone, :to_value_fn, :last_value]
+  @enforce_keys [:pidc, :deadzone, :to_value_fn, :to_value_state, :last_value]
   defstruct(@enforce_keys)
   alias __MODULE__
 
@@ -8,6 +8,7 @@ defmodule AutoNuke.ControlAxis do
     {kd, opts} = Keyword.pop(opts, :kd, 0)
     {ki, opts} = Keyword.pop(opts, :ki, 0)
     {t_v_fn, opts} = Keyword.pop(opts, :to_value_fn, &Function.identity/1)
+    {t_v_state, opts} = Keyword.pop(opts, :to_value_state)
     {offset, opts} = Keyword.pop(opts, :offset, 0.0)
     {deadzone, opts} = Keyword.pop(opts, :deadzone, 0.0)
     {initial, opts} = Keyword.pop(opts, :initial_value, nil)
@@ -23,8 +24,13 @@ defmodule AutoNuke.ControlAxis do
       pidc: pidc,
       deadzone: deadzone,
       to_value_fn: wrap_value_fn(t_v_fn),
+      to_value_state: t_v_state,
       last_value: initial
     }
+  end
+
+  def set_state(%ControlAxis{} = axis, new_state) do
+    %ControlAxis{axis | to_value_state: new_state}
   end
 
   def step(%ControlAxis{} = axis, target, measurement) do
@@ -32,8 +38,9 @@ defmodule AutoNuke.ControlAxis do
     pidc = PIDControl.step(axis.pidc, target, measurement)
 
     old_value = axis.last_value
-    new_value = axis.to_value_fn.(pidc.output, old_value)
-    axis = %__MODULE__{axis | pidc: pidc, last_value: new_value}
+    old_v_state = axis.to_value_state
+    {:ok, new_value, new_v_state} = axis.to_value_fn.(pidc.output, old_v_state)
+    axis = %__MODULE__{axis | pidc: pidc, last_value: new_value, to_value_state: new_v_state}
 
     if old_value != new_value do
       {:changed, axis, new_value, old_value}
@@ -66,5 +73,8 @@ defmodule AutoNuke.ControlAxis do
 
   # Allow axis_to_value functions to use args (new, old) or just (new).
   defp wrap_value_fn(fun) when is_function(fun, 2), do: fun
-  defp wrap_value_fn(fun) when is_function(fun, 1), do: fn v, _ -> fun.(v) end
+
+  defp wrap_value_fn(fun) when is_function(fun, 1) do
+    fn value, state -> {:ok, fun.(value), state} end
+  end
 end
