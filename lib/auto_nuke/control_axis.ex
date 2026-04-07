@@ -42,6 +42,11 @@ defmodule AutoNuke.ControlAxis do
     %ControlAxis{axis | to_value_state: new_state}
   end
 
+  def peek(%ControlAxis{} = axis) do
+    {:ok, value, _} = axis.to_value_fn.(axis.pidc.output, axis.to_value_state)
+    value
+  end
+
   def step(%ControlAxis{} = axis, target, measurement) do
     measurement = apply_deadzone(axis.deadzone, target, measurement)
     pidc = PIDControl.step(axis.pidc, target, measurement)

@@ -10,11 +10,12 @@ defmodule AutoNuke.Operator.VacuumTank do
   alias AutoNuke.API
 
   defmodule State do
-    @enforce_keys [:axis]
+    @enforce_keys [:pump_axis, :crv_axis]
     defstruct(
       mode: :pump,
       switching: true,
-      axis: nil
+      pump_axis: nil,
+      crv_axis: nil
     )
   end
 
@@ -28,13 +29,8 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   # In pump mode, we try to keep the retention tank half full:
   @target_fill_ratio 0.5
-  # In CRV mode, we try to keep vacuum at 99% (as opposed to 99.9%):
-  @target_vacuum_level 0.99
-  # Vacuum level is a lot more precise than tank fill level,
-  # so to keep all the AxisController parameters the same
-  # (especially deadzone), we scale up our current and target
-  # vacuum level by an order of magnitude.
-  @crv_target_factor 10
+  # In CRV mode, we try to keep vacuum at 99.5% (as opposed to 99.9%):
+  @target_vacuum_level 0.995
 
   # If running in pump mode and steam climbs past this (kg/min), switch to CRV mode.
   @steam_high_mark 130
@@ -50,21 +46,34 @@ defmodule AutoNuke.Operator.VacuumTank do
   def init(nil) do
     msi = get_msi()
 
-    axis =
+    pump_axis =
       ControlAxis.new(
         kp: 1,
         ki: 0.1,
-        deadzone: 0.01,
+        kd: 0.2,
+        deadzone: 0.005,
         to_value_fn: &axis_to_msi/1,
+        to_value_state: msi,
         offset: msi |> msi_to_axis(),
         initial_value: msi
       )
 
-    state = %State{axis: axis}
+    crv_axis =
+      ControlAxis.new(
+        kp: 10,
+        ki: 1,
+        deadzone: 0.001,
+        to_value_fn: &axis_to_msi/1,
+        to_value_state: msi,
+        offset: msi |> msi_to_axis(),
+        initial_value: msi
+      )
+
+    state = %State{pump_axis: pump_axis, crv_axis: crv_axis}
 
     PubSub.subscribe(self(), :ticker)
-    fill_level = get_fill_ratio() |> Float.round(2)
-    Logger.info(@log_prefix <> "Started with fill level of #{fill_level * 100}%.")
+    filled = API.Vessels.get_fill_percent(@retention_tank) |> Float.round(1)
+    Logger.info(@log_prefix <> "Started with fill level of #{filled}%.")
     {:ok, state}
   end
 
@@ -78,9 +87,9 @@ defmodule AutoNuke.Operator.VacuumTank do
       |> maybe_change_mode()
       |> wait_for_switch()
 
-    {target, current} = get_control_metrics(state.mode)
+    {axis, target, current} = get_control_metrics(state)
 
-    case ControlAxis.step(state.axis, target, current) do
+    case ControlAxis.step(axis, target, current) do
       {:changed, axis, new, old} ->
         change_msi(old, new)
         axis
@@ -88,11 +97,20 @@ defmodule AutoNuke.Operator.VacuumTank do
       {:unchanged, axis, _old_value} ->
         axis
     end
-    |> then(fn axis -> {:noreply, %State{state | axis: axis}} end)
+    |> then(fn axis ->
+      case state.mode do
+        :pump -> {:noreply, %State{state | pump_axis: axis}}
+        :crv -> {:noreply, %State{state | crv_axis: axis}}
+      end
+    end)
   end
 
   defp maybe_change_mode(%State{mode: :pump} = state) do
     if get_total_steam() > @steam_high_mark do
+      old = state.pump_axis |> ControlAxis.peek()
+      new = state.crv_axis |> ControlAxis.peek()
+      change_msi(old, new)
+
       %State{state | mode: :crv, switching: true}
     else
       state
@@ -101,6 +119,10 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   defp maybe_change_mode(%State{mode: :crv} = state) do
     if get_total_steam() < @steam_low_mark do
+      old = state.crv_axis |> ControlAxis.peek()
+      new = state.pump_axis |> ControlAxis.peek()
+      change_msi(old, new)
+
       %State{state | mode: :pump, switching: true}
     else
       state
@@ -154,34 +176,24 @@ defmodule AutoNuke.Operator.VacuumTank do
     end
   end
 
-  defp get_control_metrics(:pump), do: {@target_fill_ratio, get_fill_ratio()}
+  defp get_control_metrics(%State{mode: :pump, pump_axis: axis}),
+    do: {axis, @target_fill_ratio, get_fill_ratio()}
 
-  defp get_control_metrics(:crv),
-    do: {
-      @target_vacuum_level * @crv_target_factor,
-      API.VacuumPump.get_vacuum_level() * @crv_target_factor
-    }
+  defp get_control_metrics(%State{mode: :crv, crv_axis: axis}),
+    do: {axis, @target_vacuum_level, API.VacuumPump.get_vacuum_level()}
 
-  defp change_msi({old_omsi, old_smsi}, {new_omsi, new_smsi}) do
-    change_xmsi("OMSI", old_omsi, new_omsi, &set_omsi/1)
-    change_xmsi("SMSI", old_smsi, new_smsi, &set_smsi/1)
-  end
-
-  defp change_xmsi(name, old, new, set_fn) do
-    if old != new do
-      Logger.info(@log_prefix <> "Changing #{name} from #{old} to #{new}.")
-      set_fn.(new)
-    end
+  defp change_msi(old, new) do
+    Logger.info(@log_prefix <> "Changing xMSI from #{old} to #{new}.")
+    API.Valves.set_open_percent(@omsi, new)
+    API.Valves.set_open_percent(@smsi, new)
   end
 
   defp get_fill_ratio, do: API.Vessels.get_fill_ratio(@retention_tank)
 
   defp get_omsi, do: API.Valves.get_open_percent(@omsi)
   defp get_smsi, do: API.Valves.get_open_percent(@smsi)
-  defp get_msi, do: {get_omsi(), get_smsi()}
+  defp get_msi, do: round(get_omsi() + get_smsi()) |> div(2)
 
-  defp set_omsi(value) when is_integer(value), do: API.Valves.set_open_percent(@omsi, value)
-  defp set_smsi(value) when is_integer(value), do: API.Valves.set_open_percent(@smsi, value)
   defp set_crv(value) when is_integer(value), do: API.Valves.set_open_percent(@crv, value)
 
   defp get_crv_ordered, do: API.Valves.get_ordered_open_percent(@crv)
@@ -193,14 +205,11 @@ defmodule AutoNuke.Operator.VacuumTank do
     |> Enum.sum()
   end
 
-  defp msi_to_axis({omsi, smsi}) do
-    (omsi + smsi - 100) / 100.0
-  end
+  defp msi_to_axis(msi), do: (msi - 50) / 50.0
 
   defp axis_to_msi(output) do
-    value = 100 + round(output * 100)
-    omsi = min(value, 100)
-    smsi = max(value - 100, 0)
-    {omsi, smsi}
+    # Map -1.0 to 0% and +1.0 to 100%.
+    (50 + output * 50)
+    |> round()
   end
 end
