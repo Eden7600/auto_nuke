@@ -3,7 +3,8 @@ defmodule AutoNuke.Operator.VacuumTank do
   require Logger
 
   # Run on the fifth and final tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 4
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 4
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API

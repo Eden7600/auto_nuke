@@ -3,7 +3,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
   require Logger
 
   # Run on the fifth and final tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 4
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 4
 
   defmodule State do
     @enforce_keys [:speed, :last_temp, :last_direction, :probe_timer]
@@ -21,9 +22,9 @@ defmodule AutoNuke.Operator.CondenserCooling do
   # Violation threshold is 10°C above ambient.
   @above_ambient 10.0
   # Wait 30 in-game minutes after a violation to begin probing lower speeds:
-  @wait_after_violation 30 * AutoNuke.Ticker.ticks_per_minute()
+  @wait_after_violation 30 * AutoNuke.Ticker.seconds_per_minute()
   # While probing, wait 10 in-game minutes per 1% speed drop:
-  @wait_while_probing 10 * AutoNuke.Ticker.ticks_per_minute()
+  @wait_while_probing 10 * AutoNuke.Ticker.seconds_per_minute()
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)

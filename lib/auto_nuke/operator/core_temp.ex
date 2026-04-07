@@ -3,7 +3,8 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   # Run on the second tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 1
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 1
 
   defmodule State do
     @enforce_keys [:pump_speed, :smoothed_temp]
@@ -23,7 +24,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   @temp_min 320
   @temp_max 400
   # Use the average temperature from the last five in-game minutes.
-  @temp_smoothing AutoNuke.Ticker.ticks_per_minute() * 5
+  @temp_smoothing AutoNuke.Ticker.seconds_per_minute() * 5
 
   @pumps API.Pumps.all_primary()
   @core API.Vessels.core_vessel()

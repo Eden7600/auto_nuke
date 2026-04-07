@@ -3,7 +3,8 @@ defmodule AutoNuke.Operator.CoreFactor do
   require Logger
 
   # Run on the first tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 0
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 0
 
   defmodule State do
     @enforce_keys [:target, :axis, :smoothed, :last_core_factor]
@@ -24,7 +25,7 @@ defmodule AutoNuke.Operator.CoreFactor do
   @log_prefix "[#{inspect(__MODULE__)}] "
 
   # Average the core factor over the past minute:
-  @core_factor_smoothing AutoNuke.Ticker.ticks_per_minute()
+  @core_factor_smoothing AutoNuke.Ticker.seconds_per_minute()
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 

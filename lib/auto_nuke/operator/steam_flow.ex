@@ -2,8 +2,9 @@ defmodule AutoNuke.Operator.SteamFlow do
   use GenServer
   require Logger
 
-  # Run on the third tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 2
+  # Run on the fifth and final tick each second:
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 2
 
   alias AutoNuke.Smoother
   alias AutoNuke.Operator.SteamFlow.Turbine

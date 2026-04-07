@@ -12,10 +12,8 @@ defmodule AutoNuke.Ticker do
   # Net result:
   #  - Five ticks per in-game second.
   #  - Eight in-game seconds per in-game minute.
-  #  - Thus, forty ticks per in-game minute.
-  # (Knowing this may be important for some rate-of-change controllers.)
   def ticks_per_second, do: 5
-  def ticks_per_minute, do: 40
+  def seconds_per_minute, do: 8
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, nil, opts)

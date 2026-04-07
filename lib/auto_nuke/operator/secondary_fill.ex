@@ -3,7 +3,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
   require Logger
 
   # Run on the fourth tick each second:
-  defguard is_my_tick(t) when rem(t, 5) == 3
+  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
+  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 3
 
   defmodule State do
     @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity]
