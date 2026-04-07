@@ -12,12 +12,21 @@ defmodule AutoNuke.ControlAxis do
     {offset, opts} = Keyword.pop(opts, :offset, 0.0)
     {deadzone, opts} = Keyword.pop(opts, :deadzone, 0.0)
     {initial, opts} = Keyword.pop(opts, :initial_value, nil)
+    {zero_d, opts} = Keyword.pop(opts, :zero_d, true)
 
     unless Enum.empty?(opts) do
       raise "Unknown options for #{__MODULE__}.new: #{Keyword.keys(opts) |> inspect()}"
     end
 
-    %PIDControl{} = pidc = PIDControl.new(kp: kp, kd: kd, ki: ki)
+    %PIDControl{} =
+      pidc =
+      PIDControl.new(
+        kp: kp,
+        kd: kd,
+        ki: ki,
+        zero_d_on_set_point_change: zero_d
+      )
+
     pidc = %PIDControl{pidc | i: offset}
 
     %__MODULE__{
