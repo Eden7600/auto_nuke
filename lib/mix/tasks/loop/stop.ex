@@ -5,6 +5,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   use Mix.Task
   require Logger
   alias AutoNuke.API
+  alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator.SteamFlow
   alias Mix.Tasks.AutoNuke.Startup
@@ -12,21 +13,19 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   def run([loop]) do
     loop
     |> UI.parse_loop()
-    |> startup()
+    |> stop()
   end
 
   @loop_emoji "\u{1F501}"
 
-  def startup(loop) do
+  def stop(loop) do
     remote_node = ping_remote()
     steam_flow_pid = {SteamFlow, remote_node}
+    steam_gen = SteamGen.for_loop(loop)
 
     UI.init()
     IO.puts("#{@loop_emoji} Stopping loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
-
-    {:ok, _} = PubSub.start_link()
-    {:ok, _} = AutoNuke.Ticker.start_link()
 
     Startup.enable_resistor_bank()
 
@@ -46,39 +45,44 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     UI.console("Generation & Distribution")
 
     UI.console("Generation & Distribution")
-    UI.Valves.set({:bypass, loop}, 100)
+    steam_gen.bypass |> UI.Valves.set(100, wait: false)
 
     UI.console("Steam Generator")
-    UI.Valves.set({:mscv, loop}, 0)
+    steam_gen.mscv |> UI.Valves.set(0, wait: false)
 
     UI.console("Coolant System")
-
-    UI.wait(
-      "Circulation Pump 0#{loop}",
-      "OFF",
-      fn -> API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_SPEED") == 0 end
-    )
+    API.Pumps.primary(loop) |> UI.Pumps.stop()
 
     UI.console("Steam Generator")
 
     UI.set_wait(
       "Pressure Relief Vent 0#{loop}",
       "OPEN",
-      fn -> get_vent_open?(loop) end,
-      fn -> set_vent_open(loop, true) end
+      fn -> SteamGen.get_vent_open?(steam_gen) end,
+      fn -> SteamGen.set_vent_open(steam_gen, true) end
     )
 
-    UI.wait(
-      "Generator 0#{loop} Pressure",
-      "WAIT FOR 1 BAR",
-      fn -> get_pressure(loop) == 1 end
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(70, 1, " bar", 1),
+      label: "Pressure",
+      current_fn: fn -> SteamGen.get_pressure(steam_gen) end,
+      done_fn: &(&1 < 1.01)
+    )
+
+    temp = SteamGen.get_temperature(steam_gen)
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(max(temp, 100), 50, "°C", 1),
+      label: "Temperature",
+      current_fn: fn -> SteamGen.get_temperature(steam_gen) end,
+      done_fn: &(&1 <= 50)
     )
 
     UI.set_wait(
       "Pressure Relief Vent 0#{loop}",
       "SHUT",
-      fn -> !get_vent_open?(loop) end,
-      fn -> set_vent_open(loop, false) end
+      fn -> !SteamGen.get_vent_open?(steam_gen) end,
+      fn -> SteamGen.set_vent_open(steam_gen, false) end
     )
   end
 
@@ -99,8 +103,4 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
         end
     end)
   end
-
-  defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-  defp get_vent_open?(loop), do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
-  defp set_vent_open(loop, open), do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
 end
