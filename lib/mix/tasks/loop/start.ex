@@ -5,7 +5,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   use Mix.Task
   require Logger
   alias AutoNuke.TaskUI, as: UI
-  alias AutoNuke.Operator.SteamFlow
+  alias AutoNuke.Operator.{SteamFlow, CoreTemp}
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -19,6 +19,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   def startup(loop) do
     remote_node = ping_remote()
     steam_flow_pid = {SteamFlow, remote_node}
+    core_temp_pid = {CoreTemp, remote_node}
 
     if loop in SteamFlow.get_loops(steam_flow_pid) do
       Mix.raise("Loop #{loop} is already active.")
@@ -28,12 +29,9 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     IO.puts("#{@loop_emoji} Starting loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
 
-    {:ok, _} = PubSub.start_link()
-    {:ok, _} = AutoNuke.Ticker.start_link()
-
     Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
-    Startup.start_primary_circulation([loop])
+    Startup.start_primary_circulation([loop], CoreTemp.get_speed(core_temp_pid))
     Startup.start_turbine([loop])
     Startup.connect_to_grid([loop], false)
 

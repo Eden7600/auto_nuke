@@ -62,7 +62,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     test_control_rods()
 
     start_pressurizer()
-    start_primary_circulation(loops)
+    start_primary_circulation(loops, AutoNuke.Operator.CoreTemp.min_speed())
     if using_boron?(), do: begin_injecting_boron()
     start_condenser()
     open_steam_valves(loops)
@@ -184,12 +184,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  def start_primary_circulation(loops) do
+  def start_primary_circulation(loops, speed) do
     UI.console("Coolant System")
 
     pumps = loops |> Enum.map(&API.Pumps.primary/1)
     pumps |> Enum.each(&UI.Pumps.start/1)
-    pumps |> Enum.each(&UI.Pumps.set_speed(&1, 10, wait: false))
+    pumps |> Enum.each(&UI.Pumps.set_speed(&1, speed, wait: false))
   end
 
   defp start_condenser do

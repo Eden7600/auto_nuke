@@ -29,12 +29,19 @@ defmodule AutoNuke.Operator.CoreTemp do
   # So to get from 22 to 23 speed, you need to hit 22.7, not 22.5.
   @speed_deadband 0.7
 
+  # Used by the `startup` task to know what speed to set on cold start.
+  def min_speed, do: @pump_speeds.first
+
   @pumps API.Pumps.all_primary()
   @core API.Vessels.core_vessel()
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
+  end
+
+  def get_speed(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_speed)
   end
 
   @impl true
@@ -52,6 +59,11 @@ defmodule AutoNuke.Operator.CoreTemp do
     PubSub.subscribe(self(), :ticker)
     Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pumps at #{speed}.")
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_speed, _from, %State{pump_speed: speed} = state) do
+    {:reply, speed, state}
   end
 
   @impl true
