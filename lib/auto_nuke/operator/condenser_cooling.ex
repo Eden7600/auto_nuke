@@ -7,7 +7,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
   defguard is_my_tick(t) when rem(t, @ticks_per_second) == 4
 
   defmodule State do
-    @enforce_keys [:speed, :last_temp, :last_direction, :probe_timer]
+    @enforce_keys [:last_temp, :last_direction, :probe_timer]
     defstruct(@enforce_keys)
   end
 
@@ -19,8 +19,6 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   # Range of allowed speeds.
   @speeds 10..100
-  # Violation threshold is 10°C above ambient.
-  @above_ambient 10.0
   # Wait 30 in-game minutes after a violation to begin probing lower speeds:
   @wait_after_violation 30 * AutoNuke.Ticker.seconds_per_minute()
   # While probing, wait 10 in-game minutes per 1% speed drop:
@@ -37,14 +35,13 @@ defmodule AutoNuke.Operator.CondenserCooling do
     speed = get_pump_speed()
 
     state = %State{
-      speed: speed,
       last_temp: temp,
       last_direction: :stable,
       probe_timer: @wait_while_probing
     }
 
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pump at #{speed}.")
+    Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pump at #{speed}%.")
     {:ok, state}
   end
 
@@ -55,7 +52,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
   def handle_info({:tick, _}, %State{} = state) do
     new_temp = get_temperature()
     old_temp = state.last_temp
-    threshold = get_ambient() + @above_ambient
+    threshold = get_violation_threshold()
 
     status =
       cond do
@@ -107,7 +104,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
     )
 
     set_pump_speed(new)
-    %State{state | speed: new, probe_timer: @wait_after_violation}
+    %State{state | probe_timer: @wait_after_violation}
   end
 
   defp probe_wait(%State{} = state, wait) do
@@ -118,20 +115,37 @@ defmodule AutoNuke.Operator.CondenserCooling do
     %State{state | probe_timer: timer - 1}
   end
 
-  defp maybe_probe(%State{speed: speed} = state, _) when speed <= @speeds.first do
-    state
+  defp maybe_probe(%State{} = state, temp) do
+    new = get_pump_speed() - 1
+
+    if new in @speeds do
+      Logger.info(@log_prefix <> "Steady at #{Float.round(temp, 1)}°C, trying #{new}%.")
+      set_pump_speed(new)
+      %State{state | probe_timer: @wait_while_probing}
+    else
+      # No point in ever probing any lower!
+      # Just set the timer insanely high.
+      # Unless we see a violation, we don't care.
+      %State{state | probe_timer: 999_999_999}
+    end
   end
 
-  defp maybe_probe(%State{} = state, temp) do
-    new = state.speed - 1
-    Logger.info(@log_prefix <> "Steady at #{Float.round(temp, 1)}°C, trying #{new}%.")
-    set_pump_speed(new)
-    %State{state | speed: new, probe_timer: @wait_while_probing}
+  # As total steam output increases, we need to allow more leeway.
+  defp get_violation_threshold do
+    over_ambient = 5 + get_total_steam() / 50
+    over_ambient + get_ambient()
+  end
+
+  @steam_gens API.SteamGen.all()
+  defp get_total_steam do
+    @steam_gens
+    |> Enum.map(&API.SteamGen.get_outlet/1)
+    |> Enum.sum()
   end
 
   defp get_temperature, do: API.Vessels.get_temperature(@condenser)
   defp get_ambient, do: API.Misc.ambient_temperature()
 
-  defp get_pump_speed, do: API.Pumps.get_actual_speed(@pump)
+  defp get_pump_speed, do: API.Pumps.get_actual_speed(@pump) |> round()
   defp set_pump_speed(v), do: API.Pumps.set_speed(@pump, v)
 end
