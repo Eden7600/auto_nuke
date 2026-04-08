@@ -22,5 +22,12 @@ defmodule AutoNuke.API.SteamGen do
     API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   end
 
+  def get_temperature(%SteamGen{vessel: vessel}), do: API.Vessels.get_temperature(vessel)
   def get_pressure(%SteamGen{vessel: vessel}), do: API.Vessels.get_pressure(vessel)
+
+  def get_vent_open?(%SteamGen{loop: loop}),
+    do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
+
+  def set_vent_open(%SteamGen{loop: loop}, open),
+    do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
 end

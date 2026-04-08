@@ -626,8 +626,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     API.get_integer("CHEMICAL_DOSING_PUMP_STATUS") != 4
   end
 
-  defp get_vent_open?(loop), do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
-  defp set_vent_open(loop, open), do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
+  defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
+  defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
 
   @mscv_span_1 (@mscv_range_1.last - @mscv_range_1.first) / 2
   @mscv_span_2 (@mscv_range_2.last - @mscv_range_2.first) / 2

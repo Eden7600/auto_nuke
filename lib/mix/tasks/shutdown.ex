@@ -376,8 +376,8 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   defp get_bypass(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL") |> round()
   defp set_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
 
-  defp get_vent_open?(loop), do: API.get_boolean("STEAM_GEN_#{loop - 1}_VENT_SWITCH")
-  defp set_vent_open(loop, open), do: API.put("STEAM_GEN_#{loop - 1}_VENT_SWITCH", open)
+  defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
+  defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
 
   defp get_rods, do: API.get_float("RODS_POS_ACTUAL")
   defp set_rods(value), do: API.put("RODS_ALL_POS_ORDERED", value)
