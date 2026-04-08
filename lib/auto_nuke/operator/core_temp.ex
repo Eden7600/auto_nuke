@@ -25,6 +25,9 @@ defmodule AutoNuke.Operator.CoreTemp do
   @temp_max 400
   # Use the average temperature from the last five in-game minutes.
   @temp_smoothing AutoNuke.Ticker.seconds_per_minute() * 5
+  # Apply a deadband of 0.7 to limit speed oscillation.
+  # So to get from 22 to 23 speed, you need to hit 22.7, not 22.5.
+  @speed_deadband 0.7
 
   @pumps API.Pumps.all_primary()
   @core API.Vessels.core_vessel()
@@ -60,7 +63,7 @@ defmodule AutoNuke.Operator.CoreTemp do
     temp = Smoother.average(smoother)
 
     old = state.pump_speed
-    new = temp_to_speed(temp)
+    new = temp_to_speed(temp, old)
 
     if new != old do
       Logger.info(@log_prefix <> "Changing pump speeds from #{old} to #{new}.")
@@ -91,12 +94,21 @@ defmodule AutoNuke.Operator.CoreTemp do
   @temp_span @temp_max - @temp_min
   @pump_span @pump_speeds.last - @pump_speeds.first
 
-  defp temp_to_speed(temp) do
+  defp temp_to_speed(temp, old_speed) do
     percent_in_range = (temp - @temp_min) / @temp_span
+    new_speed = @pump_speeds.first + @pump_span * percent_in_range
 
-    (@pump_speeds.first + @pump_span * percent_in_range)
-    |> round()
-    |> clamp(@pump_speeds)
+    # Apply a deadband around the prior value.
+    upper = old_speed + @speed_deadband
+    lower = old_speed - @speed_deadband
+
+    if new_speed >= upper || new_speed <= lower do
+      new_speed
+      |> round()
+      |> clamp(@pump_speeds)
+    else
+      old_speed
+    end
   end
 
   defp clamp(value, min..max//1) do
