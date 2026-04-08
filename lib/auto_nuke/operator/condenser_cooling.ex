@@ -13,7 +13,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   alias AutoNuke.API
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @condenser API.Vessels.condenser()
   @pump API.Pumps.condenser_cooling()
 

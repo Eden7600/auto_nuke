@@ -132,8 +132,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     end
   end
 
-  @module_name inspect(__MODULE__)
-  defp log_prefix(loop) when loop in 1..3, do: "[#{@module_name}.L#{loop}] "
+  @log_module inspect(__MODULE__) |> String.replace("AutoNuke.Operator.", "")
+  defp log_prefix(loop), do: "[#{@log_module}.L#{loop}] "
 
   defp axis_to_bypass(output), do: round(output * 50) + 50
   defp bypass_to_axis(bypass), do: (bypass - 50) / 50

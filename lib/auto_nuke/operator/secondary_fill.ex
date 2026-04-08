@@ -141,5 +141,6 @@ defmodule AutoNuke.Operator.SecondaryFill do
   def axis_to_speed(output), do: round(50 + output * 50)
   def speed_to_axis(speed), do: (speed - 50) / 50
 
-  defp log_prefix(loop), do: "[#{inspect(__MODULE__)}.L#{loop}] "
+  @log_module inspect(__MODULE__) |> String.replace("AutoNuke.Operator.", "")
+  defp log_prefix(loop), do: "[#{@log_module}.L#{loop}] "
 end

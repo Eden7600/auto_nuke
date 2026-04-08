@@ -22,7 +22,7 @@ defmodule AutoNuke.Operator.CoreFactor do
   alias AutoNuke.Smoother
   alias AutoNuke.Operator.CoreFactor.Drift
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
   # Average the core factor over the past minute:
   @core_factor_smoothing AutoNuke.Ticker.seconds_per_minute()

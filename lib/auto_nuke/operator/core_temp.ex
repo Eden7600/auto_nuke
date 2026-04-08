@@ -14,7 +14,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   alias AutoNuke.API
   alias AutoNuke.Smoother
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
   # Allowed pump speeds.
   # I'm told that <10% is dangerous and >50% is useless.

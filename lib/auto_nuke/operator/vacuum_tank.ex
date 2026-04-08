@@ -19,7 +19,7 @@ defmodule AutoNuke.Operator.VacuumTank do
     )
   end
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
   @retention_tank API.Vessels.retention_tank()
   @steam_gens API.SteamGen.all()

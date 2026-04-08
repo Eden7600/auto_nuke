@@ -44,7 +44,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   alias AutoNuke.API
   alias AutoNuke.ControlAxis
 
-  @log_prefix "[#{inspect(__MODULE__)}] "
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
   # Valid loop numbers:
   @loops 1..3
