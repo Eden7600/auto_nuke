@@ -29,8 +29,12 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   # In pump mode, we try to keep the retention tank half full:
   @target_fill_ratio 0.5
-  # In CRV mode, we try to keep vacuum at 99.5% (as opposed to 99.9%):
-  @target_vacuum_level 0.995
+  # In CRV mode, we try to keep vacuum at 99.8% (as opposed to 99.9%):
+  @target_vacuum_level 0.998
+  # Apply a deadband of 0.7 to reduce MSI oscillations.
+  # So a 50% MSI setting will need to push above 50.7% to go to 51%,
+  # or below 49.3% to drop to 49%.
+  @msi_deadband 0.7
 
   # If running in pump mode and steam climbs past this (kg/min), switch to CRV mode.
   @steam_high_mark 130
@@ -52,7 +56,7 @@ defmodule AutoNuke.Operator.VacuumTank do
         ki: 0.1,
         kd: 0.2,
         deadzone: 0.005,
-        to_value_fn: &axis_to_msi/1,
+        to_value_fn: &axis_to_msi/2,
         to_value_state: msi,
         offset: msi |> msi_to_axis(),
         initial_value: msi
@@ -62,8 +66,8 @@ defmodule AutoNuke.Operator.VacuumTank do
       ControlAxis.new(
         kp: 10,
         ki: 1,
-        deadzone: 0.001,
-        to_value_fn: &axis_to_msi/1,
+        deadzone: 0.0005,
+        to_value_fn: &axis_to_msi/2,
         to_value_state: msi,
         offset: msi |> msi_to_axis(),
         initial_value: msi
@@ -207,9 +211,21 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   defp msi_to_axis(msi), do: (msi - 50) / 50.0
 
-  defp axis_to_msi(output) do
+  defp axis_to_msi(output, old_msi) do
     # Map -1.0 to 0% and +1.0 to 100%.
-    (50 + output * 50)
-    |> round()
+    new_msi = 50 + output * 50
+
+    # Apply a deadband around the prior value.
+    upper = old_msi + @msi_deadband
+    lower = old_msi - @msi_deadband
+
+    if new_msi >= upper || new_msi <= lower do
+      round(new_msi)
+    else
+      old_msi
+    end
+    |> then(fn value ->
+      {:ok, value, value}
+    end)
   end
 end
