@@ -238,9 +238,16 @@ defmodule AutoNuke.API.Valves do
 
   def cst_drain,
     do: %ActuatedValve{
-      name: "Coolant Storage Tank Drain",
+      name: "Coolant Storage Tank Drain Valve",
       short_name: "CST Drain",
       valve_panel_key: "Valvula_Purgar_Coolant"
+    }
+
+  def condenser_drain,
+    do: %ActuatedValve{
+      name: "Condenser Drain Valve",
+      short_name: "Condenser Drain",
+      valve_panel_key: "VALVULA_PURGA_C2_01"
     }
 
   def ion_inlet,
@@ -332,9 +339,11 @@ defmodule AutoNuke.API.Valves do
 
   def get_opened?(%ManualValve{get_key: k}) when is_binary(k), do: API.get_float(k) == 100
 
-  def get_opened?(%{valve_panel_key: k}) do
+  def get_opened?(%ManualValve{valve_panel_key: k}) do
     valve_panel(k)
     |> Map.fetch!("State")
     |> Map.fetch!("IsOpened")
   end
+
+  def get_opened?(%t{} = v) when t in [OrderedValve, ActuatedValve], do: get_open_percent(v) > 0
 end

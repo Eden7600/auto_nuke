@@ -78,6 +78,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: loop)
     end)
 
+    {:ok, _} = AutoNuke.Operator.CondenserFill.start_link()
+
     {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
