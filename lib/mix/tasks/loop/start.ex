@@ -21,7 +21,9 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     steam_flow_pid = {SteamFlow, remote_node}
     core_temp_pid = {CoreTemp, remote_node}
 
-    if loop in SteamFlow.get_loops(steam_flow_pid) do
+    loops = SteamFlow.get_loops(steam_flow_pid)
+
+    if loop in loops do
       Mix.raise("Loop #{loop} is already active.")
     end
 
@@ -32,7 +34,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
     Startup.start_primary_circulation([loop], CoreTemp.get_speed(core_temp_pid))
-    Startup.start_turbine([loop])
+    Startup.start_turbine([loop], Enum.count(loops) + 1)
     Startup.connect_to_grid([loop], false)
 
     UI.tablet("AutoNuke Remote Control")

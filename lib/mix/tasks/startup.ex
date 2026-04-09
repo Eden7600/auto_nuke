@@ -466,8 +466,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  def start_turbine(loops) do
-    loop_count = Enum.count(loops)
+  def start_turbine(loops, loop_count \\ nil) do
+    loop_count = loop_count || Enum.count(loops)
     UI.console("Drain & Vent Valves")
 
     loops
