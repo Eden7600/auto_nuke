@@ -9,7 +9,10 @@ defmodule AutoNuke.API.Web do
   end
 
   defp req_new do
-    Req.new(base_url: api_url())
+    Req.new(
+      base_url: api_url(),
+      retry_delay: fn tries -> (tries + 1) * 100 end
+    )
   end
 
   def get(key) do
