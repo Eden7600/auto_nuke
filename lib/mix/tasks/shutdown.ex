@@ -5,10 +5,16 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   use Mix.Task
   require Logger
   alias AutoNuke.API
+  alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI
   alias Mix.Tasks.AutoNuke.Startup
 
   @loops 1..3
+  @steam_gens SteamGen.all()
+  @primary_pumps @loops |> Enum.map(&API.Pumps.primary/1)
+  @secondary_pumps @loops |> Enum.map(&API.Pumps.secondary/1)
+  @condenser_cooling API.Pumps.condenser_cooling()
+  @core API.Vessels.core_vessel()
 
   @remote_operators %{
     core_factor: {AutoNuke.Operator.CoreFactor, "Core Factor Operator"},
@@ -91,57 +97,32 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   defp insert_control_rods do
     UI.console("Reactor Core")
 
-    set_and_forget(
-      name: "Control Rod Height",
-      action: "SET TO 100.0",
-      value: 100.0,
-      get: &get_rods/0,
-      put: &set_rods/1
+    # The min is in case they're already set to 100.
+    initial = get_rods() |> min(99.9)
+
+    UI.set_wait(
+      "Control Rod Height",
+      "SET TO 100.0",
+      fn -> get_rods() != initial end,
+      fn -> set_rods(100.0) end
     )
   end
 
   defp set_full_bypass do
     UI.console("Generation & Distribution")
-
-    @loops
-    |> Enum.each(fn loop ->
-      set_and_forget(
-        loop: loop,
-        name: "Turbine Bypass 0#{loop}",
-        value: 100,
-        get: &get_bypass/1,
-        put: &set_bypass/2
-      )
-    end)
+    @steam_gens |> Enum.each(fn sg -> sg.bypass |> UI.Valves.set(100, wait: false) end)
 
     UI.console("Steam Generator")
-
-    @loops
-    |> Enum.each(fn loop ->
-      set_and_forget(
-        loop: loop,
-        name: "Main Steam Control Valve 0#{loop}",
-        value: 0,
-        get: &get_mscv/1,
-        put: &set_mscv/2
-      )
-    end)
+    @steam_gens |> Enum.each(fn sg -> sg.mscv |> UI.Valves.set(0, wait: false) end)
   end
 
   defp set_max_pump_speed do
     UI.console("Coolant System")
 
-    @loops
-    |> Enum.each(fn loop ->
-      if get_primary_pump(loop) > 0 do
-        set_and_forget(
-          loop: loop,
-          name: "Circulation Pump 0#{loop}",
-          action: "SET TO 50",
-          value: 50,
-          get: &get_primary_pump/1,
-          put: &set_primary_pump/2
-        )
+    @primary_pumps
+    |> Enum.each(fn pump ->
+      if API.Pumps.get_active?(pump) do
+        UI.Pumps.set_speed(pump, 49, wait: false)
       end
     end)
   end
@@ -149,44 +130,58 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   defp wait_for_low_steam do
     UI.console("Steam Generator")
 
-    UI.wait(
-      "Generators Steam Out",
-      "WAIT FOR <50 kg/min COMBINED",
-      fn ->
-        @loops
-        |> Enum.map(&get_steam_outlet/1)
-        |> Enum.sum()
-        |> Kernel.<=(50)
-      end
+    steam_out = SteamGen.get_total_outlet()
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(max(steam_out, 50), 50, " kg/min", 1),
+      label: "Total Steam",
+      current_fn: &SteamGen.get_total_outlet/0,
+      done_fn: &(&1 <= 50)
     )
   end
 
   defp dump_steam_generator_pressure do
     UI.console("Steam Generator")
 
-    @loops
-    |> Enum.each(fn loop ->
+    @steam_gens
+    |> Enum.each(fn steam_gen ->
       UI.set_wait(
-        "Pressure Relief Vent 0#{loop}",
+        "Pressure Relief Vent 0#{steam_gen.loop}",
         "OPEN",
-        fn -> get_vent_open?(loop) end,
-        fn -> set_vent_open(loop, true) end
+        fn -> SteamGen.get_vent_open?(steam_gen) end,
+        fn -> SteamGen.set_vent_open(steam_gen, true) end
       )
     end)
 
-    @loops
-    |> Enum.each(fn loop ->
-      UI.wait(
-        "Generator 0#{loop} Pressure",
-        "WAIT FOR 1 BAR",
-        fn -> get_pressure(loop) == 1 end
-      )
+    @steam_gens
+    |> Enum.each(fn steam_gen ->
+      temp = SteamGen.get_temperature(steam_gen)
 
+      UI.ProgressBar.wait(
+        config: UI.ProgressBar.Config.target(max(temp, 100), 50, "°C", 1),
+        label: "Temperature",
+        current_fn: fn -> SteamGen.get_temperature(steam_gen) end,
+        done_fn: &(&1 <= 50)
+      )
+    end)
+
+    @steam_gens
+    |> Enum.each(fn steam_gen ->
+      UI.ProgressBar.wait(
+        config: UI.ProgressBar.Config.target(70, 1, " bar", 1),
+        label: "Pressure",
+        current_fn: fn -> SteamGen.get_pressure(steam_gen) end,
+        done_fn: &(&1 < 1.01)
+      )
+    end)
+
+    @steam_gens
+    |> Enum.each(fn steam_gen ->
       UI.set_wait(
-        "Pressure Relief Vent 0#{loop}",
+        "Pressure Relief Vent 0#{steam_gen.loop}",
         "SHUT",
-        fn -> !get_vent_open?(loop) end,
-        fn -> set_vent_open(loop, false) end
+        fn -> !SteamGen.get_vent_open?(steam_gen) end,
+        fn -> SteamGen.set_vent_open(steam_gen, false) end
       )
     end)
   end
@@ -236,39 +231,13 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   defp stop_all_pumps do
     UI.console("Coolant System")
-
-    @loops
-    |> Enum.each(fn loop ->
-      UI.set_wait(
-        "Circulation Pump 0#{loop}",
-        "OFF",
-        # We set it to 1 to calm it down, but we also want the user to flip the switch.
-        fn -> get_primary_pump(loop) < 0.9 end,
-        fn -> set_primary_pump(loop, 1) end
-      )
-    end)
+    @primary_pumps |> Enum.each(&UI.Pumps.stop/1)
 
     UI.console("Steam Generator")
-
-    @loops
-    |> Enum.each(fn loop ->
-      UI.set_wait(
-        "Secondary Pump 0#{loop}",
-        "OFF",
-        # We set it to 1 to calm it down, but we also want the user to flip the switch.
-        fn -> get_secondary_pump(loop) < 0.9 end,
-        fn -> set_secondary_pump(loop, 1) end
-      )
-    end)
+    @secondary_pumps |> Enum.each(&UI.Pumps.stop/1)
 
     UI.console("Condenser")
-
-    UI.set_wait(
-      "Cooling Pump",
-      "OFF",
-      fn -> API.get_boolean("CONDENSER_CIRCULATION_PUMP_SWITCH") end,
-      fn -> API.put("CONDENSER_CIRCULATION_PUMP_SWITCH", false) end
-    )
+    @condenser_cooling |> UI.Pumps.stop()
   end
 
   def disable_resistor_banks do
@@ -292,49 +261,6 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     end)
 
     UI.notice("Reminder: Transformers may need to be disabled for maintenance.")
-  end
-
-  defp set_and_forget(opts) do
-    {loop, opts} = Keyword.pop(opts, :loop)
-    {name, opts} = Keyword.pop!(opts, :name)
-    {action, opts} = Keyword.pop(opts, :action)
-    {value, opts} = Keyword.pop!(opts, :value)
-    {get_fn, opts} = Keyword.pop!(opts, :get)
-    {put_fn, opts} = Keyword.pop!(opts, :put)
-    unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
-
-    {get_fn, put_fn} =
-      case loop do
-        nil ->
-          {get_fn, put_fn}
-
-        l when l in @loops ->
-          {
-            fn -> get_fn.(l) end,
-            fn v -> put_fn.(l, v) end
-          }
-      end
-
-    initial = get_fn.()
-
-    action =
-      action ||
-        case value do
-          0 -> "CLOSE"
-          100 -> "OPEN"
-          n -> "LIMITED (#{n}%)"
-        end
-
-    if initial == value do
-      UI.wait(name, action, fn -> true end)
-    else
-      UI.set_wait(
-        name,
-        action,
-        fn -> get_fn.() != initial end,
-        fn -> put_fn.(value) end
-      )
-    end
   end
 
   defp ping_remote do
@@ -367,30 +293,8 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     end
   end
 
-  defp get_core_temp, do: API.get_float("CORE_TEMP")
-
-  defp get_steam_outlet(loop), do: API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
-  defp get_pressure(loop), do: API.get_float("COOLANT_SEC_#{loop - 1}_PRESSURE")
-  defp get_mscv(loop), do: API.get_float("MSCV_#{loop - 1}_OPENING_ACTUAL")
-  defp set_mscv(loop, value), do: API.put("MSCV_#{loop - 1}_OPENING_ORDERED", value)
-  defp get_bypass(loop), do: API.get_float("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL") |> round()
-  defp set_bypass(loop, value), do: API.put("STEAM_TURBINE_#{loop - 1}_BYPASS_ORDERED", value)
-
-  defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
-  defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
+  defp get_core_temp, do: @core |> API.Vessels.get_temperature()
 
   defp get_rods, do: API.get_float("RODS_POS_ACTUAL")
   defp set_rods(value), do: API.put("RODS_ALL_POS_ORDERED", value)
-
-  defp get_primary_pump(loop),
-    do: API.get_float("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_SPEED")
-
-  defp set_primary_pump(loop, v),
-    do: API.put("COOLANT_CORE_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", v)
-
-  defp get_secondary_pump(loop),
-    do: API.get_float("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_SPEED")
-
-  defp set_secondary_pump(loop, v),
-    do: API.put("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_ORDERED_SPEED", v)
 end

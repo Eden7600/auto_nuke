@@ -22,6 +22,8 @@ defmodule AutoNuke.API.SteamGen do
     API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
   end
 
+  def get_total_outlet, do: all() |> Enum.map(&get_outlet/1) |> Enum.sum()
+
   def get_temperature(%SteamGen{vessel: vessel}), do: API.Vessels.get_temperature(vessel)
   def get_pressure(%SteamGen{vessel: vessel}), do: API.Vessels.get_pressure(vessel)
 
