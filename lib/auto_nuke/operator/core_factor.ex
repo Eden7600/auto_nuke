@@ -7,8 +7,9 @@ defmodule AutoNuke.Operator.CoreFactor do
   defguard is_my_tick(t) when rem(t, @ticks_per_second) == 0
 
   defmodule State do
-    @enforce_keys [:target, :axis, :smoothed, :last_core_factor]
+    @enforce_keys [:banks, :target, :axis, :smoothed, :last_core_factor]
     defstruct(
+      banks: nil,
       target: nil,
       axis: nil,
       smoothed: nil,
@@ -26,18 +27,6 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   # Average the core factor over the past minute:
   @core_factor_smoothing AutoNuke.Ticker.seconds_per_minute()
-  # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
-  @rods_clamping 1.0
-
-  # To try to limit how many 0.1% rod changes we make, we apply a deadband
-  # around each rod setting.
-  #
-  # Going from 44.2% to 44.3% would normally happen the moment you hit 44.25%
-  # or higher.  To limit this, we require that you hit 44.27% or higher to go
-  # up, and then drop to 44.23% or lower to go down.
-  #
-  # This means our deadband is 0.07% in either direction.
-  @rods_deadband 0.07
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
@@ -67,7 +56,9 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   @impl true
   def init(target) when is_number(target) or is_nil(target) do
-    rods = get_rods()
+    {banks, rods} = get_banks_and_rods()
+    bank_count = Enum.count(banks)
+
     factor = get_verified_core_factor([])
     target = target || factor
 
@@ -76,14 +67,14 @@ defmodule AutoNuke.Operator.CoreFactor do
         kp: 0.02,
         ki: 0.002,
         deadzone: 0.01,
-        to_value_fn: &axis_to_rods/2,
-        to_value_state: rods,
+        to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
         offset: rods |> rods_to_axis(),
         initial_value: rods
       )
 
     state =
       %State{
+        banks: banks,
         target: target,
         axis: axis,
         smoothed: Smoother.new(@core_factor_smoothing),
@@ -93,7 +84,8 @@ defmodule AutoNuke.Operator.CoreFactor do
     PubSub.subscribe(self(), :ticker)
 
     Logger.info(
-      @log_prefix <> "Started with core factor #{factor}, target #{target}, rods at #{rods}%."
+      @log_prefix <>
+        "Started with core factor #{factor}, target #{target}, rods at #{inspect(rods)}."
     )
 
     {:ok, state}
@@ -143,14 +135,13 @@ defmodule AutoNuke.Operator.CoreFactor do
 
     case ControlAxis.step(state.axis, state.target, current) do
       {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing rods from #{old} to #{new}.")
-        set_rods(new)
-        maybe_clamp(axis, new)
+        set_bank_rods(state.banks, old, new)
+        axis
 
       {:unchanged, axis, _old_value} ->
         axis
     end
-    |> then(fn axis ->
+    |> then(fn %ControlAxis{} = axis ->
       {:noreply, %State{state | axis: axis, smoothed: smoothed, last_core_factor: factor}}
     end)
   end
@@ -195,49 +186,47 @@ defmodule AutoNuke.Operator.CoreFactor do
   end
 
   def get_core_factor, do: API.get_float("CORE_FACTOR")
-  defp get_rods, do: API.get_float("RODS_POS_ACTUAL")
 
-  defp set_rods(value) when value >= 0.0 and value <= 100.0,
-    do: API.put("RODS_ALL_POS_ORDERED", value)
+  defp get_banks_and_rods do
+    1..9
+    |> Enum.map(fn n -> {n, API.get_float_or_nil("ROD_BANK_POS_#{n - 1}_ACTUAL")} end)
+    |> Enum.reject(fn {_, v} -> is_nil(v) end)
+    |> Enum.unzip()
+  end
 
-  defp axis_to_rods(output, old_rods) do
-    # Map -1.0 to 100% rods and +1.0 to 0% rods.
-    new_rods = 50 - output * 50
+  defp set_bank_rods(banks, old_rods, new_rods) do
+    Enum.zip_with([banks, old_rods, new_rods], fn
+      [_bank, same, same] ->
+        same
 
-    # Apply a deadband around the prior value.
-    upper = old_rods + @rods_deadband
-    lower = old_rods - @rods_deadband
-
-    if new_rods >= upper || new_rods <= lower do
-      Float.round(new_rods, 1)
-    else
-      old_rods
-    end
-    |> then(fn value ->
-      {:ok, value, value}
+      [bank, old, new] ->
+        Logger.info(@log_prefix <> "Changing bank #{bank} rods from #{old} to #{new}.")
+        API.put("ROD_BANK_POS_#{bank - 1}_ORDERED", new)
+        new
     end)
   end
 
-  defp rods_to_axis(rods), do: (50 - rods) / 50
+  def axis_to_rods(output, bank_count) do
+    # Map -1.0 to 100% rods and +1.0 to 0% rods.
+    raw = 50 - output * 50
 
-  defp maybe_clamp(axis, ordered) do
-    actual = get_rods()
+    # Every bank will receive this base value at 0.1 precision,
+    # but some may receive +0.1.
+    base = Float.floor(raw, 1)
+    remain = raw - base
+    span = 0.1 / bank_count
 
-    cond do
-      ordered - actual > @rods_clamping ->
-        # We're asking for too much rods at once, clamp down.
-        Logger.debug(@log_prefix <> "Clamping down to #{actual + @rods_clamping}")
-        clamp_to = (actual + @rods_clamping) |> rods_to_axis()
-        axis |> ControlAxis.clamp_min(clamp_to)
+    1..bank_count
+    |> Enum.map(fn bank ->
+      case bank * span < remain do
+        true -> (base + 0.1) |> Float.round(1)
+        false -> base
+      end
+    end)
+  end
 
-      actual - ordered > @rods_clamping ->
-        # We're asking for too little rods at once, clamp up.
-        Logger.debug(@log_prefix <> "Clamping up to #{actual - @rods_clamping}")
-        clamp_to = (actual - @rods_clamping) |> rods_to_axis()
-        axis |> ControlAxis.clamp_max(clamp_to)
-
-      true ->
-        axis
-    end
+  defp rods_to_axis(rods) do
+    avg = rods |> Statistex.average()
+    (50 - avg) / 50
   end
 end
