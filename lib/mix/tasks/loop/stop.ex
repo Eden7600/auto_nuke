@@ -62,13 +62,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       fn -> SteamGen.set_vent_open(steam_gen, true) end
     )
 
-    UI.ProgressBar.wait(
-      config: UI.ProgressBar.Config.target(70, 1, " bar", 1),
-      label: "Pressure",
-      current_fn: fn -> SteamGen.get_pressure(steam_gen) end,
-      done_fn: &(&1 < 1.01)
-    )
-
     temp = SteamGen.get_temperature(steam_gen)
 
     UI.ProgressBar.wait(
@@ -76,6 +69,13 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       label: "Temperature",
       current_fn: fn -> SteamGen.get_temperature(steam_gen) end,
       done_fn: &(&1 <= 50)
+    )
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(70, 1, " bar", 1),
+      label: "Pressure",
+      current_fn: fn -> SteamGen.get_pressure(steam_gen) end,
+      done_fn: &(&1 < 1.01)
     )
 
     UI.set_wait(

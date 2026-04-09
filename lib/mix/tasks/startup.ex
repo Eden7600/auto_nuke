@@ -414,18 +414,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp start_vacuum_pump do
     UI.console("Condenser")
     vessel = API.Vessels.retention_tank()
-
-    if API.Vessels.get_fill_percent(vessel) < @retention_percent do
-      # This is in case the script is re-run while already starting up.
-      # If we don't turn off the vacuum pump, we'll likely never reach our retention target.
-      UI.set_wait(
-        "Vacuum Pump",
-        "OFF",
-        fn -> !API.VacuumPump.get_active?() end,
-        fn -> API.VacuumPump.stop() end
-      )
-    end
-
     UI.Vessels.fill_wait(vessel, percent: @retention_percent)
 
     UI.set_wait(
@@ -446,7 +434,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       config: UI.ProgressBar.Config.percent(0, 99.9),
       label: "Vacuum",
       current_fn: fn -> API.VacuumPump.get_vacuum_level() * 100 end,
-      done_fn: &(&1 >= 0.99)
+      done_fn: &(&1 >= 99)
     )
 
     condenser = API.Vessels.condenser()
@@ -505,8 +493,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       send(me, {:started, name})
 
       ControlAxis.new(
-        kp: -0.05,
-        ki: -0.005,
+        kp: -0.1,
+        ki: -0.0001,
+        kd: -0.01,
         deadzone: 0.5,
         to_value_fn: &axis_to_mscv(loop_count, &1),
         offset: -1.0,
