@@ -43,17 +43,26 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
   end
 
   defp empty(target) do
-    UI.Refill.refill(
-      pump_name: "Core Pool Pump",
-      tank_description: "Pool Emptying",
-      pump_get_active: fn -> get_pump_state() == 1 end,
-      pump_set_enabled: fn
-        true -> set_pump("REMOVE")
-        false -> set_pump("OFF")
-      end,
-      tank_get_level: &get_pool_empty_percent/0,
-      target_level: 100 - target
+    UI.wait(
+      "Core Pool Pump",
+      "REMOVE",
+      fn -> set_pump("REMOVE") end
     )
+
+    try do
+      UI.ProgressBar.wait(
+        config: %PBConfig{PBConfig.reverse_percent() | right: target},
+        label: @core_pool.short_name,
+        current_fn: fn -> API.Vessels.get_fill_percent(@core_pool) end,
+        done_fn: &(&1 <= target)
+      )
+    after
+      UI.wait(
+        "Core Pool Pump",
+        "OFF",
+        fn -> set_pump("OFF") end
+      )
+    end
   end
 
   defp fill_loop(target) do
@@ -82,7 +91,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
       )
     end
 
-    if target > get_pool_fill_percent() do
+    if target > API.Vessels.get_fill_percent(@core_pool) do
       fill_loop(target)
     end
   end
@@ -113,21 +122,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
     end
   end
 
-  defp get_core_storage_fill do
-    API.get_float("CORE_POOL_COOLANT_TANK_VOLUME")
-  end
-
-  defp raw_fill_percent do
-    API.get_json("VALVE_PANEL_JSON")
-    |> Map.fetch!("vessels")
-    |> Map.fetch!("CORE POOL")
-    |> Map.fetch!("Volume")
-    |> then(fn [current, max] -> current / max * 100 end)
-  end
-
-  defp get_pool_fill_percent, do: raw_fill_percent() |> Float.floor(1)
-  defp get_pool_empty_percent, do: (100 - raw_fill_percent()) |> Float.ceil(1)
-
+  defp get_core_storage_fill, do: @storage_tank |> API.Vessels.get_fill_volume()
   defp get_pump_state, do: API.get_integer("CORE_POOL_PUMP")
 
   defp set_pump(mode) do
