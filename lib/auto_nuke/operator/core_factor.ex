@@ -27,6 +27,8 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   # Average the core factor over the past minute:
   @core_factor_smoothing AutoNuke.Ticker.seconds_per_minute()
+  # Low pass filter on output:
+  @lpf_factor 0.3
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
@@ -66,8 +68,9 @@ defmodule AutoNuke.Operator.CoreFactor do
       ControlAxis.new(
         kp: 0.02,
         ki: 0.002,
-        deadzone: 0.01,
-        to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
+        deadzone: 0.005 * bank_count,
+        to_value_fn: fn out, state -> axis_to_rods(out, bank_count, state) end,
+        to_value_state: rods |> rods_to_axis(),
         offset: rods |> rods_to_axis(),
         initial_value: rods
       )
@@ -206,7 +209,10 @@ defmodule AutoNuke.Operator.CoreFactor do
     end)
   end
 
-  def axis_to_rods(output, bank_count) do
+  def axis_to_rods(output, bank_count, last_output) do
+    # LPF on output:
+    output = low_pass_filter(output, last_output, @lpf_factor)
+
     # Map -1.0 to 100% rods and +1.0 to 0% rods.
     raw = 50 - output * 50
 
@@ -216,17 +222,24 @@ defmodule AutoNuke.Operator.CoreFactor do
     remain = raw - base
     span = 0.1 / bank_count
 
-    1..bank_count
-    |> Enum.map(fn bank ->
-      case bank * span < remain do
-        true -> (base + 0.1) |> Float.round(1)
-        false -> base
-      end
-    end)
+    rods =
+      1..bank_count
+      |> Enum.map(fn bank ->
+        case bank * span < remain do
+          true -> (base + 0.1) |> Float.round(1)
+          false -> base
+        end
+      end)
+
+    {:ok, rods, output}
   end
 
   defp rods_to_axis(rods) do
     avg = rods |> Statistex.average()
     (50 - avg) / 50
+  end
+
+  defp low_pass_filter(new, old, factor) do
+    factor * new + (1 - factor) * old
   end
 end
