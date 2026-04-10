@@ -7,7 +7,7 @@ defmodule AutoNuke.Operator.CondenserFill do
   defguard is_my_tick(t) when rem(t, @ticks_per_second) == 3
 
   defmodule State do
-    @enforce_keys [:last_fill, :freight_pump, :drain_valve]
+    @enforce_keys [:last_fill, :last_status, :freight_pump, :drain_valve]
     defstruct(@enforce_keys)
   end
 
@@ -17,10 +17,12 @@ defmodule AutoNuke.Operator.CondenserFill do
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @condenser API.Vessels.condenser()
 
-  # Below 40%, run the pump to bring in more water.
-  @min_fill 40
-  # Above 60%, open the drain valve.
-  @max_fill 60
+  # Below 35%, run the pump to bring water up to 40%.
+  @min_fill 35
+  @min_fill_stop 40
+  # Above 65%, open the drain valve to get water down to 60%.
+  @max_fill 65
+  @max_fill_stop 60
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -33,6 +35,7 @@ defmodule AutoNuke.Operator.CondenserFill do
 
     state = %State{
       last_fill: fill_level,
+      last_status: nil,
       freight_pump: FreightPump.new(),
       drain_valve: DrainValve.new()
     }
@@ -48,15 +51,21 @@ defmodule AutoNuke.Operator.CondenserFill do
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
     fill = @condenser |> API.Vessels.get_fill_percent()
+    last = state.last_status
 
-    cond do
-      fill > @max_fill -> :high
-      fill < @min_fill -> :low
-      true -> :mid
-    end
+    status =
+      cond do
+        fill > @max_fill -> :high
+        fill > @max_fill_stop && last == :high -> :high
+        fill < @min_fill -> :low
+        fill < @min_fill_stop && last == :low -> :low
+        true -> :mid
+      end
+
+    status
     |> handle_fill(fill, state)
     |> then(fn %State{} = new_state ->
-      {:noreply, %State{new_state | last_fill: fill}}
+      {:noreply, %State{new_state | last_fill: fill, last_status: status}}
     end)
   end
 
