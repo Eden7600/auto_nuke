@@ -180,10 +180,12 @@ defmodule AutoNuke.API.Vessels do
     fill / max
   end
 
+  defp gauge_factor("kL"), do: 1000
+  defp gauge_factor("hL"), do: 100
+  defp gauge_factor("m³"), do: 48
+
   def get_fill_gauge(%Vessel{gauge_units: "%"} = v), do: get_fill_percent(v)
-  def get_fill_gauge(%Vessel{gauge_units: "kL"} = v), do: get_fill_volume(v) / 1000
-  def get_fill_gauge(%Vessel{gauge_units: "hL"} = v), do: get_fill_volume(v) / 100
-  def get_fill_gauge(%Vessel{gauge_units: "m³"} = v), do: get_fill_volume(v) / 48
+  def get_fill_gauge(%Vessel{gauge_units: u} = v), do: get_fill_volume(v) / gauge_factor(u)
 
   def get_temperature(%Vessel{temperature_key: k}) when is_binary(k), do: API.get_float(k)
 
@@ -194,6 +196,9 @@ defmodule AutoNuke.API.Vessels do
 
   def get_pressure(%Vessel{valve_panel_key: k}) when is_binary(k),
     do: valve_panel(k) |> Map.fetch!("Pressure")
+
+  def gauge_to_ratio(%Vessel{gauge_units: "%"}, v), do: v / 100
+  def gauge_to_ratio(%Vessel{capacity: c, gauge_units: u}, v), do: v * gauge_factor(u) / c
 
   defp get_volume_and_capacity(%Vessel{volume_key: k, capacity: c}) when is_binary(k),
     do: {API.get_float(k), c}
