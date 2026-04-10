@@ -114,9 +114,9 @@ defmodule AutoNuke.Operator.CoreFactor do
     Logger.info([
       @log_prefix,
       "Now planning to drift from #{drift.start_factor} at ",
-      Drift.timestamp_to_string(drift.start_time),
+      AutoNuke.Time.timestamp_to_string(drift.start_time),
       " to #{drift.end_factor} at ",
-      Drift.timestamp_to_string(drift.end_time),
+      AutoNuke.Time.timestamp_to_string(drift.end_time),
       "."
     ])
 
