@@ -28,16 +28,22 @@ defmodule Mix.Tasks.AutoNuke.Boron.Inject do
   @core_gauge_max UI.Vessels.gauge_capacity(@core)
   # Also drain the primary CST if it's more than 95% full:
   @max_pcst_ratio 0.95
+  # Default to the max rate we can inject:
+  @max_rate 50
 
-  def run([target]) do
+  def run([target]), do: do_run(target)
+  def run([target, max_rate]), do: do_run(target, max_rate)
+
+  defp do_run(target, max_rate \\ "#{@max_rate}") do
     UI.init()
 
-    target
-    |> String.to_integer()
-    |> inject_boron()
+    inject_boron(
+      target |> String.to_integer(),
+      max_rate |> String.to_integer()
+    )
   end
 
-  def inject_boron(target) when is_integer(target) do
+  def inject_boron(target, max_rate) when is_integer(target) and is_integer(max_rate) do
     if core_vessel_full(), do: drain_core_vessel()
 
     UI.console("Chemical Treatment")
@@ -47,14 +53,14 @@ defmodule Mix.Tasks.AutoNuke.Boron.Inject do
       "BEGIN",
       fn -> get_boron_ppm() >= target end,
       fn -> get_boron_rate() > 0 end,
-      fn -> adjust_boron_injection(target) end
+      fn -> adjust_boron_injection(target, max_rate) end
     )
 
     try do
       UI.ProgressBar.wait(
         config: UI.ProgressBar.Config.target(0, target, " ppm", 1),
         label: "Boron",
-        current_fn: fn -> adjust_boron_injection(target) end,
+        current_fn: fn -> adjust_boron_injection(target, max_rate) end,
         done_fn: fn ppm ->
           case core_vessel_full() do
             true -> :abort
@@ -68,7 +74,7 @@ defmodule Mix.Tasks.AutoNuke.Boron.Inject do
 
     if get_boron_ppm() < target do
       UI.warn("Core is too full!  Performing automatic drain.")
-      inject_boron(target)
+      inject_boron(target, max_rate)
     end
   end
 
@@ -97,7 +103,7 @@ defmodule Mix.Tasks.AutoNuke.Boron.Inject do
     end
   end
 
-  defp adjust_boron_injection(target) do
+  defp adjust_boron_injection(target, max_rate) do
     ppm = get_boron_ppm()
 
     rate =
@@ -106,7 +112,7 @@ defmodule Mix.Tasks.AutoNuke.Boron.Inject do
       else
         ((target - ppm) / @easing)
         |> ceil()
-        |> min(50)
+        |> min(max_rate)
       end
 
     set_boron_rate(rate)
