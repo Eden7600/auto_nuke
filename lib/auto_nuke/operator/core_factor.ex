@@ -56,6 +56,10 @@ defmodule AutoNuke.Operator.CoreFactor do
     GenServer.call(pid, :stop_drift)
   end
 
+  def get_drift(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_drift)
+  end
+
   @impl true
   def init(target) when is_number(target) or is_nil(target) do
     {banks, rods} = get_banks_and_rods()
@@ -123,6 +127,11 @@ defmodule AutoNuke.Operator.CoreFactor do
   def handle_call(:stop_drift, _from, %State{} = state) do
     Logger.info(@log_prefix <> "Cancelling drift.")
     {:reply, :ok, %State{state | drift: nil}}
+  end
+
+  @impl true
+  def handle_call(:get_drift, _from, %State{} = state) do
+    {:reply, state.drift, state}
   end
 
   @impl true
