@@ -86,12 +86,20 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :get_loops)
   end
 
-  def set_target_override(target, pid \\ __MODULE__) when is_number(target) and target < 10 do
-    GenServer.cast(pid, {:override, target * 1.0})
+  def set_target_override(target, expiry \\ :next_hour, pid \\ __MODULE__)
+      when is_number(target) do
+    expires_at =
+      case expiry do
+        :never -> :never
+        :next_hour -> get_next_hour()
+        e -> AutoNuke.Time.parse_time(e)
+      end
+
+    GenServer.cast(pid, {:override, target / 100.0, expires_at})
   end
 
   def clear_target_override(pid \\ __MODULE__) do
-    GenServer.cast(pid, {:override, nil})
+    GenServer.cast(pid, :clear_override)
   end
 
   @impl true
@@ -173,15 +181,21 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_cast({:override, nil}, %State{} = state) do
+  def handle_cast(:clear_override, %State{} = state) do
     Logger.notice(@log_prefix <> "Target override cleared.")
     {:noreply, %State{state | target_override: nil}}
   end
 
   @impl true
-  def handle_cast({:override, new}, %State{} = state) when is_float(new) do
-    Logger.notice(@log_prefix <> "Target override set: #{percent(new)}")
-    {:noreply, %State{state | target_override: new}}
+  def handle_cast({:override, ratio, expiry}, %State{} = state) do
+    expires_desc =
+      case expiry do
+        :never -> "does not expire"
+        ts -> "expires at #{AutoNuke.Time.timestamp_to_string(ts)}"
+      end
+
+    Logger.notice(@log_prefix <> "Target set to #{percent(ratio)}, #{expires_desc}.")
+    {:noreply, %State{state | target_override: {ratio, expiry}}}
   end
 
   @impl true
@@ -195,6 +209,7 @@ defmodule AutoNuke.Operator.SteamFlow do
           turbines: old_turbines
         } = state
       ) do
+    state = maybe_expire_override(state)
     {ratio, smoother} = get_demand_ratio(state)
     {target, deadzone} = get_target_ratio_and_deadzone(state.target_override)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
@@ -240,7 +255,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   defp get_target_ratio_and_deadzone(nil), do: {@target_percent, @deadzone}
 
-  defp get_target_ratio_and_deadzone(override) when is_float(override),
+  defp get_target_ratio_and_deadzone({override, _}) when is_float(override),
     do: {override, @override_deadzone}
 
   defp get_closed_breakers do
@@ -371,5 +386,27 @@ defmodule AutoNuke.Operator.SteamFlow do
         allocate_power([new_pl | rest], to_allocate - 1)
       end
     end)
+  end
+
+  defp maybe_expire_override(%State{target_override: nil} = state), do: state
+  defp maybe_expire_override(%State{target_override: {_, :never}} = state), do: state
+
+  defp maybe_expire_override(%State{target_override: {_, ts}} = state) when is_integer(ts) do
+    if AutoNuke.Time.get_current_time() >= ts do
+      Logger.notice(@log_prefix <> "Target override has expired.")
+      %State{state | target_override: nil}
+    else
+      state
+    end
+  end
+
+  defp get_next_hour do
+    AutoNuke.Time.get_current_time()
+    |> AutoNuke.Time.timestamp_to_tuple()
+    |> then(fn
+      {dd, 23, _mm} -> {dd + 1, 0, 0}
+      {dd, hh, _mm} -> {dd, hh + 1, 0}
+    end)
+    |> AutoNuke.Time.parse_time()
   end
 end

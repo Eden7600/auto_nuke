@@ -317,8 +317,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) == 12
 
-      # Tick 3, we override the target to 1.3:
-      SteamFlow.set_target_override(1.3, pid)
+      # Tick 3, we override the target to 130%:
+      SteamFlow.set_target_override(130, :never, pid)
       mock_power.()
       send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) > 12
