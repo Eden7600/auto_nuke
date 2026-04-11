@@ -36,6 +36,10 @@ defmodule AutoNuke.Operator.CoreFactor do
     GenServer.start_link(__MODULE__, target, opts)
   end
 
+  def get_core_factor(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_core_factor)
+  end
+
   def get_target(pid \\ __MODULE__) do
     GenServer.call(pid, :get_target)
   end
@@ -96,6 +100,11 @@ defmodule AutoNuke.Operator.CoreFactor do
     )
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_core_factor, _from, %State{} = state) do
+    {:reply, state.last_core_factor, state}
   end
 
   @impl true
@@ -187,7 +196,7 @@ defmodule AutoNuke.Operator.CoreFactor do
 
   # Avoid transients:
   defp get_verified_core_factor(seen) do
-    factor = get_core_factor()
+    factor = API.get_float("CORE_FACTOR")
 
     if factor in seen do
       factor
@@ -196,8 +205,6 @@ defmodule AutoNuke.Operator.CoreFactor do
       get_verified_core_factor([factor | seen])
     end
   end
-
-  def get_core_factor, do: API.get_float("CORE_FACTOR")
 
   defp get_banks_and_rods do
     1..9
