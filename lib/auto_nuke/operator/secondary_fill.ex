@@ -7,17 +7,17 @@ defmodule AutoNuke.Operator.SecondaryFill do
   defguard is_my_tick(t) when rem(t, @ticks_per_second) == 3
 
   defmodule State do
-    @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity]
+    @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity, :adjustment]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.API
   alias AutoNuke.API.{SteamGen, Pumps, Vessels}
 
-  # Target between 49% and 51% fill.
-  @fill_target_min 0.49
-  @fill_target_max 0.51
-  # Outside this range, adjust pump speed by 1.
+  # Target between 45% and 55% fill.
+  @fill_target_min 0.45
+  @fill_target_max 0.55
+  # Outside this range, adjust pump speed by 1, until reaching 50%.
   @fill_target_pump_adjust 1
   # Keep fill between 30% and 70%.
   @fill_limit_min 0.30
@@ -64,7 +64,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
       loop: loop,
       steam_gen: steam_gen,
       speed: speed,
-      pump_capacity: capacity
+      pump_capacity: capacity,
+      adjustment: nil
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -89,20 +90,27 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @impl true
   def handle_info({:tick, _}, %State{loop: loop, speed: old_speed} = state) do
     steam_gen = state.steam_gen
-    new_speed = calculate_speed(steam_gen, state.pump_capacity)
+    fill_level = Vessels.get_fill_ratio(steam_gen.vessel)
+
+    adjust = determine_adjustment(state.adjustment, fill_level)
+    new_speed = calculate_speed(steam_gen, state.pump_capacity, fill_level, adjust)
 
     if new_speed != old_speed do
       Logger.info(log_prefix(loop) <> "Changing speed from #{old_speed} to #{new_speed}.")
       Pumps.set_speed(steam_gen.pump, new_speed)
-      {:noreply, %State{state | speed: new_speed}}
-    else
-      {:noreply, state}
     end
+
+    {:noreply, %State{state | speed: new_speed, adjustment: adjust}}
   end
 
-  defp calculate_speed(%SteamGen{} = steam_gen, pump_capacity) do
+  defp determine_adjustment(nil, f) when f < @fill_target_min, do: :fill
+  defp determine_adjustment(nil, f) when f > @fill_target_max, do: :empty
+  defp determine_adjustment(:fill, f) when f >= 0.5, do: nil
+  defp determine_adjustment(:empty, f) when f <= 0.5, do: nil
+  defp determine_adjustment(current, _), do: current
+
+  defp calculate_speed(%SteamGen{} = steam_gen, pump_capacity, fill_level, adjust) do
     ideal = SteamGen.get_outlet(steam_gen) / pump_capacity * 100
-    fill_level = Vessels.get_fill_ratio(steam_gen.vessel)
 
     cond do
       fill_level < @fill_limit_min ->
@@ -117,10 +125,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
         adjust = ideal * percent
         ideal - max(adjust, @fill_target_pump_adjust)
 
-      fill_level < @fill_target_min ->
+      adjust == :fill ->
         ideal + @fill_target_pump_adjust
 
-      fill_level > @fill_target_max ->
+      adjust == :empty ->
         ideal - @fill_target_pump_adjust
 
       true ->
