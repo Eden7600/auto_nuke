@@ -481,7 +481,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 0))
+    |> Enum.each(&UI.Valves.set(&1, 0, wait: false))
   end
 
   defp monitor_pressure(name, steam_gen, loop_count) do
