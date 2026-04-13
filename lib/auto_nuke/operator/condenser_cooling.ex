@@ -1,10 +1,7 @@
 defmodule AutoNuke.Operator.CondenserCooling do
   use GenServer
+  use AutoNuke.Operator
   require Logger
-
-  # Run on the fifth and final tick each second:
-  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
-  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 4
 
   defmodule State do
     @enforce_keys [:last_temp, :last_direction, :probe_timer]

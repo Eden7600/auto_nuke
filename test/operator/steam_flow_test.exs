@@ -6,7 +6,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   alias AutoNuke.Test.TurbineFactory
   alias AutoNuke.Test.MockAPI, as: API
 
-  @tick 2..10000//5
+  @tick AutoNuke.Operator.assigned_tick(SteamFlow)..10000//5
 
   describe "axis_to_total_power/2" do
     test "is power level 2 for min axis" do

@@ -1,10 +1,7 @@
 defmodule AutoNuke.Operator.CoreTemp do
   use GenServer
+  use AutoNuke.Operator
   require Logger
-
-  # Run on the second tick each second:
-  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
-  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 1
 
   defmodule State do
     @enforce_keys [:pump_speed, :smoothed_temp]

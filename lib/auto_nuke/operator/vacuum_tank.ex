@@ -1,10 +1,7 @@
 defmodule AutoNuke.Operator.VacuumTank do
   use GenServer
+  use AutoNuke.Operator
   require Logger
-
-  # Run on the fifth and final tick each second:
-  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
-  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 4
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API

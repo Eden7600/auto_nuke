@@ -1,10 +1,7 @@
 defmodule AutoNuke.Operator.CoreFactor do
   use GenServer
+  use AutoNuke.Operator
   require Logger
-
-  # Run on the first tick each second:
-  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
-  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 0
 
   defmodule State do
     @enforce_keys [:banks, :target, :axis, :smoothed, :last_core_factor]

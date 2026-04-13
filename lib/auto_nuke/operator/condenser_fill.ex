@@ -1,10 +1,7 @@
 defmodule AutoNuke.Operator.CondenserFill do
   use GenServer
+  use AutoNuke.Operator
   require Logger
-
-  # Run on the fourth tick each second:
-  @ticks_per_second AutoNuke.Ticker.ticks_per_second()
-  defguard is_my_tick(t) when rem(t, @ticks_per_second) == 3
 
   defmodule State do
     @enforce_keys [:last_fill, :last_status, :freight_pump, :drain_valve]
