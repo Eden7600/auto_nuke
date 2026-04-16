@@ -37,6 +37,9 @@ defmodule AutoNuke.Test.MockAPI do
 
   def unused_mocks do
     GenServer.call(__MODULE__, {:unused_mocks, self()})
+    |> Enum.reject(fn {_op, _key, {_value, opts}} ->
+      Keyword.get(opts, :times) == :any
+    end)
   end
 
   def register_alias(from, to) do
@@ -121,20 +124,18 @@ defmodule AutoNuke.Test.MockAPI do
   defp pop_mock(%State{mocks: mocks, aliases: aliases} = state, pid, operation) do
     pid = aliases |> Map.get(pid, pid)
 
-    get_and_update_in(mocks, [pid, operation], fn
+    mocks
+    |> Map.put_new(pid, %{})
+    |> get_and_update_in([pid, operation], fn
       nil ->
         {nil, nil}
 
       q ->
         case :queue.out(q) do
           {{:value, {v, opts}}, new_q} ->
-            remaining = Keyword.get(opts, :times, 1) - 1
-
-            if remaining > 0 do
-              new_opts = Keyword.replace(opts, :times, remaining)
-              {v, :queue.in_r({v, new_opts}, new_q)}
-            else
-              {v, new_q}
+            case consume_pop(opts) do
+              :consume -> {v, new_q}
+              {:return, new_opts} -> {v, :queue.in_r({v, new_opts}, new_q)}
             end
 
           {:empty, new_q} ->
@@ -144,6 +145,15 @@ defmodule AutoNuke.Test.MockAPI do
     |> then(fn {value, new_mocks} ->
       {value, %State{state | mocks: new_mocks}}
     end)
+  end
+
+  defp consume_pop(opts) do
+    case Keyword.get(opts, :times) do
+      nil -> :consume
+      1 -> :consume
+      :any -> {:return, opts}
+      n when is_integer(n) -> {:return, Keyword.replace(opts, :times, n - 1)}
+    end
   end
 
   defp maybe_add_pid(mocks, pid) do
@@ -158,5 +168,6 @@ defmodule AutoNuke.Test.MockAPI do
   end
 
   defp validate_opts([]), do: :ok
+  defp validate_opts([{:times, :any} | rest]), do: validate_opts(rest)
   defp validate_opts([{:times, n} | rest]) when is_integer(n), do: validate_opts(rest)
 end
