@@ -138,6 +138,17 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert_in_delta dz3, 0.0931, 0.0001
     end
 
+    test "does not change target throughout the hour", %{dt: dt, ts: ts} do
+      0..59
+      |> Enum.reduce(dt, fn n, dt ->
+        API.mock_get("TIME_STAMP", ts + n)
+        assert dt = DT.tick(dt, 50_000)
+        assert {tgt, _} = t = DT.target_and_deadzone(dt)
+        assert_in_delta tgt, 1.0, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
+        dt
+      end)
+    end
+
     test "increases target when supply is not meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("TIME_STAMP", ts)
       assert dt = DT.tick(dt, 10_000)
@@ -162,28 +173,6 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
 
       assert {tgt, _dz} = DT.target_and_deadzone(dt)
       assert_in_delta tgt, 0.9793, 0.0001
-    end
-
-    test "has a minimum range of 0% - 25% when overproducing", %{dt: dt, ts: ts} do
-      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
-
-      dt =
-        0..5
-        |> Enum.reduce(dt, fn min, dt ->
-          API.mock_get("TIME_STAMP", ts + min)
-          DT.tick(dt, 1_210_000)
-        end)
-
-      # 12.5% with a deadzone of 12.5%, which maps to 0% - 25%
-      assert {0.125, 0.125} = DT.target_and_deadzone(dt)
-    end
-
-    test "has a maximum range of 200% - 300% when underproducing", %{dt: dt, ts: ts} do
-      # Jump to the end of the hour:
-      API.mock_get("TIME_STAMP", ts + 55)
-      assert dt = DT.tick(dt, 1)
-
-      assert {2.5, 0.5} = DT.target_and_deadzone(dt)
     end
   end
 

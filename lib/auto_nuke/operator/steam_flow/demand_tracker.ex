@@ -13,17 +13,6 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   @lower_limit 0.91
   @upper_limit 1.09
 
-  # Minimum and maximum targets, as a percentage of the current demand.
-  # This means that if we spend much of the hour under- or over-procuding,
-  # we won't end up with ludicrously high / negative targets.
-  #
-  # The lower limit can't go negative, and it can't go higher than 200% the current demand.
-  @min_lower_limit 0.0
-  @max_lower_limit 2.0
-  # The upper limit can't go below 25%, and it can't go higher than 300%.
-  @min_upper_limit 0.25
-  @max_upper_limit 3.0
-
   def new do
     timestamp = API.Misc.get_time_stamp()
     demand_kwh = API.Power.get_demand_kw()
@@ -41,8 +30,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     lower_kw = (demand * @lower_limit - supply) / hour_remaining_percent(ts)
     upper_kw = (demand * @upper_limit - supply) / hour_remaining_percent(ts)
 
-    lower_ratio = (lower_kw / demand) |> clamp(@min_lower_limit, @max_lower_limit)
-    upper_ratio = (upper_kw / demand) |> clamp(@min_upper_limit, @max_upper_limit)
+    lower_ratio = lower_kw / demand
+    upper_ratio = upper_kw / demand
 
     target = (upper_ratio + lower_ratio) / 2
     deadzone = (upper_ratio - lower_ratio) / 2
@@ -103,10 +92,4 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   defp hour_elapsed_percent(timestamp), do: rem(timestamp, 60) / 60
   defp hour_remaining_percent(timestamp), do: 1.0 - hour_elapsed_percent(timestamp)
-
-  defp clamp(n, min, max) do
-    n
-    |> max(min)
-    |> min(max)
-  end
 end
