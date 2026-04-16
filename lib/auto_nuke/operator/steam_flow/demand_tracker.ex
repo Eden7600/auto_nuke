@@ -17,12 +17,12 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   # This means that if we spend much of the hour under- or over-procuding,
   # we won't end up with ludicrously high / negative targets.
   #
-  # The lower limit can't go negative, and it can't go higher than 300% the current demand.
+  # The lower limit can't go negative, and it can't go higher than 200% the current demand.
   @min_lower_limit 0.0
-  @max_lower_limit 3.0
-  # The upper limit can go as high as needed, but can't go below 25% demand.
+  @max_lower_limit 2.0
+  # The upper limit can't go below 25%, and it can't go higher than 300%.
   @min_upper_limit 0.25
-  @max_upper_limit 10000
+  @max_upper_limit 3.0
 
   def new do
     timestamp = API.Misc.get_time_stamp()
@@ -37,25 +37,16 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     }
   end
 
-  defp target_kw_range(%DT{timestamp: ts, supplied_kwh: supply, demand_kwh: demand}) do
-    lower =
-      ((demand * @lower_limit - supply) / hour_remaining_percent(ts))
-      |> clamp(demand * @min_lower_limit, demand * @max_lower_limit)
+  def target_and_deadzone(%DT{timestamp: ts, supplied_kwh: supply, demand_kwh: demand}) do
+    lower_kw = (demand * @lower_limit - supply) / hour_remaining_percent(ts)
+    upper_kw = (demand * @upper_limit - supply) / hour_remaining_percent(ts)
 
-    upper =
-      ((demand * @upper_limit - supply) / hour_remaining_percent(ts))
-      |> clamp(demand * @min_upper_limit, demand * @max_upper_limit)
+    lower_ratio = (lower_kw / demand) |> clamp(@min_lower_limit, @max_lower_limit)
+    upper_ratio = (upper_kw / demand) |> clamp(@min_upper_limit, @max_upper_limit)
 
-    target =
-      ((demand - supply) / hour_remaining_percent(ts))
-      |> clamp(lower, upper)
-
-    {lower, target, upper}
-  end
-
-  def target_ratio_range(%DT{demand_kwh: demand} = dt) do
-    {lower, target, upper} = target_kw_range(dt)
-    {lower / demand, target / demand, upper / demand}
+    target = (upper_ratio + lower_ratio) / 2
+    deadzone = (upper_ratio - lower_ratio) / 2
+    {target, deadzone}
   end
 
   def current_ratio(%DT{demand_kwh: demand}, supply), do: supply / demand

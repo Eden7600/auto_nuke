@@ -108,53 +108,49 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     end
   end
 
-  describe "target_ratio_range/1" do
+  describe "target_and_deadzone/1" do
     setup do
       create_demand_tracker(minute: 0, demand: 50)
     end
 
     test "targets between 91% and 109% demand to start", %{dt: dt} do
-      assert {0.91, 1.0, 1.09} = DT.target_ratio_range(dt)
+      assert {1.0, dz} = DT.target_and_deadzone(dt)
+      assert_in_delta dz, 0.09, 0.0001
     end
 
-    test "broadens target range when supply is meeting demand", %{dt: dt, ts: ts} do
+    test "broadens deadzone when supply is meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("TIME_STAMP", ts)
       assert dt = DT.tick(dt, 50_000)
+      assert {tgt1, dz1} = DT.target_and_deadzone(dt)
+      assert_in_delta tgt1, 1.0, 0.0001
+      assert_in_delta dz1, 0.09, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 1)
       assert dt = DT.tick(dt, 50_000)
-      assert {min2, 1.0, max2} = DT.target_ratio_range(dt)
-      # Should still be broadly similar to the 91% / 109% targets.
-      assert_in_delta min2, 0.91, 0.01
-      assert_in_delta max2, 1.09, 0.01
+      assert {tgt2, dz2} = DT.target_and_deadzone(dt)
+      assert_in_delta tgt2, 1.0, 0.0001
+      assert_in_delta dz2, 0.0915, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 2)
       assert dt = DT.tick(dt, 50_000)
-      assert {min3, 1.0, max3} = DT.target_ratio_range(dt)
-      # Should still be broadly similar to the 91% / 109% targets.
-      assert_in_delta min3, 0.91, 0.01
-      assert_in_delta max3, 1.09, 0.01
-
-      # Range is broadening.
-      assert min3 < min2
-      assert max3 > max2
+      assert {tgt3, dz3} = DT.target_and_deadzone(dt)
+      assert_in_delta tgt3, 1.0, 0.0001
+      assert_in_delta dz3, 0.0931, 0.0001
     end
 
-    test "increases target range when supply is not meeting demand", %{dt: dt, ts: ts} do
+    test "increases target when supply is not meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("TIME_STAMP", ts)
-      assert dt = DT.tick(dt, 30_000)
+      assert dt = DT.tick(dt, 10_000)
       API.mock_get("TIME_STAMP", ts + 1)
-      assert dt = DT.tick(dt, 30_000)
+      assert dt = DT.tick(dt, 10_000)
       API.mock_get("TIME_STAMP", ts + 2)
-      assert dt = DT.tick(dt, 30_000)
+      assert dt = DT.tick(dt, 10_000)
 
-      assert {min, tgt, max} = DT.target_ratio_range(dt)
-      assert min > 0.92
-      assert tgt > 1.01
-      assert max > 1.1
+      assert {tgt, _dz} = DT.target_and_deadzone(dt)
+      assert_in_delta tgt, 1.0275, 0.0001
     end
 
-    test "decreases target range when supply is exceeding demand", %{dt: dt, ts: ts} do
+    test "decreases target when supply is exceeding demand", %{dt: dt, ts: ts} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
 
       API.mock_get("TIME_STAMP", ts)
@@ -164,10 +160,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       API.mock_get("TIME_STAMP", ts + 2)
       assert dt = DT.tick(dt, 80_000)
 
-      assert {min, tgt, max} = DT.target_ratio_range(dt)
-      assert min < 0.89
-      assert tgt < 0.98
-      assert max < 1.08
+      assert {tgt, _dz} = DT.target_and_deadzone(dt)
+      assert_in_delta tgt, 0.9793, 0.0001
     end
 
     test "has a minimum range of 0% - 25% when overproducing", %{dt: dt, ts: ts} do
@@ -180,17 +174,16 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
           DT.tick(dt, 1_210_000)
         end)
 
-      assert {+0.0, +0.0, 0.25} = DT.target_ratio_range(dt)
+      # 12.5% with a deadzone of 12.5%, which maps to 0% - 25%
+      assert {0.125, 0.125} = DT.target_and_deadzone(dt)
     end
 
-    test "has a maximum range of 300% and up when underproducing", %{dt: dt, ts: ts} do
+    test "has a maximum range of 200% - 300% when underproducing", %{dt: dt, ts: ts} do
       # Jump to the end of the hour:
       API.mock_get("TIME_STAMP", ts + 55)
       assert dt = DT.tick(dt, 1)
 
-      assert {3.0, tgt, max} = DT.target_ratio_range(dt)
-      assert tgt > 3.0
-      assert max > tgt
+      assert {2.5, 0.5} = DT.target_and_deadzone(dt)
     end
   end
 
