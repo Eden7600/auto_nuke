@@ -97,8 +97,8 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     test "ensures enough steam", %{turbine: turbine} do
       # Let's pretend steam is just bypass x2, so our target is 25 bypass = 50 steam.
       steam_fun = fn bypass -> bypass * 2.0 end
-      # Steam output will be the average of the last 5 steam readings.
-      smoother = Smoother.new(5)
+      # Steam output will be the average of the last 3 steam readings.
+      smoother = Smoother.new(3)
 
       {final_turbine, _} =
         1..@settle_time

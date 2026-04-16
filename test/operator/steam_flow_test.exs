@@ -165,6 +165,13 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "maintains current power when demand is met", %{pid: pid} do
+      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
+      0..2
+      |> Enum.each(fn n ->
+        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
+        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
+      end)
+
       assert power_levels(pid) == [3, 5, 4]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -173,13 +180,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
-      # Steam output and pressure gets queried by `Turbine.tick/1`.
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
-      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -338,6 +338,13 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "maintains current power when demand is met", %{pid: pid} do
+      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
+      0..2
+      |> Enum.each(fn n ->
+        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
+        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
+      end)
+
       assert power_levels(pid) == [3, 5, 4]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -346,13 +353,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
-      # Steam output and pressure gets queried by `Turbine.tick/1`.
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
-      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -444,6 +444,13 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "maintains current power when demand is met", %{pid: pid} do
+      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
+      0..1
+      |> Enum.each(fn n ->
+        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
+        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
+      end)
+
       assert power_levels(pid) == [3, 5]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -451,10 +458,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) / 1.05 / 1000)
-      API.mock_get("STEAM_GEN_0_OUTLET", 1000)
-      API.mock_get("STEAM_GEN_1_OUTLET", 1000)
-      API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
-      API.mock_get("COOLANT_SEC_1_PRESSURE", 60)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -539,15 +542,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
 
     test "maintains current power when demand is met", %{pid: pid} do
+      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
+      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: :any)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60, times: :any)
+
       assert power_levels(pid) == [4]
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       # Ensure supply (kW) is 105% of demand (MW).
       API.mock_get("POWER_DEMAND_MW", kw3 / 1.05 / 1000)
-      # Steam output is queried by `Turbine.tick/1`.
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
       send(pid, {:tick, Enum.random(@tick)})
 

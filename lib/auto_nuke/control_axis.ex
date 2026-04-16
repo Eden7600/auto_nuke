@@ -48,8 +48,7 @@ defmodule AutoNuke.ControlAxis do
   end
 
   def step(%ControlAxis{} = axis, target, measurement) do
-    measurement = apply_deadzone(axis.deadzone, target, measurement)
-    pidc = PIDControl.step(axis.pidc, target, measurement)
+    pidc = step_with_deadzone(axis.pidc, axis.deadzone, target, measurement)
 
     old_value = axis.last_value
     old_v_state = axis.to_value_state
@@ -63,25 +62,39 @@ defmodule AutoNuke.ControlAxis do
     end
   end
 
-  def clamp_max(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, max) do
+  def clamp_max(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, max, new_value \\ nil) do
     new_p = min(pidc.p, max)
     new_i = min(pidc.i, max - new_p)
-    %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}
+
+    %ControlAxis{
+      axis
+      | pidc: %PIDControl{pidc | p: new_p, i: new_i},
+        last_value: new_value || axis.last_value
+    }
   end
 
-  def clamp_min(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, min) do
+  def clamp_min(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, min, new_value \\ nil) do
     new_p = max(pidc.p, min)
     new_i = max(pidc.i, min - new_p)
-    %ControlAxis{axis | pidc: %PIDControl{pidc | p: new_p, i: new_i}}
+
+    %ControlAxis{
+      axis
+      | pidc: %PIDControl{pidc | p: new_p, i: new_i},
+        last_value: new_value || axis.last_value
+    }
   end
 
-  defp apply_deadzone(+0.0, _target, measurement), do: measurement
-
-  defp apply_deadzone(dz, target, measurement) do
+  defp step_with_deadzone(%PIDControl{} = pidc, dz, target, measurement) do
     if abs(target - measurement) <= dz do
-      target
+      old_config = pidc.config
+      zero_config = pidc.config |> Map.replace!(:ki, 0)
+
+      pidc
+      |> Map.replace!(:config, zero_config)
+      |> PIDControl.step(target, measurement)
+      |> Map.replace!(:config, old_config)
     else
-      measurement
+      PIDControl.step(pidc, target, measurement)
     end
   end
 
