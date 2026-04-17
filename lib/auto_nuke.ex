@@ -26,6 +26,7 @@ defmodule AutoNuke do
       [
         AutoNuke.Operator.CoreFactor,
         AutoNuke.Operator.CoreTemp,
+        AutoNuke.Operator.CorePower,
         AutoNuke.Operator.SteamFlow,
         {AutoNuke.Operator.SecondaryFill, loop: 1},
         {AutoNuke.Operator.SecondaryFill, loop: 2},
