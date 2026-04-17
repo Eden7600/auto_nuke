@@ -60,7 +60,7 @@ defmodule AutoNuke.Operator.CorePower do
   @impl true
   def handle_info({:tick, _}, %State{bypass: nil} = state) do
     Logger.warning(@log_prefix <> "No bypass data received yet.")
-    state
+    {:noreply, state}
   end
 
   @impl true
