@@ -4,7 +4,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:pump_speed, :bypass, :pressure]
+    @enforce_keys [:pump_speed, :last_temp, :bypass, :pressure]
     defstruct(@enforce_keys)
   end
 
@@ -15,10 +15,10 @@ defmodule AutoNuke.Operator.CoreTemp do
   # Allowed pump speeds. I'm told >50% is useless, and there's the "keep below
   # 50%" objective, so 49 is our max.  10% is our arbitrarily set low, but we
   # may never reach that due to temperature limitations.
-  @pump_speeds 10..49
-  # High and low steam amounts.  If we're sending at least 20 kg/min through
+  @pump_speeds 5..49
+  # High and low steam amounts.  If we're sending at least 50 kg/min through
   # bypass on ALL turbines, try increasing pumps (thus reducing temperature).
-  @bypass_high 20
+  @bypass_high 50
   # If our pressure on ANY turbine is 60 bar or lower,
   # try reducing pumps (thus increasing temperature).
   @pressure_low 60
@@ -42,11 +42,12 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def init(_) do
-    speed = get_average_pump_speed()
+    speed = get_average_pump_speed() |> round()
 
     state =
       %State{
         pump_speed: speed,
+        last_temp: get_temperature(),
         bypass: nil,
         pressure: nil
       }
@@ -54,7 +55,7 @@ defmodule AutoNuke.Operator.CoreTemp do
     PubSub.subscribe(self(), :ticker)
     PubSub.subscribe(self(), :steam_flow)
     temp = get_temperature() |> Float.round(1)
-    Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pumps at #{speed}.")
+    Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pumps at #{speed}%.")
     {:ok, state}
   end
 
@@ -76,10 +77,10 @@ defmodule AutoNuke.Operator.CoreTemp do
   def handle_info({:tick, _}, %State{} = state) do
     cond do
       state.pressure |> Enum.any?(&(&1 <= @pressure_low)) ->
-        state |> adjust_pumps(-1, "Low pressure(s): #{inspect(state.pressure)}")
+        state |> adjust_pumps(-1, "Low pressure(s): #{show_pressure(state.pressure)}")
 
       state.bypass |> Enum.all?(&(&1 >= @bypass_high)) ->
-        state |> adjust_pumps(+1, "High bypass: #{inspect(state.bypass)}")
+        state |> adjust_pumps(+1, "High bypass: #{show_bypass(state.bypass)}")
 
       true ->
         state |> adjust_pumps(0, "All systems nominal")
@@ -92,10 +93,21 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     cond do
       temp >= @crit_high ->
-        state |> backoff_pumps(+1, temp)
+        if temp >= state.last_temp do
+          state |> backoff_pumps(+3, temp)
+        else
+          state |> hold_pumps(reason, "critical", temp)
+        end
 
       temp <= @crit_low ->
-        state |> backoff_pumps(-1, temp)
+        if temp <= state.last_temp do
+          state |> backoff_pumps(-3, temp)
+        else
+          state |> hold_pumps(reason, "critical", temp)
+        end
+
+      change == 0 ->
+        state
 
       change < 0 && temp >= @temp_high ->
         state |> hold_pumps(reason, "high", temp)
@@ -106,9 +118,10 @@ defmodule AutoNuke.Operator.CoreTemp do
       true ->
         state
         |> change_pumps(change, fn {_, msg} ->
-          Logger.info(@log_prefix <> reason <> "  " <> msg)
+          Logger.info(@log_prefix <> reason <> ".  " <> msg)
         end)
     end
+    |> then(fn %State{} = state -> %State{state | last_temp: temp} end)
   end
 
   defp backoff_pumps(state, change, temp) do
@@ -137,16 +150,18 @@ defmodule AutoNuke.Operator.CoreTemp do
     state
   end
 
-  defp change_pumps(state, change, result_fn) do
+  defp change_pumps(%State{} = state, change, result_fn) do
     old_speed = state.pump_speed
     new_speed = (old_speed + change) |> clamp(@pump_speeds)
     verb = if change > 0, do: "increase", else: "decrease"
 
     if old_speed == new_speed do
       result_fn.({:at_limit, "Cannot #{verb} pump speeds beyond #{old_speed}%."})
+      state
     else
       set_pump_speeds(new_speed)
       result_fn.({:ok, "Pump speeds changed to #{new_speed}%."})
+      %State{state | pump_speed: new_speed}
     end
   end
 
@@ -172,5 +187,21 @@ defmodule AutoNuke.Operator.CoreTemp do
     value
     |> max(min)
     |> min(max)
+  end
+
+  defp show_bypass(bypass) do
+    bypass
+    |> Enum.filter(&(&1 >= @bypass_high))
+    |> Enum.map(&ceil/1)
+    |> Enum.join(", ")
+    |> then(&"#{&1} kg/min")
+  end
+
+  defp show_pressure(pressure) do
+    pressure
+    |> Enum.filter(&(&1 <= @pressure_low))
+    |> Enum.map(&floor/1)
+    |> Enum.join(", ")
+    |> then(&"#{&1} bar")
   end
 end

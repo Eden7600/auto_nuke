@@ -14,12 +14,13 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :steam_gen,
     # Current bypass setting
     :bypass,
-    # Latest pressure reading
-    :pressure,
     # Target power level, assigned by parent (based on power requirements)
     :power_level,
     # Minimum steam requirement, assigned by parent (based on number of turbines)
-    :min_steam
+    :min_steam,
+    # Latest readings
+    :steam,
+    :pressure
   ]
   defstruct(@enforce_keys)
 
@@ -67,9 +68,10 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       secondary_capacity: Pumps.secondary(loop) |> Pumps.get_capacity(),
       steam_gen: steam_gen,
       bypass: bypass,
-      pressure: SteamGen.get_pressure(steam_gen),
       power_level: mscv |> mscv_to_power_level(),
-      min_steam: min_steam
+      min_steam: min_steam,
+      steam: SteamGen.get_outlet(steam_gen),
+      pressure: SteamGen.get_pressure(steam_gen)
     }
   end
 
@@ -96,15 +98,19 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
   def get_generated_power(%Turbine{loop: loop}), do: Generator.get_power_kw(loop)
 
+  def steam_via_bypass(%Turbine{power_level: power_level, steam: steam}),
+    do: steam - power_level * 10
+
   def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
+    steam = SteamGen.get_outlet(steam_gen)
+    pressure = SteamGen.get_pressure(steam_gen)
+
     {steam_bypass, steam_axis} =
       step_axis(
         turbine.steam_axis,
-        SteamGen.get_outlet(steam_gen),
+        steam,
         turbine.min_steam
       )
-
-    pressure = SteamGen.get_pressure(steam_gen)
 
     {pressure_bypass, pressure_axis} =
       step_axis(
@@ -132,6 +138,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       | steam_axis: steam_axis,
         pressure_axis: pressure_axis,
         bypass: new,
+        steam: steam,
         pressure: pressure
     }
   end

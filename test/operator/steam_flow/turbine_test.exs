@@ -14,12 +14,15 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       API.mock_get("COOLANT_CORE_CIRCULATION_PUMP_2_CAPACITY", 200)
       API.mock_get("COOLANT_SEC_CIRCULATION_PUMP_2_CAPACITY", 200)
       API.mock_get("STEAM_TURBINE_2_BYPASS_ACTUAL", 0, times: 2)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
       API.mock_get("MSCV_2_OPENING_ACTUAL", 4)
+      API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
+      API.mock_get("STEAM_GEN_2_OUTLET", 50)
 
       assert %Turbine{} = turbine = Turbine.new(3, 50)
       assert turbine.loop == 3
       assert turbine.power_level == 4
+      assert turbine.pressure == 60
+      assert turbine.steam == 50
     end
   end
 
