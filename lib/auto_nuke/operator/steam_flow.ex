@@ -4,17 +4,18 @@ defmodule AutoNuke.Operator.SteamFlow do
   require Logger
 
   alias AutoNuke.Smoother
-  alias AutoNuke.Operator.SteamFlow.Turbine
+  alias AutoNuke.Operator.SteamFlow.{Turbine, DemandTracker}
 
   defmodule State do
-    # Give us the average of the last 5 ticks (1 sec) of generation:
-    @generator_smoothing 5
+    # Give us the average of the last 5 ticks of power generation:
+    @supply_smoothing 5
 
-    @enforce_keys [:axis, :turbines]
+    @enforce_keys [:axis, :turbines, :demand_tracker]
     defstruct(
       axis: nil,
       turbines: nil,
-      smoothed_generation: Smoother.new(@generator_smoothing),
+      demand_tracker: nil,
+      smoothed_supply: Smoother.new(@supply_smoothing),
       target_override: nil
     )
   end
@@ -46,16 +47,6 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Valid loop numbers:
   @loops 1..3
 
-  # Unless overridden, we target between 95% and 110% demand.
-  #
-  # Why 95%?  Because if demand increases, there will be a brief period
-  # at the start of the hour where we're underproducing, and if we then
-  # happen to end up at just over 90% the rest of the hour, we might still
-  # miss the 90% demand target.
-  #
-  # To accomplish this, we target 102.5%, plus or minus 7.5%.
-  @target_percent 1.025
-  @deadzone 0.075
   # When overriding, use a flat 5% deadzone.
   @override_deadzone 0.05
 
@@ -111,8 +102,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       ControlAxis.new(
         kp: 0.3,
         ki: 0.03,
-        kd: 0.015,
-        deadzone: @deadzone,
+        # kd: 0.015,
         to_value_fn: &Function.identity/1,
         offset: initial,
         initial_value: initial
@@ -120,7 +110,8 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     state = %State{
       turbines: turbines,
-      axis: axis
+      axis: axis,
+      demand_tracker: DemandTracker.new()
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -206,9 +197,18 @@ defmodule AutoNuke.Operator.SteamFlow do
           turbines: old_turbines
         } = state
       ) do
-    state = maybe_expire_override(state)
-    {ratio, smoother} = get_demand_ratio(state)
-    {target, deadzone} = get_target_ratio_and_deadzone(state.target_override)
+    supply_kw = get_current_supply(state.turbines)
+
+    state =
+      %State{
+        state
+        | demand_tracker: state.demand_tracker |> DemandTracker.tick(supply_kw),
+          smoothed_supply: state.smoothed_supply |> Smoother.add(supply_kw)
+      }
+      |> maybe_expire_override()
+
+    ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
+    {target, deadzone} = get_target_ratio_and_deadzone(state)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
 
     case ControlAxis.step(old_axis, target, ratio) do
@@ -233,36 +233,26 @@ defmodule AutoNuke.Operator.SteamFlow do
        %State{
          state
          | axis: axis,
-           turbines: turbines |> Enum.map(&Turbine.tick/1),
-           smoothed_generation: smoother
+           turbines: turbines |> Enum.map(&Turbine.tick/1)
        }}
     end)
   end
 
-  defp get_demand_ratio(%State{smoothed_generation: smoothed} = state) do
-    smoothed = smoothed |> Smoother.add(get_generation_kw(state))
+  defp get_target_ratio_and_deadzone(%State{target_override: nil, demand_tracker: dt}),
+    do: DemandTracker.target_and_deadzone(dt)
 
-    generated_kw = Smoother.average(smoothed)
-    used_kw = API.Power.get_used_kw()
-    demand_kw = API.Power.get_demand_kw()
-    ratio = (generated_kw - used_kw) / demand_kw
-
-    {ratio, smoothed}
-  end
-
-  defp get_target_ratio_and_deadzone(nil), do: {@target_percent, @deadzone}
-
-  defp get_target_ratio_and_deadzone({override, _}) when is_float(override),
+  defp get_target_ratio_and_deadzone(%State{target_override: {override, _}}),
     do: {override, @override_deadzone}
 
-  defp get_closed_breakers do
-    @loops |> Enum.filter(&API.Generator.get_is_connected/1)
-  end
-
-  defp get_generation_kw(%State{turbines: turbines}) do
+  defp get_current_supply(turbines) do
     turbines
     |> Enum.map(&Turbine.get_generated_power/1)
     |> Enum.sum()
+    |> Kernel.-(API.Power.get_used_kw())
+  end
+
+  defp get_closed_breakers do
+    @loops |> Enum.filter(&API.Generator.get_is_connected/1)
   end
 
   defp percent(float), do: "#{float * 100}%"

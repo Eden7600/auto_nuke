@@ -178,8 +178,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      # Ensure supply (kW) is 105% of demand (MW).
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
+      # Ensure supply (kW) is 100% of demand (MW).
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -194,7 +194,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 1.20 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 1.30 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -222,7 +222,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 0.80 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -250,7 +250,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 2.0 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 2.0 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 44, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 60, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
@@ -269,9 +269,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
-      # Ensure supply (kW) is 105% of demand (MW) ...
+      # Ensure supply (kW) is 100% of demand (MW) ...
       total_kw = kw1 + kw2 + kw3
-      API.mock_get("POWER_DEMAND_MW", total_kw / 1.05 / 1000)
+      demand_tracker_mocks(demand_mw: total_kw / 1000)
       # ... but pretend the plant requires a truly excessive amount of power (25%):
       API.mock_get("POWER_FROM_TURBINE_KW", total_kw / 4)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
@@ -291,14 +291,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       kw1 = :rand.uniform() * 25000
       kw2 = :rand.uniform() * 25000
       kw3 = :rand.uniform() * 25000
-      demand_mw = (kw1 + kw2 + kw3) / 1.05 / 1000
+      # Demand is picked up by DemandTracker on the first run,
+      # so it doesn't need to be part of the repeating mocks.
+      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1000)
 
       mock_power = fn ->
         API.mock_get("GENERATOR_0_KW", kw1)
         API.mock_get("GENERATOR_1_KW", kw2)
         API.mock_get("GENERATOR_2_KW", kw3)
         API.mock_get("POWER_FROM_TURBINE_KW", 0)
-        API.mock_get("POWER_DEMAND_MW", demand_mw)
+        demand_tracker_mocks(demand_mw: nil)
         API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
         API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
         API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -351,8 +353,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      # Ensure supply (kW) is 105% of demand (MW).
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1.05 / 1000)
+      # Ensure supply (kW) is 100% of demand (MW).
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -367,7 +369,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 1.20 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 1.30 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -390,7 +392,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 0.80 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 0.80 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
@@ -415,7 +417,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) * 2.0 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) * 2.0 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 44, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 60, times: 2)
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
@@ -456,8 +458,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      # Ensure supply (kW) is 105% of demand (MW).
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) / 1.05 / 1000)
+      # Ensure supply (kW) is 99.9% of demand (MW).
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) / 1000)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -472,7 +474,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 1.20 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) * 1.20 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -493,7 +495,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 0.80 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) * 0.80 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 1000, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -517,7 +519,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2) * 2.0 / 1000)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) * 2.0 / 1000)
       API.mock_get("STEAM_GEN_0_OUTLET", 34, times: 2)
       API.mock_get("STEAM_GEN_1_OUTLET", 75, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
@@ -550,8 +552,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      # Ensure supply (kW) is 105% of demand (MW).
-      API.mock_get("POWER_DEMAND_MW", kw3 / 1.05 / 1000)
+      # Ensure supply (kW) is 100% of demand (MW).
+      demand_tracker_mocks(demand_mw: kw3 / 1000)
 
       send(pid, {:tick, Enum.random(@tick)})
 
@@ -564,7 +566,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", kw3 * 1.20 / 1000)
+      demand_tracker_mocks(demand_mw: kw3 * 1.20 / 1000)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
@@ -580,7 +582,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", kw3 * 0.80 / 1000)
+      demand_tracker_mocks(demand_mw: kw3 * 0.80 / 1000)
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
@@ -596,7 +598,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
-      API.mock_get("POWER_DEMAND_MW", kw3 * 2.0 / 1000)
+      demand_tracker_mocks(demand_mw: kw3 * 2.0 / 1000)
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: 2)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
 
@@ -628,6 +630,11 @@ defmodule AutoNuke.Operator.SteamFlowTest do
         |> TurbineFactory.create()
     end)
 
+    # These are fake, only used for startup.
+    # Actual time and demand will be set by `demand_tracker_mocks/1` later.
+    API.mock_get("TIME_STAMP", 0)
+    API.mock_get("POWER_DEMAND_MW", 0)
+
     test_pid = self()
 
     mock_pid =
@@ -656,5 +663,16 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       {:put, key, _} -> key =~ ~r"STEAM_TURBINE_[0-2]_BYPASS_ORDERED"
       _ -> false
     end)
+  end
+
+  defp demand_tracker_mocks(opts) do
+    {demand, opts} = Keyword.pop(opts, :demand_mw)
+    {minute, opts} = Keyword.pop(opts, :minute, 0)
+    {resistors, opts} = Keyword.pop(opts, :resistors_mw, 0)
+    unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
+
+    API.mock_get("TIME_STAMP", 60 + minute)
+    unless is_nil(demand), do: API.mock_get("POWER_DEMAND_MW", demand)
+    unless is_nil(resistors), do: API.mock_get("RES_ABSORPTION_CAPACITY_MW", resistors)
   end
 end
