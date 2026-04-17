@@ -8,10 +8,10 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   @seconds_per_minute AutoNuke.Ticker.seconds_per_minute()
 
-  # Final supply should be between 91% and 109% of the hour's demand.
+  # Final supply should be between 95% and 105% of the hour's demand.
   # The game accepts 90% and 110%, but our API-based math may not be perfect.
-  @lower_limit 0.91
-  @upper_limit 1.09
+  @lower_limit 0.95
+  @upper_limit 1.05
 
   def new do
     timestamp = API.Misc.get_time_stamp()

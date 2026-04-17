@@ -113,9 +113,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       create_demand_tracker(minute: 0, demand: 50)
     end
 
-    test "targets between 91% and 109% demand to start", %{dt: dt} do
+    test "targets between 95% and 105% demand to start", %{dt: dt} do
       assert {1.0, dz} = DT.target_and_deadzone(dt)
-      assert_in_delta dz, 0.09, 0.0001
+      assert_in_delta dz, 0.05, 0.0001
     end
 
     test "broadens deadzone when supply is meeting demand", %{dt: dt, ts: ts} do
@@ -123,19 +123,19 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert dt = DT.tick(dt, 50_000)
       assert {tgt1, dz1} = DT.target_and_deadzone(dt)
       assert_in_delta tgt1, 1.0, 0.0001
-      assert_in_delta dz1, 0.09, 0.0001
+      assert_in_delta dz1, 0.05, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 1)
       assert dt = DT.tick(dt, 50_000)
       assert {tgt2, dz2} = DT.target_and_deadzone(dt)
       assert_in_delta tgt2, 1.0, 0.0001
-      assert_in_delta dz2, 0.0915, 0.0001
+      assert_in_delta dz2, 0.0508, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 2)
       assert dt = DT.tick(dt, 50_000)
       assert {tgt3, dz3} = DT.target_and_deadzone(dt)
       assert_in_delta tgt3, 1.0, 0.0001
-      assert_in_delta dz3, 0.0931, 0.0001
+      assert_in_delta dz3, 0.0517, 0.0001
     end
 
     test "does not change target throughout the hour", %{dt: dt, ts: ts} do
