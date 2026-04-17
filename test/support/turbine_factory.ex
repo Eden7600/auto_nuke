@@ -19,6 +19,7 @@ defmodule AutoNuke.Test.TurbineFactory do
     API.mock_get("COOLANT_SEC_CIRCULATION_PUMP_#{loop - 1}_CAPACITY", secondary_pump)
     API.mock_get("MSCV_#{loop - 1}_OPENING_ACTUAL", power_level)
     API.mock_get("STEAM_TURBINE_#{loop - 1}_BYPASS_ACTUAL", bypass)
+    API.mock_get("COOLANT_SEC_#{loop - 1}_PRESSURE", 60)
 
     unless mock_only do
       %Turbine{} = turbine = Turbine.new(loop, min_steam)

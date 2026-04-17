@@ -234,7 +234,10 @@ defmodule AutoNuke.Operator.SteamFlow do
        %State{
          state
          | axis: axis,
-           turbines: turbines |> Enum.map(&Turbine.tick/1)
+           turbines:
+             turbines
+             |> Enum.map(&Turbine.tick/1)
+             |> publish_turbine_stats()
        }}
     end)
   end
@@ -398,5 +401,13 @@ defmodule AutoNuke.Operator.SteamFlow do
       {dd, hh, _mm} -> {dd, hh + 1, 0}
     end)
     |> AutoNuke.Time.parse_time()
+  end
+
+  defp publish_turbine_stats(turbines) do
+    bypass = turbines |> Enum.map(fn %Turbine{bypass: b} -> b end)
+    pressure = turbines |> Enum.map(fn %Turbine{pressure: p} -> p end)
+
+    PubSub.publish(:steam_flow, {:steam_flow, bypass, pressure})
+    turbines
   end
 end

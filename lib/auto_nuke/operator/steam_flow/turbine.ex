@@ -14,6 +14,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :steam_gen,
     # Current bypass setting
     :bypass,
+    # Latest pressure reading
+    :pressure,
     # Target power level, assigned by parent (based on power requirements)
     :power_level,
     # Minimum steam requirement, assigned by parent (based on number of turbines)
@@ -65,6 +67,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       secondary_capacity: Pumps.secondary(loop) |> Pumps.get_capacity(),
       steam_gen: steam_gen,
       bypass: bypass,
+      pressure: SteamGen.get_pressure(steam_gen),
       power_level: mscv |> mscv_to_power_level(),
       min_steam: min_steam
     }
@@ -101,10 +104,12 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         turbine.min_steam
       )
 
+    pressure = SteamGen.get_pressure(steam_gen)
+
     {pressure_bypass, pressure_axis} =
       step_axis(
         turbine.pressure_axis,
-        SteamGen.get_pressure(steam_gen),
+        pressure,
         @max_pressure
       )
 
@@ -122,7 +127,13 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       Valves.set_open_percent(steam_gen.bypass, new)
     end
 
-    %Turbine{turbine | steam_axis: steam_axis, pressure_axis: pressure_axis, bypass: new}
+    %Turbine{
+      turbine
+      | steam_axis: steam_axis,
+        pressure_axis: pressure_axis,
+        bypass: new,
+        pressure: pressure
+    }
   end
 
   defp step_axis(axis, current, target) do
