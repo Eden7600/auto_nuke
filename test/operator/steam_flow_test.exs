@@ -1,5 +1,6 @@
 defmodule AutoNuke.Operator.SteamFlowTest do
   use ExUnit.Case, async: true
+  alias AutoNuke.Ticker
   alias AutoNuke.Operator.SteamFlow
   alias AutoNuke.Operator.SteamFlow.Turbine
   alias AutoNuke.Test.MockGenServer
@@ -607,6 +608,72 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [6]
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == 6
     end
+  end
+
+  defmodule SimState do
+    @enforce_keys [:tick, :supplied_total]
+    defstruct(@enforce_keys)
+  end
+
+  test "tick when simulating an entire hour" do
+    pid = start_steam_flow([])
+
+    # Set an arbitrary demand for the entire test.
+    API.mock_get("POWER_DEMAND_MW", demand = Enum.random(100..300))
+    # Assume resistors are off for this entire test.
+    API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+    # Steam outlet and coolant pressure are outside the scope of this test.
+    0..2
+    |> Enum.each(fn n ->
+      API.mock_get("STEAM_GEN_#{n}_OUTLET", 9999, times: :any)
+      API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 62, times: :any)
+    end)
+
+    state = %SimState{
+      tick: 0,
+      supplied_total: 0
+    }
+
+    start_time = Enum.random(1..100) * 60
+
+    0..59
+    |> Enum.reduce(state, fn minute, %SimState{} = state ->
+      1..Ticker.seconds_per_minute()
+      |> Enum.reduce(state, fn _, %SimState{} = state ->
+        [pl1, pl2, pl3] = power_levels(pid)
+        # This second's mocks:
+        API.mock_get("TIME_STAMP", start_time + minute)
+        API.mock_get("GENERATOR_0_KW", kw1 = random_generator_kw(pl1))
+        API.mock_get("GENERATOR_1_KW", kw2 = random_generator_kw(pl2))
+        API.mock_get("GENERATOR_2_KW", kw3 = random_generator_kw(pl3))
+        API.mock_get("POWER_FROM_TURBINE_KW", kw_used = 200 + Enum.random(1..200))
+
+        # SteamGen should run exactly once during these n ticks:
+        1..Ticker.ticks_per_second()
+        |> Enum.reduce(state, fn _, %SimState{} = state ->
+          send(pid, {:tick, state.tick})
+          %SimState{state | tick: state.tick + 1}
+        end)
+        |> then(fn %SimState{supplied_total: t} = state ->
+          # Add generated power to supplied total:
+          %SimState{state | supplied_total: t + kw1 + kw2 + kw3 - kw_used}
+        end)
+      end)
+    end)
+    |> then(fn %SimState{} = state ->
+      secs = state.tick |> div(Ticker.ticks_per_second())
+      supplied_kwh = state.supplied_total / secs
+      supplied_mwh = supplied_kwh / 1000
+      supplied_ratio = supplied_mwh / demand
+      assert_in_delta supplied_ratio, 1.0, 0.1, "Supplied: #{supplied_mwh}, demand: #{demand}"
+    end)
+  end
+
+  defp random_generator_kw(power_level) do
+    # Assume 5 MW per power level, plus or minus 1 MW.
+    min = power_level * 5000 - 1000
+    max = power_level * 5000 + 1000
+    Enum.random(min..max) + (:rand.uniform() - 0.5)
   end
 
   defp start_steam_flow(opts) do

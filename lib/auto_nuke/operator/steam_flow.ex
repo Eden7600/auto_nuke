@@ -26,6 +26,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     @min_power_level Turbine.allowed_power_levels().first
 
+    def at_min?(%PowerLevel{power_level: p}), do: p <= @min_power_level
     def at_max?(%PowerLevel{power_level: p, max_power_level: m}), do: p >= m
     def power_ratio(%PowerLevel{capacity: c, power_level: p}), do: p / c
 
@@ -329,6 +330,8 @@ defmodule AutoNuke.Operator.SteamFlow do
     power_levels
     |> Enum.sort_by(fn %PowerLevel{} = pl ->
       {
+        # At-minimum powers come last, we can't lower those
+        if(PowerLevel.at_min?(pl), do: 2, else: 1),
         # Over-max powers come first so we can lower them ASAP
         if(PowerLevel.at_max?(pl), do: 1, else: 2),
         # Otherwise, sort by highest power ratio first.
