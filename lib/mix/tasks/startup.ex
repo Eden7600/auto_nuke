@@ -25,7 +25,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end_factor: 4.0
   ]
   # Stop drift prematurely once we reach this temperature (°C):
-  @startup_temp 300
+  @startup_temp AutoNuke.Operator.CorePower.min_temperature()
   # Wait for this temperature before starting turbines:
   @turbine_temp 250
   # Control MSCV to maintain this much pressure:

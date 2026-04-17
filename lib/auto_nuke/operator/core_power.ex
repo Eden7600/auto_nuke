@@ -20,6 +20,9 @@ defmodule AutoNuke.Operator.CorePower do
   # If our pressure on ANY turbine is 60 bar or lower, try increasing temperature.
   @pressure_low 60
 
+  # Used by the `startup` task to know what temperature to aim for on cold start.
+  def min_temperature, do: @temp_range.first
+
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
