@@ -145,16 +145,6 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
     @steam_gens
     |> Enum.each(fn steam_gen ->
-      UI.set_wait(
-        "Pressure Relief Vent 0#{steam_gen.loop}",
-        "OPEN",
-        fn -> SteamGen.get_vent_open?(steam_gen) end,
-        fn -> SteamGen.set_vent_open(steam_gen, true) end
-      )
-    end)
-
-    @steam_gens
-    |> Enum.each(fn steam_gen ->
       temp = SteamGen.get_temperature(steam_gen)
 
       UI.ProgressBar.wait(
@@ -162,6 +152,16 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         label: "Temperature",
         current_fn: fn -> SteamGen.get_temperature(steam_gen) end,
         done_fn: &(&1 <= 50)
+      )
+    end)
+
+    @steam_gens
+    |> Enum.each(fn steam_gen ->
+      UI.set_wait(
+        "Pressure Relief Vent 0#{steam_gen.loop}",
+        "OPEN",
+        fn -> SteamGen.get_vent_open?(steam_gen) end,
+        fn -> SteamGen.set_vent_open(steam_gen, true) end
       )
     end)
 
