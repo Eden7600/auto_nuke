@@ -4,27 +4,30 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   defmodule State do
-    @enforce_keys [:pump_speed, :smoothed_temp]
+    @enforce_keys [:pump_speed, :bypass, :pressure]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.API
-  alias AutoNuke.Smoother
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Allowed pump speeds.
-  # I'm told that <10% is dangerous and >50% is useless.
-  # Also, there's the "keep pumps below 50%" objective to think about.
+  # Allowed pump speeds. I'm told >50% is useless, and there's the "keep below
+  # 50%" objective, so 49 is our max.  10% is our arbitrarily set low, but we
+  # may never reach that due to temperature limitations.
   @pump_speeds 10..49
-  # Scale pumps from min speed at @temp_min, to max speed at @temp_max.
-  @temp_min 320
-  @temp_max 400
-  # Use the average temperature from the last five in-game minutes.
-  @temp_smoothing AutoNuke.Ticker.seconds_per_minute() * 5
-  # Apply a deadband of 0.7 to limit speed oscillation.
-  # So to get from 22 to 23 speed, you need to hit 22.7, not 22.5.
-  @speed_deadband 0.7
+  # High and low steam amounts.  If we're sending at least 20 kg/min through
+  # bypass on ALL turbines, try increasing pumps (thus reducing temperature).
+  @bypass_high 20
+  # If our pressure on ANY turbine is 60 bar or lower,
+  # try reducing pumps (thus increasing temperature).
+  @pressure_low 60
+  # Stop pushing pumps if temperatures drop below 300°C or rise above 400°C.
+  @temp_low 300
+  @temp_high 400
+  # Immediately back off if temperatures drop below 290°C or rise above 410°C.
+  @crit_low 290
+  @crit_high 410
 
   # Used by the `startup` task to know what speed to set on cold start.
   def min_speed, do: @pump_speeds.first
@@ -37,49 +40,114 @@ defmodule AutoNuke.Operator.CoreTemp do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
-  def get_speed(pid \\ __MODULE__) do
-    GenServer.call(pid, :get_speed)
-  end
-
   @impl true
   def init(_) do
     speed = get_average_pump_speed()
-    temp = get_temperature()
-    smoother = Smoother.new(@temp_smoothing) |> Smoother.add(temp)
 
     state =
       %State{
         pump_speed: speed,
-        smoothed_temp: smoother
+        bypass: nil,
+        pressure: nil
       }
 
     PubSub.subscribe(self(), :ticker)
+    PubSub.subscribe(self(), :steam_flow)
+    temp = get_temperature() |> Float.round(1)
     Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pumps at #{speed}.")
     {:ok, state}
   end
 
   @impl true
-  def handle_call(:get_speed, _from, %State{pump_speed: speed} = state) do
-    {:reply, speed, state}
+  def handle_info({:steam_flow, bypass, pressure}, %State{} = state) do
+    {:noreply, %State{state | bypass: bypass, pressure: pressure}}
   end
 
   @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
+  def handle_info({:tick, _}, %State{bypass: nil} = state) do
+    Logger.warning(@log_prefix <> "No bypass data received yet.")
+    state
+  end
+
+  @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    smoother = state.smoothed_temp |> Smoother.add(get_temperature())
-    temp = Smoother.average(smoother)
+    cond do
+      state.pressure |> Enum.any?(&(&1 <= @pressure_low)) ->
+        state |> adjust_pumps(-1, "Low pressure(s): #{inspect(state.pressure)}")
 
-    old = state.pump_speed
-    new = temp_to_speed(temp, old)
+      state.bypass |> Enum.all?(&(&1 >= @bypass_high)) ->
+        state |> adjust_pumps(+1, "High bypass: #{inspect(state.bypass)}")
 
-    if new != old do
-      Logger.info(@log_prefix <> "Changing pump speeds from #{old} to #{new}.")
-      set_pump_speeds(new)
+      true ->
+        state |> adjust_pumps(0, "All systems nominal")
     end
+    |> then(fn %State{} = state -> {:noreply, state} end)
+  end
 
-    {:noreply, %State{state | pump_speed: new, smoothed_temp: smoother}}
+  defp adjust_pumps(%State{} = state, change, reason) do
+    temp = get_temperature()
+
+    cond do
+      temp >= @crit_high ->
+        state |> backoff_pumps(+1, temp)
+
+      temp <= @crit_low ->
+        state |> backoff_pumps(-1, temp)
+
+      change < 0 && temp >= @temp_high ->
+        state |> hold_pumps(reason, "high", temp)
+
+      change > 0 && temp <= @temp_low ->
+        state |> hold_pumps(reason, "low", temp)
+
+      true ->
+        state
+        |> change_pumps(change, fn {_, msg} ->
+          Logger.info(@log_prefix <> reason <> "  " <> msg)
+        end)
+    end
+  end
+
+  defp backoff_pumps(state, change, temp) do
+    reason = "Critical temperature: #{Float.round(temp, 2)}."
+
+    state
+    |> change_pumps(change, fn
+      {:ok, msg} -> Logger.warning(@log_prefix <> reason <> "  " <> msg)
+      {:at_limit, msg} -> Logger.error(@log_prefix <> reason <> "  " <> msg)
+    end)
+  end
+
+  defp hold_pumps(state, reason, high_low, temp) do
+    Logger.notice([
+      @log_prefix,
+      reason,
+      " but #{high_low} temperature: #{Float.round(temp, 2)}°C.",
+      "  Leaving pumps at #{state.pump_speed}%."
+    ])
+
+    state
+  end
+
+  defp change_pumps(state, 0, result_fn) do
+    result_fn.({:unchanged, "Pumps remain at #{state.pump_speed}%."})
+    state
+  end
+
+  defp change_pumps(state, change, result_fn) do
+    old_speed = state.pump_speed
+    new_speed = (old_speed + change) |> clamp(@pump_speeds)
+    verb = if change > 0, do: "increase", else: "decrease"
+
+    if old_speed == new_speed do
+      result_fn.({:at_limit, "Cannot #{verb} pump speeds beyond #{old_speed}%."})
+    else
+      set_pump_speeds(new_speed)
+      result_fn.({:ok, "Pump speeds changed to #{new_speed}%."})
+    end
   end
 
   defp get_average_pump_speed do
@@ -99,26 +167,6 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   defp get_temperature(), do: API.Vessels.get_temperature(@core)
-
-  @temp_span @temp_max - @temp_min
-  @pump_span @pump_speeds.last - @pump_speeds.first
-
-  defp temp_to_speed(temp, old_speed) do
-    percent_in_range = (temp - @temp_min) / @temp_span
-    new_speed = @pump_speeds.first + @pump_span * percent_in_range
-
-    # Apply a deadband around the prior value.
-    upper = old_speed + @speed_deadband
-    lower = old_speed - @speed_deadband
-
-    if new_speed >= upper || new_speed <= lower do
-      new_speed
-      |> round()
-      |> clamp(@pump_speeds)
-    else
-      old_speed
-    end
-  end
 
   defp clamp(value, min..max//1) do
     value

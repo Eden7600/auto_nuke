@@ -191,7 +191,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     pumps = loops |> Enum.map(&API.Pumps.primary/1)
     pumps |> Enum.each(&UI.Pumps.start/1)
-    pumps |> Enum.each(&UI.Pumps.set_speed(&1, speed, wait: false))
+    unless is_nil(speed), do: pumps |> Enum.each(&UI.Pumps.set_speed(&1, speed, wait: false))
   end
 
   defp start_condenser do
