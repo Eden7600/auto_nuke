@@ -13,6 +13,29 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   @lower_limit 0.95
   @upper_limit 1.05
 
+  # At the top of the hour, target will be 100% w/ a 5% deadzone, per above.
+  #
+  # Left unchecked, deadzone will naturally grow to 150% by the end of the
+  # hour — by the time you reach the last few minutes, there's very little you
+  # can realistically do to mess up (or correct) the total supplied energy.
+  #
+  # However, this growth is not symmetrical.  If we are regularly sitting to
+  # one side of the target, then the far side of the range will expand faster
+  # than the near side.  This pushes our target (the midpoint of the range)
+  # further away, which further ensures we stay to the same side of the target.
+  #
+  # Left unchecked, this can lead to our target becoming awkwardly huge
+  # (over 200%) or impossibly low (under 0%, i.e. we'd need to _take back_
+  # energy rather than deliver it).  Both of these are undesirable since they
+  # lead to a lot of pointless SteamFlow fussing at the end of the hour.
+  #
+  # It's nice that the deadzone expands, as it means that SteamFlow's PID
+  # controller has more room to breathe and doesn't need to "hunt" the target
+  # as tightly.  But 15% is plenty of room, and putting a limit on the deadzone
+  # will prevent our target from ever dropping too low or pushing too high, so
+  # long as our production reliably stays within the deadzone.
+  @max_deadzone 0.15
+
   def new do
     timestamp = API.Misc.get_time_stamp()
     demand_kwh = API.Power.get_demand_kw()
@@ -35,7 +58,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
     target = (upper_ratio + lower_ratio) / 2
     deadzone = (upper_ratio - lower_ratio) / 2
-    {target, deadzone}
+
+    {target, deadzone |> min(@max_deadzone)}
   end
 
   def current_ratio(%DT{demand_kwh: demand}, supply), do: supply / demand

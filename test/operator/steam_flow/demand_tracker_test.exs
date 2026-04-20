@@ -138,17 +138,6 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert_in_delta dz3, 0.0517, 0.0001
     end
 
-    test "does not change target throughout the hour", %{dt: dt, ts: ts} do
-      0..59
-      |> Enum.reduce(dt, fn n, dt ->
-        API.mock_get("TIME_STAMP", ts + n)
-        assert dt = DT.tick(dt, 50_000)
-        assert {tgt, _} = t = DT.target_and_deadzone(dt)
-        assert_in_delta tgt, 1.0, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
-        dt
-      end)
-    end
-
     test "increases target when supply is not meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("TIME_STAMP", ts)
       assert dt = DT.tick(dt, 10_000)
@@ -173,6 +162,50 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
 
       assert {tgt, _dz} = DT.target_and_deadzone(dt)
       assert_in_delta tgt, 0.9793, 0.0001
+    end
+
+    test "exactly meeting demand keeps target the same for the whole hour", %{
+      dt: dt,
+      ts: ts
+    } do
+      0..59
+      |> Enum.reduce(dt, fn n, dt ->
+        API.mock_get("TIME_STAMP", ts + n)
+        assert dt = DT.tick(dt, 50_000)
+        assert {tgt, _} = t = DT.target_and_deadzone(dt)
+        assert_in_delta tgt, 1.0, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
+        dt
+      end)
+    end
+
+    test "deadzone cap ensures chronic overproducing does not drop target below 50%", %{
+      dt: dt,
+      ts: ts
+    } do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
+      0..59
+      |> Enum.reduce(dt, fn n, dt ->
+        API.mock_get("TIME_STAMP", ts + n)
+        assert {tgt, dz} = t = DT.target_and_deadzone(dt)
+        assert tgt >= 0.5, "Target drops below 50% at minute #{n}: #{inspect(t)}"
+        DT.tick(dt, (tgt + dz) * 50_000)
+      end)
+    end
+
+    test "deadzone cap ensures chronic underproducing does not push target above 150%", %{
+      dt: dt,
+      ts: ts
+    } do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
+      0..59
+      |> Enum.reduce(dt, fn n, dt ->
+        API.mock_get("TIME_STAMP", ts + n)
+        assert {tgt, dz} = t = DT.target_and_deadzone(dt)
+        assert tgt <= 1.5, "Target rises above 150% at minute #{n}: #{inspect(t)}"
+        DT.tick(dt, (tgt - dz) * 50_000)
+      end)
     end
   end
 
