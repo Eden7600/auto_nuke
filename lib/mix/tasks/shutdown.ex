@@ -224,9 +224,14 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     UI.set("Heating Power", "OFF")
     UI.set("Thermostat", "OFF")
 
-    UI.wait("Core Pressure", "WAIT FOR 1 bar", fn ->
-      API.get_float("CORE_PRESSURE") < 1.1
-    end)
+    start_pressure = API.Vessels.get_pressure(@core) |> ceil()
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(max(start_pressure, 160), 1, "bar", 1),
+      label: "Core Pressure",
+      current_fn: fn -> API.Vessels.get_pressure(@core) end,
+      done_fn: &(&1 <= 1.1)
+    )
   end
 
   defp stop_all_pumps do
