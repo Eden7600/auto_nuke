@@ -133,7 +133,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     steam_out = SteamGen.get_total_outlet()
 
     UI.ProgressBar.wait(
-      config: UI.ProgressBar.Config.target(max(steam_out, 50), 50, " kg/min", 1),
+      config: UI.ProgressBar.Config.target(max(steam_out, 50), min(steam_out, 50), " kg/min", 1),
       label: "Total Steam",
       current_fn: &SteamGen.get_total_outlet/0,
       done_fn: &(&1 <= 50)
