@@ -29,6 +29,9 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   def allowed_power_levels, do: @power_levels
   # Keep pressure under 65 bar.
   @max_pressure 65
+  # If pressure is below 55 bar, we're starved for steam and shouldn't try to
+  # push power level any higher.
+  @min_pressure 55
 
   require Logger
   alias __MODULE__
@@ -87,13 +90,21 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | power_level: new}
   end
 
-  def max_power_level(%Turbine{steam_gen: steam_gen, secondary_capacity: capacity}) do
-    steam_gen
-    |> SteamGen.get_outlet()
-    |> Kernel./(10)
-    |> round()
-    |> Kernel.+(1)
-    |> min(div(capacity, 10))
+  def max_power_level(%Turbine{
+        steam_gen: steam_gen,
+        power_level: current_power_level,
+        secondary_capacity: capacity
+      }) do
+    if SteamGen.get_pressure(steam_gen) < @min_pressure do
+      current_power_level
+    else
+      steam_gen
+      |> SteamGen.get_outlet()
+      |> Kernel./(10)
+      |> round()
+      |> Kernel.+(1)
+      |> min(div(capacity, 10))
+    end
   end
 
   def get_generated_power(%Turbine{loop: loop}), do: Generator.get_power_kw(loop)
