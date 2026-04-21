@@ -19,7 +19,10 @@ defmodule AutoNuke.API.SteamGen do
   def all, do: @loops |> Enum.map(&for_loop/1)
 
   def get_outlet(%SteamGen{loop: loop}) do
-    API.get_float("STEAM_GEN_#{loop - 1}_OUTLET")
+    case API.get_float_or_nil("STEAM_GEN_#{loop - 1}_OUTLET") do
+      nil -> 0.0
+      f when is_float(f) -> f
+    end
   end
 
   def get_total_outlet, do: all() |> Enum.map(&get_outlet/1) |> Enum.sum()
