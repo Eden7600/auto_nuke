@@ -61,9 +61,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     check_power_source()
     test_control_rods()
 
+    if using_boron?(), do: begin_injecting_boron()
     start_pressurizer()
     start_primary_circulation(loops, AutoNuke.Operator.CoreTemp.min_speed())
-    if using_boron?(), do: begin_injecting_boron()
     start_condenser()
     open_steam_valves(loops)
     enable_resistor_bank()
@@ -614,7 +614,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp using_boron? do
-    API.get_integer("CHEMICAL_DOSING_PUMP_STATUS") != 4
+    API.Pumps.boron_dosing()
+    |> API.Pumps.installed?()
   end
 
   defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()

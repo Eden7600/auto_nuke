@@ -91,6 +91,30 @@ defmodule AutoNuke.API.Pumps do
       valve_panel_key: "BC_2_EXTERIOR_CARGA"
     }
 
+  def boron_dosing,
+    do: %Pump{
+      name: "Boron Dosing Pump",
+      actual_key: "CHEM_BORON_DOSAGE_ACTUAL",
+      ordered_key: "CHEM_BORON_DOSAGE_ORDERED",
+      set_key: "CHEM_BORON_DOSAGE_ORDERED_RATE",
+      valve_panel_key: "BC_0_QUIMICA_DOSIFICADORA"
+    }
+
+  def boron_filter,
+    do: %Pump{
+      name: "Ion Exchange Pump",
+      actual_key: "CHEM_BORON_FILTER_ACTUAL",
+      ordered_key: "CHEM_BORON_FILTER_ORDERED",
+      set_key: "CHEM_BORON_FILTER_ORDERED_SPEED",
+      valve_panel_key: "BC_0_QUIMICA_CIRCULACION_QUIMICA"
+    }
+
+  def chemical_cleaning,
+    do: %Pump{
+      name: "Chemical Cleaning Pump",
+      valve_panel_key: "BC_1_QUIMICA_CIRCULACION_QUIMICA"
+    }
+
   def get_ordered_speed(%Pump{ordered_key: k}) when is_binary(k), do: API.get_integer(k)
 
   def get_ordered_speed(%Pump{ordered_key: nil, name: n}),
@@ -119,9 +143,11 @@ defmodule AutoNuke.API.Pumps do
     |> Map.fetch!("Active")
   end
 
-  defp valve_panel(key) when is_binary(key) do
-    AutoNuke.API.get_json("VALVE_PANEL_JSON")
-    |> Map.fetch!("pumps")
-    |> Map.fetch!(key)
+  def installed?(%Pump{valve_panel_key: k}) when is_binary(k) do
+    valve_panel()
+    |> Map.has_key?(k)
   end
+
+  defp valve_panel, do: AutoNuke.API.get_json("VALVE_PANEL_JSON") |> Map.fetch!("pumps")
+  defp valve_panel(key) when is_binary(key), do: valve_panel() |> Map.fetch!(key)
 end
