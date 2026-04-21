@@ -19,7 +19,6 @@ defmodule AutoNuke.Operator.VacuumTank do
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
   @retention_tank API.Vessels.retention_tank()
-  @steam_gens API.SteamGen.all()
   @omsi API.Valves.omsi()
   @smsi API.Valves.smsi()
   @crv API.Valves.crv()
@@ -107,7 +106,7 @@ defmodule AutoNuke.Operator.VacuumTank do
   end
 
   defp maybe_change_mode(%State{mode: :pump} = state) do
-    if get_total_steam() > @steam_high_mark do
+    if API.SteamGen.get_total_outlet() > @steam_high_mark do
       old = state.pump_axis |> ControlAxis.peek()
       new = state.crv_axis |> ControlAxis.peek()
       change_msi(old, new)
@@ -119,7 +118,7 @@ defmodule AutoNuke.Operator.VacuumTank do
   end
 
   defp maybe_change_mode(%State{mode: :crv} = state) do
-    if get_total_steam() < @steam_low_mark do
+    if API.SteamGen.get_total_outlet() < @steam_low_mark do
       old = state.crv_axis |> ControlAxis.peek()
       new = state.pump_axis |> ControlAxis.peek()
       change_msi(old, new)
@@ -199,12 +198,6 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   defp get_crv_ordered, do: API.Valves.get_ordered_open_percent(@crv)
   defp get_crv_actual, do: API.Valves.get_open_percent(@crv)
-
-  defp get_total_steam do
-    @steam_gens
-    |> Enum.map(&API.SteamGen.get_outlet/1)
-    |> Enum.sum()
-  end
 
   defp msi_to_axis(msi), do: (msi - 50) / 50.0
 
