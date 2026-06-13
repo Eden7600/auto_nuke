@@ -14,9 +14,12 @@ defmodule AutoNuke.Operator.CorePower do
 
   # Allowed temperature range.
   @temp_range 320..400
-  # High and low steam amounts.  If we're sending at least 50 kg/min through
-  # bypass on ALL turbines, try reducing temperature.
-  @bypass_high 50
+  def temp_range, do: @temp_range
+  # High and low steam amounts.  If we're sending at least 25 kg/min through
+  # bypass on ALL turbines, AND pressure is above 64 bar, try reducing temperature.
+  # (The pressure check is to avoid "only bypassing because minimum steam" situations.)
+  @bypass_high 25
+  @pressure_high 64
   # If our pressure on ANY turbine is 60 bar or lower, try increasing temperature.
   @pressure_low 60
 
@@ -69,7 +72,8 @@ defmodule AutoNuke.Operator.CorePower do
       state.pressure |> Enum.any?(&(&1 <= @pressure_low)) ->
         state |> adjust_temperature(+5, "Low pressure(s): #{show_pressure(state.pressure)}")
 
-      state.bypass |> Enum.all?(&(&1 >= @bypass_high)) ->
+      state.bypass |> Enum.all?(&(&1 >= @bypass_high)) &&
+          state.pressure |> Enum.all?(&(&1 >= @pressure_high)) ->
         state |> adjust_temperature(-1, "High bypass: #{show_bypass(state.bypass)}")
 
       true ->
@@ -82,7 +86,7 @@ defmodule AutoNuke.Operator.CorePower do
 
   defp adjust_temperature(%State{} = state, change, reason) do
     old_temp = state.target
-    new_temp = (state.target + change) |> clamp(@temp_range)
+    new_temp = (current_temperature() + change) |> clamp(@temp_range)
 
     if new_temp != old_temp do
       Logger.info(@log_prefix <> reason)
@@ -92,6 +96,9 @@ defmodule AutoNuke.Operator.CorePower do
       state
     end
   end
+
+  @core API.Vessels.core_vessel()
+  defp current_temperature, do: @core |> API.Vessels.get_temperature() |> round()
 
   defp clamp(value, min..max//1) do
     value

@@ -17,6 +17,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   @core API.Vessels.core_vessel()
 
   @remote_operators %{
+    auto_drift: {AutoNuke.Operator.AutoDrift, "Automatic Drift Operator"},
     core_factor: {AutoNuke.Operator.CoreFactor, "Core Factor Operator"},
     core_temp: {AutoNuke.Operator.CoreTemp, "Core Temperature Operator"},
     steam_flow: {AutoNuke.Operator.SteamFlow, "Steam Flow Operator"},
@@ -34,7 +35,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     open_breakers()
     set_shutdown_mode()
 
-    disable_remotes(node, [:core_factor, :core_temp, :steam_flow])
+    disable_remotes(node, [:auto_drift, :core_factor, :core_temp, :steam_flow])
     insert_control_rods()
     set_full_bypass()
     set_max_pump_speed()

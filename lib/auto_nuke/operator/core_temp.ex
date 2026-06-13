@@ -16,6 +16,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   # I'm told that <10% is dangerous and >50% is useless.
   # Also, there's the "keep pumps below 50%" objective.
   @speeds 10..49
+  def pump_speed_range, do: @speeds
   @speed_span (@speeds.last - @speeds.first) / 2
 
   # Used by the `startup` task to know what speed to set on cold start.
@@ -74,17 +75,19 @@ defmodule AutoNuke.Operator.CoreTemp do
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
     temp = get_temperature()
+    target = state.target
 
-    case ControlAxis.step(state.axis, state.target, temp) do
+    case ControlAxis.step(state.axis, target, temp) do
       {:changed, axis, new, old} ->
         Logger.info(@log_prefix <> "Changing pump speeds from #{old} to #{new}.")
         set_pump_speeds(new)
-        axis
+        {axis, new}
 
-      {:unchanged, axis, _old_value} ->
-        axis
+      {:unchanged, axis, old} ->
+        {axis, old}
     end
-    |> then(fn axis ->
+    |> then(fn {axis, speed} ->
+      PubSub.publish(:core_temp, {:core_temp, target, speed})
       {:noreply, %State{state | axis: axis}}
     end)
   end

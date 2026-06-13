@@ -1,5 +1,5 @@
 defmodule AutoNuke.Operator.CoreFactor.Drift do
-  @enforce_keys [:start_time, :end_time, :start_factor, :end_factor]
+  @enforce_keys [:start_time, :end_time, :start_factor, :end_factor, :mode]
   defstruct(@enforce_keys)
 
   alias __MODULE__
@@ -12,13 +12,15 @@ defmodule AutoNuke.Operator.CoreFactor.Drift do
     {end_time, opts} = pop_end_time(opts, start_time)
     {start_factor, opts} = Map.pop!(opts, :start_factor)
     {end_factor, opts} = Map.pop!(opts, :end_factor)
+    {mode, opts} = Map.pop(opts, :mode, :manual)
     unless Enum.empty?(opts), do: raise("Unknown Drift options: #{inspect(opts)}")
 
     drift = %Drift{
       start_time: start_time,
       end_time: end_time,
       start_factor: start_factor,
-      end_factor: end_factor
+      end_factor: end_factor,
+      mode: mode
     }
 
     cond do
