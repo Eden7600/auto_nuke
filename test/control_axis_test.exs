@@ -26,28 +26,29 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:unchanged, _axis, -0.5} = CA.step(axis, 0, 0)
   end
 
-  test "does not change integral while in deadzone" do
+  test "reduces integral change while in deadzone" do
     axis = CA.new(kp: 1, ki: 0.1, deadzone: 0.1)
 
     # Normal PI control:
     assert {:changed, axis, out1, nil} = CA.step(axis, 0, 0.2)
     assert_in_delta out1, -0.22, 0.00001
-    assert integral = axis.pidc.i
+    assert_in_delta axis.pidc.i, -0.02, 0.000001
 
     # Now in deadzone:
     assert {:changed, axis, out2, ^out1} = CA.step(axis, 0.199, 0.2)
-    assert_in_delta out2, -0.0210, 0.00001
-    assert axis.pidc.i == integral
+    assert_in_delta out2, -0.021001, 0.000001
+    assert_in_delta axis.pidc.i, -0.020001, 0.000001
 
-    # No change due to frozen integral:
-    assert {:unchanged, axis, ^out2} = CA.step(axis, 0.199, 0.2)
-    assert {:unchanged, axis, ^out2} = CA.step(axis, 0.199, 0.2)
-    assert {:unchanged, axis, ^out2} = CA.step(axis, 0.199, 0.2)
+    # Reduced change due to scaled integral:
+    assert {:changed, axis, _, _} = CA.step(axis, 0.199, 0.2)
+    assert_in_delta axis.pidc.i, -0.020002, 0.000001
+    assert {:changed, axis, _, _} = CA.step(axis, 0.199, 0.2)
+    assert_in_delta axis.pidc.i, -0.020003, 0.000001
 
     # But proportional still reacts:
-    assert {:changed, axis, out3, ^out2} = CA.step(axis, 0.201, 0.2)
-    assert_in_delta out3, -0.0190, 0.00001
-    assert axis.pidc.i == integral
+    assert {:changed, _, out4, out3} = CA.step(axis, 0.201, 0.2)
+    assert_in_delta out3, -0.021, 0.001
+    assert_in_delta out4, -0.019, 0.001
   end
 
   defp settle_loop(_axis, full, full, remaining, overshoots),

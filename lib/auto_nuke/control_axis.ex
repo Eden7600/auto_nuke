@@ -84,10 +84,17 @@ defmodule AutoNuke.ControlAxis do
     }
   end
 
+  defp step_with_deadzone(%PIDControl{} = pidc, +0.0, target, measurement) do
+    PIDControl.step(pidc, target, measurement)
+  end
+
   defp step_with_deadzone(%PIDControl{} = pidc, dz, target, measurement) do
-    if abs(target - measurement) <= dz do
+    delta = abs(target - measurement)
+    dz_ratio = delta / dz
+
+    if dz_ratio < 1.0 do
       old_config = pidc.config
-      zero_config = pidc.config |> Map.replace!(:ki, 0)
+      zero_config = pidc.config |> Map.update!(:ki, &(&1 * dz_ratio))
 
       pidc
       |> Map.replace!(:config, zero_config)
