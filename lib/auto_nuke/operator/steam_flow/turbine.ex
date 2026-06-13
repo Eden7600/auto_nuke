@@ -33,6 +33,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # push power level any higher.
   @min_pressure 55
 
+  # To avoid excessive flapping, use a large-ish steam deadzone:
+  @steam_deadzone 2
+  # This will also be added to the target to ensure
+  # we always produce at least that much steam.
+
   require Logger
   alias __MODULE__
   alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator}
@@ -47,7 +52,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       ControlAxis.new(
         kp: 0.01,
         ki: 0.001,
-        deadzone: 0.5,
+        deadzone: @steam_deadzone,
         to_value_fn: &axis_to_bypass/1,
         offset: bypass |> bypass_to_axis(),
         initial_value: bypass
@@ -120,7 +125,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       step_axis(
         turbine.steam_axis,
         steam,
-        turbine.min_steam
+        turbine.min_steam + @steam_deadzone
       )
 
     {pressure_bypass, pressure_axis} =

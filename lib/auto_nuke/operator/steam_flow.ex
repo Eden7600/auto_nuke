@@ -57,6 +57,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Ensure that all managed turbines produce at least 50 kg/min of steam between them.
   @min_steam 50
   defp steam_per_turbine(count) when count in 1..3, do: @min_steam / count
+  defp steam_per_turbine(0), do: 0.0
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)

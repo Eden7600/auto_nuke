@@ -123,7 +123,8 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
           {new_t, smoother}
         end)
 
-      assert_in_delta final_turbine.bypass, 25, 1
+      # Final result will be higher than target due to upwards-only deadzone.
+      assert final_turbine.bypass == 26
     end
 
     test "ensures low enough pressure", %{turbine: turbine} do
