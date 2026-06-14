@@ -405,10 +405,8 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   defp publish_turbine_stats(turbines) do
-    bypass = turbines |> Enum.map(&Turbine.steam_via_bypass/1)
-    pressure = turbines |> Enum.map(fn %Turbine{pressure: p} -> p end)
-
-    PubSub.publish(:steam_flow, {:steam_flow, bypass, pressure})
+    pressures = turbines |> Enum.map(fn %Turbine{pressure: p} -> p end)
+    PubSub.publish(:steam_flow, {:steam_flow, pressures})
     turbines
   end
 end
