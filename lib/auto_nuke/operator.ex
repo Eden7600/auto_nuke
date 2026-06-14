@@ -3,14 +3,6 @@ defmodule AutoNuke.Operator do
 
   # Core concerns:
   def assigned_tick(Op.SteamFlow), do: 0
-  # Depends on SteamFlow data:
-  def assigned_tick(Op.CorePower), do: 1
-  # Is assigned targets by CorePower:
-  def assigned_tick(Op.CoreTemp), do: 2
-  # Depends on CoreTemp data:
-  def assigned_tick(Op.AutoDrift), do: 3
-  # Is assigned drifts by AutoDrift:
-  def assigned_tick(Op.CoreFactor), do: 4
 
   # Auxiliary concerns:
   def assigned_tick(Op.CoreFill), do: 0
@@ -19,8 +11,6 @@ defmodule AutoNuke.Operator do
   def assigned_tick(Op.CondenserFill), do: 3
   def assigned_tick(Op.CondenserCooling), do: 4
 
-  def assigned_tick_modulo(Op.CorePower), do: 40
-  def assigned_tick_modulo(Op.AutoDrift), do: 40
   def assigned_tick_modulo(_), do: 5
 
   defmacro __using__(_) do

@@ -18,14 +18,15 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # and still safely stop at the target.
 
   # Increase core factor target smoothly from 0.0 to 4.0 over two hours:
-  @startup_drift [
-    start_time: :now,
-    duration: {2, 0},
-    start_factor: 0.0,
-    end_factor: 4.0
-  ]
+  # FIXME: rewrite
+  # @startup_drift [
+  #   start_time: :now,
+  #   duration: {2, 0},
+  #   start_factor: 0.0,
+  #   end_factor: 4.0
+  # ]
   # Stop drift prematurely once we reach this temperature (°C):
-  @startup_temp AutoNuke.Operator.CorePower.min_temperature()
+  # @startup_temp AutoNuke.Operator.CorePower.min_temperature()
   # Wait for this temperature before starting turbines:
   @turbine_temp 250
   # Control MSCV to maintain this much pressure:
@@ -63,7 +64,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     if using_boron?(), do: begin_injecting_boron()
     start_pressurizer()
-    start_primary_circulation(loops, AutoNuke.Operator.CoreTemp.min_speed())
+    # FIXME: rewrite
+    # start_primary_circulation(loops, AutoNuke.Operator.CoreTemp.min_speed())
     start_condenser()
     open_steam_valves(loops)
     enable_resistor_bank()
@@ -80,9 +82,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     {:ok, _} = AutoNuke.Operator.CondenserFill.start_link()
 
-    {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
+    # FIXME: rewrite
+    # {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
     achieve_criticality()
-    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
+    # FIXME: rewrite
+    # {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
 
     start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
@@ -348,7 +352,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp achieve_criticality do
     UI.console("Reactor Core")
 
-    AutoNuke.Operator.CoreFactor.drift(@startup_drift)
+    # FIXME: rewrite
+    # AutoNuke.Operator.CoreFactor.drift(@startup_drift)
 
     UI.wait(
       "Control Rod Height",
@@ -373,12 +378,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp stop_drift_loop do
     receive do
       {:tick, _} ->
-        temp = API.get_float("CORE_TEMP")
-
-        case temp >= @startup_temp do
-          true -> AutoNuke.Operator.CoreFactor.stop_drift()
-          false -> stop_drift_loop()
-        end
+        nil
+        # -- FIXME: rewrite --
+        # temp = API.get_float("CORE_TEMP")
+        # case temp >= @startup_temp do
+        #   true -> AutoNuke.Operator.CoreFactor.stop_drift()
+        #   false -> stop_drift_loop()
+        # end
     end
   end
 
