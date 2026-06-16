@@ -24,8 +24,10 @@ defmodule AutoNuke do
   defp automation_children do
     if do_start?() do
       [
-        AutoNuke.Operator.CoreTemp,
         AutoNuke.Operator.SteamFlow,
+        AutoNuke.Operator.CoreTemp,
+        AutoNuke.Operator.ControlRods,
+        AutoNuke.Operator.PrimaryPumps,
         {AutoNuke.Operator.SecondaryFill, loop: 1},
         {AutoNuke.Operator.SecondaryFill, loop: 2},
         {AutoNuke.Operator.SecondaryFill, loop: 3},
