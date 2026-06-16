@@ -16,15 +16,13 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   # Allowed pump speeds.
   # I'm told that above 50% is useless, plus there's the "keep pumps below 50%" objective.
   @pump_speeds 5..49
+  def speed_range, do: @pump_speeds
   # Scale pumps from min speed at @temp_min, to max speed at @temp_max.
   @temp_min 300
   @temp_max 400
   # Apply a deadband of 0.7 to limit speed oscillation.
   # So to get from 22 to 23 speed, you need to hit 22.7, not 22.5.
   @speed_deadband 0.7
-
-  # Used by the `startup` task to know what speed to set on cold start.
-  def min_speed, do: @pump_speeds.first
 
   @pumps API.Pumps.all_primary()
   @core API.Vessels.core_vessel()

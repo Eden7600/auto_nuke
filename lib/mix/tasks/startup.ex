@@ -17,18 +17,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Increase core factor target smoothly from 0.0 to 4.0 over two hours:
-  # FIXME: rewrite
-  # @startup_drift [
-  #   start_time: :now,
-  #   duration: {2, 0},
-  #   start_factor: 0.0,
-  #   end_factor: 4.0
-  # ]
-  # Stop drift prematurely once we reach this temperature (°C):
-  # @startup_temp AutoNuke.Operator.CorePower.min_temperature()
+  # Slowly increase reactor to the CoreTemp midpoint:
+  core_temp_range = AutoNuke.Operator.CoreTemp.temp_range()
+  @startup_core_temp (core_temp_range.first + core_temp_range.last) |> div(2)
   # Wait for this temperature before starting turbines:
-  @turbine_temp 250
+  @turbine_temp core_temp_range.first
   # Control MSCV to maintain this much pressure:
   @target_pressure 60
   # Allow this range of MSCV settings based on loop count:
@@ -36,6 +29,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @mscv_range_2 3..20
   @mscv_range_3 2..20
 
+  # Start primary pumps at this speed:
+  @startup_primary_speed AutoNuke.Operator.PrimaryPumps.speed_range().first
+  # Start cooling pumps at this speed:
+  @startup_cooling_speed 50
   # Need at least this % in the retention tank before we start the vacuum pump:
   @retention_percent 45
   # The reason we don't use 50% is that we'll already have the retention tank
@@ -64,13 +61,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     if using_boron?(), do: begin_injecting_boron()
     start_pressurizer()
-    # FIXME: rewrite
-    # start_primary_circulation(loops, AutoNuke.Operator.CoreTemp.min_speed())
+    start_primary_circulation(loops, @startup_primary_speed)
     start_condenser()
     open_steam_valves(loops)
     enable_resistor_bank()
 
     wait_before_load_fuel(loops)
+    {:ok, _} = AutoNuke.Operator.CondenserCooling.start_link()
     load_fuel()
 
     start_secondary_circulation(loops)
@@ -81,12 +78,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
 
     {:ok, _} = AutoNuke.Operator.CondenserFill.start_link()
-
-    # FIXME: rewrite
-    # {:ok, _} = AutoNuke.Operator.CoreFactor.start_link()
+    {:ok, _} = AutoNuke.Operator.ControlRods.start_link()
     achieve_criticality()
-    # FIXME: rewrite
-    # {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
+    {:ok, _} = AutoNuke.Operator.PrimaryPumps.start_link()
 
     start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
@@ -96,6 +90,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     start_turbine(loops)
     connect_to_grid(loops)
     {:ok, _} = AutoNuke.Operator.SteamFlow.start_link()
+    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
 
     UI.console("ALL")
     UI.wait("Operator", "TAKE OVER", fn -> false end)
@@ -203,7 +198,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     pump = API.Pumps.condenser_cooling()
     UI.Pumps.start(pump)
-    UI.Pumps.set_speed(pump, 50, wait: false)
+    UI.Pumps.set_speed(pump, @startup_cooling_speed, wait: false)
   end
 
   defp open_steam_valves(loops) do
@@ -236,10 +231,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Pumps.primary/1)
-    |> Enum.each(&UI.Pumps.set_speed(&1, 10, wait: true))
+    |> Enum.each(&UI.Pumps.set_speed(&1, @startup_primary_speed, wait: true))
 
     UI.console("Condenser")
-    API.Pumps.condenser_cooling() |> UI.Pumps.set_speed(50, wait: true)
+    API.Pumps.condenser_cooling() |> UI.Pumps.set_speed(@startup_cooling_speed, wait: true)
     API.Valves.smsi() |> UI.Valves.set(100, wait: true)
     API.Valves.omsi() |> UI.Valves.set(0, wait: true)
     API.Valves.crv() |> UI.Valves.set(0, wait: true)
@@ -352,21 +347,24 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp achieve_criticality do
     UI.console("Reactor Core")
 
-    # FIXME: rewrite
-    # AutoNuke.Operator.CoreFactor.drift(@startup_drift)
+    spawn_link(fn ->
+      # Ensure only one:
+      Process.register(self(), :temp_target)
+      PubSub.subscribe(self(), :ticker)
+
+      start_temp =
+        API.Vessels.core_vessel()
+        |> API.Vessels.get_temperature()
+        |> ceil()
+
+      increase_temp_target_loop(start_temp, @startup_core_temp)
+    end)
 
     UI.wait(
       "Control Rod Height",
       "BEGIN REDUCING",
       fn -> API.get_float("RODS_POS_ACTUAL") <= 99.9 end
     )
-
-    spawn_link(fn ->
-      # Ensure only one:
-      Process.register(self(), :stop_drift)
-      PubSub.subscribe(self(), :ticker)
-      stop_drift_loop()
-    end)
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
@@ -375,16 +373,18 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait_for_temperature(100, false)
   end
 
-  defp stop_drift_loop do
+  defp increase_temp_target_loop(current, max) when current >= max, do: :break
+
+  @tick_modulo AutoNuke.Ticker.ticks_per_second()
+  defp increase_temp_target_loop(current, max) do
     receive do
-      {:tick, _} ->
-        nil
-        # -- FIXME: rewrite --
-        # temp = API.get_float("CORE_TEMP")
-        # case temp >= @startup_temp do
-        #   true -> AutoNuke.Operator.CoreFactor.stop_drift()
-        #   false -> stop_drift_loop()
-        # end
+      {:tick, t} ->
+        if rem(t, @tick_modulo) == 0 do
+          AutoNuke.Operator.ControlRods.set_target(current + 1)
+          increase_temp_target_loop(current + 1, max)
+        else
+          increase_temp_target_loop(current, max)
+        end
     end
   end
 

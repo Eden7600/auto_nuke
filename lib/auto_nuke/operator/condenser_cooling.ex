@@ -16,6 +16,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   # Range of allowed speeds.
   @speeds 10..100
+  def speed_range, do: @speeds
   # Wait 30 in-game minutes after a violation to begin probing lower speeds:
   @wait_after_violation 30 * AutoNuke.Ticker.seconds_per_minute()
   # While probing, wait 10 in-game minutes per 1% speed drop:
