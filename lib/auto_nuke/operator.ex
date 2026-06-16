@@ -3,8 +3,9 @@ defmodule AutoNuke.Operator do
 
   # Core concerns:
   def assigned_tick(Op.SteamFlow), do: 0
-  def assigned_tick(Op.ControlRods), do: 1
-  def assigned_tick(Op.PrimaryPumps), do: 2
+  def assigned_tick(Op.CoreTemp), do: 1
+  def assigned_tick(Op.ControlRods), do: 2
+  def assigned_tick(Op.PrimaryPumps), do: 3
 
   # Auxiliary concerns:
   def assigned_tick(Op.CoreFill), do: 0

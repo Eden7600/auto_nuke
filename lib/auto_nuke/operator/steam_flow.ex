@@ -235,10 +235,7 @@ defmodule AutoNuke.Operator.SteamFlow do
        %State{
          state
          | axis: axis,
-           turbines:
-             turbines
-             |> Enum.map(&Turbine.tick/1)
-             |> publish_turbine_stats()
+           turbines: turbines |> Enum.map(&Turbine.tick/1)
        }}
     end)
   end
@@ -256,7 +253,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     |> Kernel.-(API.Power.get_used_kw())
   end
 
-  defp get_closed_breakers do
+  def get_closed_breakers do
     @loops |> Enum.filter(&API.Generator.get_is_connected/1)
   end
 
@@ -402,11 +399,5 @@ defmodule AutoNuke.Operator.SteamFlow do
       {dd, hh, _mm} -> {dd, hh + 1, 0}
     end)
     |> AutoNuke.Time.parse_time()
-  end
-
-  defp publish_turbine_stats(turbines) do
-    pressures = turbines |> Enum.map(fn %Turbine{pressure: p} -> p end)
-    PubSub.publish(:steam_flow, {:steam_flow, pressures})
-    turbines
   end
 end
