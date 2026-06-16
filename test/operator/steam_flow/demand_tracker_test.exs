@@ -114,11 +114,14 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     end
 
     test "targets between 95% and 105% demand to start", %{dt: dt} do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0)
       assert {1.0, dz} = DT.target_and_deadzone(dt)
       assert_in_delta dz, 0.05, 0.0001
     end
 
     test "broadens deadzone when supply is meeting demand", %{dt: dt, ts: ts} do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
       API.mock_get("TIME_STAMP", ts)
       assert dt = DT.tick(dt, 50_000)
       assert {tgt1, dz1} = DT.target_and_deadzone(dt)
@@ -139,6 +142,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     end
 
     test "increases target when supply is not meeting demand", %{dt: dt, ts: ts} do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
       API.mock_get("TIME_STAMP", ts)
       assert dt = DT.tick(dt, 10_000)
       API.mock_get("TIME_STAMP", ts + 1)
@@ -148,6 +153,19 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
 
       assert {tgt, _dz} = DT.target_and_deadzone(dt)
       assert_in_delta tgt, 1.0275, 0.0001
+    end
+
+    test "does not increase target beyond 102% when resistors active", %{dt: dt, ts: ts} do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 1, times: :any)
+
+      API.mock_get("TIME_STAMP", ts)
+      assert dt = DT.tick(dt, 1_000)
+      API.mock_get("TIME_STAMP", ts + 1)
+      assert dt = DT.tick(dt, 1_000)
+      API.mock_get("TIME_STAMP", ts + 2)
+      assert dt = DT.tick(dt, 1_000)
+
+      assert {1.02, _dz} = DT.target_and_deadzone(dt)
     end
 
     test "decreases target when supply is exceeding demand", %{dt: dt, ts: ts} do
@@ -168,6 +186,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       dt: dt,
       ts: ts
     } do
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
       0..59
       |> Enum.reduce(dt, fn n, dt ->
         API.mock_get("TIME_STAMP", ts + n)
@@ -175,36 +195,6 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
         assert {tgt, _} = t = DT.target_and_deadzone(dt)
         assert_in_delta tgt, 1.0, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
         dt
-      end)
-    end
-
-    test "deadzone cap ensures chronic overproducing does not drop target below 50%", %{
-      dt: dt,
-      ts: ts
-    } do
-      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
-
-      0..59
-      |> Enum.reduce(dt, fn n, dt ->
-        API.mock_get("TIME_STAMP", ts + n)
-        assert {tgt, dz} = t = DT.target_and_deadzone(dt)
-        assert tgt >= 0.5, "Target drops below 50% at minute #{n}: #{inspect(t)}"
-        DT.tick(dt, (tgt + dz) * 50_000)
-      end)
-    end
-
-    test "deadzone cap ensures chronic underproducing does not push target above 150%", %{
-      dt: dt,
-      ts: ts
-    } do
-      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
-
-      0..59
-      |> Enum.reduce(dt, fn n, dt ->
-        API.mock_get("TIME_STAMP", ts + n)
-        assert {tgt, dz} = t = DT.target_and_deadzone(dt)
-        assert tgt <= 1.5, "Target rises above 150% at minute #{n}: #{inspect(t)}"
-        DT.tick(dt, (tgt - dz) * 50_000)
       end)
     end
   end

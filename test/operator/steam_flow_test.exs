@@ -721,8 +721,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
 
     API.mock_get("TIME_STAMP", 60 + minute)
+    API.mock_get("RES_ABSORPTION_CAPACITY_MW", resistors, times: :any)
     unless is_nil(demand), do: API.mock_get("POWER_DEMAND_MW", demand)
-    unless is_nil(resistors), do: API.mock_get("RES_ABSORPTION_CAPACITY_MW", resistors)
   end
 
   defp turbine_mocks(loop) when is_integer(loop) do
