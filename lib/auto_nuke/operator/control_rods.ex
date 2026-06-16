@@ -58,6 +58,7 @@ defmodule AutoNuke.Operator.ControlRods do
       }
 
     PubSub.subscribe(self(), :ticker)
+    PubSub.subscribe(self(), :core_temp)
 
     Logger.info(
       @log_prefix <>
@@ -76,6 +77,11 @@ defmodule AutoNuke.Operator.ControlRods do
   def handle_call({:set_target, t}, _from, %State{} = state) do
     Logger.info(@log_prefix <> "Target changed from #{state.target}°C to #{t}°C.")
     {:reply, :ok, %State{state | target: t}}
+  end
+
+  @impl true
+  def handle_info({:core_temp, t}, %State{} = state) do
+    {:noreply, %State{state | target: t}}
   end
 
   @impl true
@@ -119,7 +125,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
   defp get_bank_rods(banks) do
     banks
-    |> Enum.map(fn n -> {n, API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL")} end)
+    |> Enum.map(fn n -> API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL") end)
   end
 
   defp set_bank_rods(banks, old_rods, new_rods) do
