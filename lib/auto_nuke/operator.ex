@@ -6,6 +6,7 @@ defmodule AutoNuke.Operator do
   def assigned_tick(Op.CoreTemp), do: 1
   def assigned_tick(Op.ControlRods), do: 2
   def assigned_tick(Op.PrimaryPumps), do: 3
+  def assigned_tick(Op.BoronLevel), do: 4
 
   # Auxiliary concerns:
   def assigned_tick(Op.CoreFill), do: 0

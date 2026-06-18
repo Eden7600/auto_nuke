@@ -33,6 +33,7 @@ defmodule AutoNuke do
         {AutoNuke.Operator.SecondaryFill, loop: 3},
         AutoNuke.Operator.VacuumTank,
         AutoNuke.Operator.CoreFill,
+        AutoNuke.Operator.BoronLevel,
         AutoNuke.Operator.CondenserFill,
         AutoNuke.Operator.CondenserCooling
       ]
