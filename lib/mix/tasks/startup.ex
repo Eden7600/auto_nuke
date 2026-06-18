@@ -59,6 +59,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     check_power_source()
     test_control_rods()
 
+    {:ok, _} = AutoNuke.Operator.CoreFill.start_link()
     if using_boron?(), do: begin_injecting_boron()
     start_pressurizer()
     start_primary_circulation(loops, @startup_primary_speed)
