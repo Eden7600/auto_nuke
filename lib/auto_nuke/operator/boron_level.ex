@@ -4,13 +4,13 @@ defmodule AutoNuke.Operator.BoronLevel do
   require Logger
 
   defmodule State do
-    @enforce_keys [:dosing_axis, :filter_axis]
+    @enforce_keys [:dosing_rate, :filter_axis]
     defstruct(
-      dosing_axis: nil,
+      dosing_rate: nil,
       filter_axis: nil,
       filter_ready: false,
       next_ready_check: 0,
-      next_filter_pump_check: nil
+      next_pump_check: nil
     )
   end
 
@@ -19,29 +19,21 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Boron pump begins dosing when rods are above 50%.
-  # We want as much boron in the core as possible
-  # to limit xenon and iodine generation.
-  @dosing_target 50
-  # Ion pump begins filtering when rods are below 20%.
+  # Ion pump begins filtering when rods are below 20%, with a 0.5% deadzone.
   @filter_target 20
-  # Both sides use 0.5% deadzone.
-  @deadzone 0.5
+  @filter_deadzone 0.5
+  # Maximum filter speed is 100%.
+  @filter_max_rate 100
 
-  # Dosing is a sort of nice-to-have thing, 
-  # so we do it slowly to avoid overwhelming the reactor.
-  @dosing_max_rate 10
   # I'm told boron beyond 3500 has no effect.
   # Practically speaking, it's hard to maintain at 3500 anyway.
   @dosing_max_ppm 3500
-  # Maximum filter speed is 100%.
-  @filter_max_rate 100
 
   # Peform ready check once every 10 in-game seconds:
   tps = AutoNuke.Ticker.ticks_per_second()
   @ready_check_interval 10 * tps
   # If filter pump does not turn on within 3 seconds, begin issuing warnings:
-  @filter_pump_check_interval 3 * tps
+  @pump_check_interval 3 * tps
 
   @dosing_pump API.Pumps.boron_dosing()
   @filter_pump API.Pumps.boron_filter()
@@ -67,29 +59,18 @@ defmodule AutoNuke.Operator.BoronLevel do
     filter_speed = @filter_pump |> API.Pumps.get_ordered_speed()
     dose_rate = @dosing_pump |> API.Pumps.get_ordered_speed()
 
-    dosing_axis =
-      ControlAxis.new(
-        kp: 0.001,
-        ki: 0.0001,
-        kd: 0.0005,
-        deadzone: @deadzone,
-        to_value_fn: &axis_to_dose/1,
-        offset: dose_rate |> dose_to_axis(),
-        initial_value: dose_rate
-      )
-
     filter_axis =
       ControlAxis.new(
         kp: 0.001,
         ki: 0.0001,
         kd: 0.0005,
-        deadzone: @deadzone,
+        deadzone: @filter_deadzone,
         to_value_fn: &axis_to_filter/1,
         offset: filter_speed |> filter_to_axis(),
         initial_value: filter_speed
       )
 
-    state = %State{dosing_axis: dosing_axis, filter_axis: filter_axis}
+    state = %State{dosing_rate: dose_rate, filter_axis: filter_axis}
 
     PubSub.subscribe(self(), :ticker)
 
@@ -116,19 +97,16 @@ defmodule AutoNuke.Operator.BoronLevel do
      |> tick_filter(rods, t)}
   end
 
-  defp tick_dosing(%State{dosing_axis: axis} = state, rods) do
-    case ControlAxis.step(axis, @dosing_target, rods) do
-      {:changed, axis, new, old} ->
-        Logger.info(@log_prefix <> "Changing dosing rate from #{old} to #{new} g/min.")
-        @dosing_pump |> API.Pumps.set_speed(new)
-        axis
+  defp tick_dosing(%State{dosing_rate: old} = state, rods) do
+    new = calculate_dosing_rate(rods)
 
-      {:unchanged, axis, _old} ->
-        axis
+    if new != old do
+      Logger.info(@log_prefix <> "Changing dosing rate from #{old} to #{new} g/min.")
+      @dosing_pump |> API.Pumps.set_speed(new)
+      %State{state | dosing_rate: new}
+    else
+      state
     end
-    |> then(fn axis ->
-      %State{state | dosing_axis: axis}
-    end)
   end
 
   defp tick_filter(%State{filter_axis: axis} = state, rods, t) do
@@ -151,7 +129,7 @@ defmodule AutoNuke.Operator.BoronLevel do
     end
     |> then(fn {axis, value} ->
       %State{state | filter_axis: axis}
-      |> filter_pump_check(t, value)
+      |> pump_check(t, value)
     end)
   end
 
@@ -161,24 +139,20 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   defp get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
 
-  # Control rods are below target, so output is positive, nothing to do:
-  defp axis_to_dose(output) when output >= 0.0, do: 0
-  # Control rods are above target, so output is negative, time to start dosing:
-  defp axis_to_dose(output) when output < 0.0, do: (abs(output) * dosing_max()) |> round()
-
   # Control rods are above target, so output is negative, nothing to do:
   defp axis_to_filter(output) when output <= 0.0, do: 0
   # Control rods are below target, so output is positive, time to start filtering:
   defp axis_to_filter(output) when output > 0.0, do: (output * filter_max()) |> round()
 
-  defp dose_to_axis(dose), do: dose / @dosing_max_rate * -1
   defp filter_to_axis(filter), do: filter / @filter_max_rate
 
-  # Limit our rate to whatever rate will get us to 3500 ppm.
-  # We don't really need to scale this down because it's okay if we go a bit over.
-  defp dosing_max do
-    @dosing_max_rate
+  defp calculate_dosing_rate(rods) do
+    # Add 1 g/min for every 2% above 50% rods, to a max of 25 g/min.
+    ((rods - 50) / 2)
+    |> floor()
+    # Limit our rate to whatever rate will get us to 3500 ppm.
     |> min(@dosing_max_ppm - get_boron_ppm())
+    |> max(0)
   end
 
   # Below 100 ppm, start throttling back.
@@ -224,28 +198,28 @@ defmodule AutoNuke.Operator.BoronLevel do
   end
 
   # No filtration requested, disable checks if enabled:
-  defp filter_pump_check(%State{next_filter_pump_check: t} = state, _, 0) do
+  defp pump_check(%State{next_pump_check: t} = state, _, 0) do
     case t do
       nil -> state
-      _ -> %State{state | next_filter_pump_check: nil}
+      _ -> %State{state | next_pump_check: nil}
     end
   end
 
   # We just started asking for filtration, schedule the first check:
-  defp filter_pump_check(%State{next_filter_pump_check: nil} = state, t, f) when f > 0 do
-    %State{state | next_filter_pump_check: t + @filter_pump_check_interval}
+  defp pump_check(%State{next_pump_check: nil} = state, t, f) when f > 0 do
+    %State{state | next_pump_check: t + @pump_check_interval}
   end
 
   # Not time for another check yet:
-  defp filter_pump_check(%State{next_filter_pump_check: t2} = state, t1, _)
+  defp pump_check(%State{next_pump_check: t2} = state, t1, _)
        when is_integer(t2) and t2 < t1, do: state
 
   # Filtration is requested, and it's time for a check:
-  defp filter_pump_check(%State{} = state, t, f) when f > 0 do
+  defp pump_check(%State{} = state, t, f) when f > 0 do
     if @filter_pump |> API.Pumps.get_actual_speed() < 1.0 do
       Logger.error("Filtration pump not activating.  Check ion exchange switch.")
     end
 
-    %State{state | next_filter_pump_check: t + @filter_pump_check_interval}
+    %State{state | next_pump_check: t + @pump_check_interval}
   end
 end
