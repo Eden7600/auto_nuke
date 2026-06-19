@@ -33,10 +33,9 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # push power level any higher.
   @min_pressure 55
 
-  # To avoid excessive flapping, use a large-ish steam deadzone:
-  @steam_deadzone 2
-  # This will also be added to the target to ensure
-  # we always produce at least that much steam.
+  # To avoid excessive flapping, if we're within 3 kg/min 
+  # of min steam flow, disallow bypass decreases.
+  @steam_lock_zone 3
 
   require Logger
   alias __MODULE__
@@ -52,7 +51,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       ControlAxis.new(
         kp: 0.01,
         ki: 0.001,
-        deadzone: @steam_deadzone,
+        deadzone: 1.0,
         to_value_fn: &axis_to_bypass/1,
         offset: bypass |> bypass_to_axis(),
         initial_value: bypass
@@ -125,8 +124,9 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       step_axis(
         turbine.steam_axis,
         steam,
-        turbine.min_steam + @steam_deadzone
+        turbine.min_steam
       )
+      |> maybe_unstep_steam(steam - turbine.min_steam, turbine)
 
     {pressure_bypass, pressure_axis} =
       step_axis(
@@ -165,6 +165,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       {:unchanged, axis, old} -> {old, axis}
     end
   end
+
+  defp maybe_unstep_steam({new_bypass, _}, margin, %Turbine{
+         bypass: old_bypass,
+         steam_axis: old_axis
+       })
+       when new_bypass < old_bypass and margin < @steam_lock_zone, do: {old_bypass, old_axis}
+
+  defp maybe_unstep_steam({_, _} = rval, _, _), do: rval
 
   @log_module inspect(__MODULE__) |> String.replace("AutoNuke.Operator.", "")
   defp log_prefix(loop), do: "[#{@log_module}.L#{loop}] "
