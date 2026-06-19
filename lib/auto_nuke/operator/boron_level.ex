@@ -4,10 +4,10 @@ defmodule AutoNuke.Operator.BoronLevel do
   require Logger
 
   defmodule State do
-    @enforce_keys [:dosing_rate, :filter_axis]
+    @enforce_keys [:dosing_rate, :filter_rate]
     defstruct(
       dosing_rate: nil,
-      filter_axis: nil,
+      filter_rate: nil,
       filter_ready: false,
       next_ready_check: 0,
       next_pump_check: nil
@@ -15,15 +15,8 @@ defmodule AutoNuke.Operator.BoronLevel do
   end
 
   alias AutoNuke.API
-  alias AutoNuke.ControlAxis
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
-
-  # Ion pump begins filtering when rods are below 20%, with a 0.5% deadzone.
-  @filter_target 20
-  @filter_deadzone 0.5
-  # Maximum filter speed is 100%.
-  @filter_max_rate 100
 
   # I'm told boron beyond 3500 has no effect.
   # Practically speaking, it's hard to maintain at 3500 anyway.
@@ -56,21 +49,9 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   defp maybe_init(true) do
     boron = get_boron_ppm()
-    filter_speed = @filter_pump |> API.Pumps.get_ordered_speed()
+    filter_rate = @filter_pump |> API.Pumps.get_ordered_speed()
     dose_rate = @dosing_pump |> API.Pumps.get_ordered_speed()
-
-    filter_axis =
-      ControlAxis.new(
-        kp: 0.001,
-        ki: 0.0001,
-        kd: 0.0005,
-        deadzone: @filter_deadzone,
-        to_value_fn: &axis_to_filter/1,
-        offset: filter_speed |> filter_to_axis(),
-        initial_value: filter_speed
-      )
-
-    state = %State{dosing_rate: dose_rate, filter_axis: filter_axis}
+    state = %State{dosing_rate: dose_rate, filter_rate: filter_rate}
 
     PubSub.subscribe(self(), :ticker)
 
@@ -78,7 +59,7 @@ defmodule AutoNuke.Operator.BoronLevel do
       @log_prefix,
       "Started with boron at #{boron} ppm,",
       " dosing at #{dose_rate} g/min,",
-      " and filtration at #{filter_speed}%."
+      " and filtration at #{filter_rate}%."
     ])
 
     {:ok, state}
@@ -109,28 +90,24 @@ defmodule AutoNuke.Operator.BoronLevel do
     end
   end
 
-  defp tick_filter(%State{filter_axis: axis} = state, rods, t) do
+  defp tick_filter(%State{filter_rate: old} = state, rods, t) do
     state = ready_check(state, t)
+    new = calculate_filter_rate(rods)
 
-    case ControlAxis.step(axis, @filter_target, rods) do
-      {:changed, axis, new, old} ->
-        if state.filter_ready || new == 0 do
-          Logger.info(@log_prefix <> "Changing filter speed from #{old}% to #{new}%.")
-          @filter_pump |> API.Pumps.set_speed(new)
-          {axis, new}
-        else
-          Logger.error(@log_prefix <> "Filtration not ready!  Cannot change speed to #{new}%.")
-          @filter_pump |> API.Pumps.set_speed(0)
-          {ControlAxis.clamp_min(axis, 0.0), 0}
-        end
+    if new != old do
+      if state.filter_ready || new == 0 do
+        Logger.info(@log_prefix <> "Changing filter speed from #{old}% to #{new}%.")
+        @filter_pump |> API.Pumps.set_speed(new)
+      else
+        Logger.error(@log_prefix <> "Filtration not ready!  Cannot change speed to #{new}%.")
+        @filter_pump |> API.Pumps.set_speed(0)
+      end
 
-      {:unchanged, axis, old} ->
-        {axis, old}
+      %State{state | filter_rate: new}
+    else
+      state
     end
-    |> then(fn {axis, value} ->
-      %State{state | filter_axis: axis}
-      |> pump_check(t, value)
-    end)
+    |> pump_check(t, new)
   end
 
   defp using_chemicals? do
@@ -138,13 +115,6 @@ defmodule AutoNuke.Operator.BoronLevel do
   end
 
   defp get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
-
-  # Control rods are above target, so output is negative, nothing to do:
-  defp axis_to_filter(output) when output <= 0.0, do: 0
-  # Control rods are below target, so output is positive, time to start filtering:
-  defp axis_to_filter(output) when output > 0.0, do: (output * filter_max()) |> round()
-
-  defp filter_to_axis(filter), do: filter / @filter_max_rate
 
   defp calculate_dosing_rate(rods) do
     # Add 1 g/min for every 2% above 50% rods, to a max of 25 g/min.
@@ -155,19 +125,17 @@ defmodule AutoNuke.Operator.BoronLevel do
     |> max(0)
   end
 
-  # Below 100 ppm, start throttling back.
-  #
-  # I don't actually know if we can completely eliminate all boron,
-  # so this scales filtering down as we approach zero.
-  #
-  # Realistically, by the time we get this low, 
-  # we're probably in a xenon pit and screwed anyway.
-  defp filter_max do
-    @filter_max_rate
+  defp calculate_filter_rate(rods) do
+    # Add 5% rate for every 1% below 20% rods, to a max of 100%.
+    ((20 - rods) * 5)
+    # Below 100 ppm, start throttling back.
     |> min(get_boron_ppm())
+    |> floor()
+    |> max(0)
+    |> min(100)
   end
 
-  defp ready_check(%State{next_ready_check: t2} = state, t1) when t2 < t1, do: state
+  defp ready_check(%State{next_ready_check: next} = state, curr) when curr < next, do: state
 
   @filter_valves [
     API.Valves.ion_inlet(),
