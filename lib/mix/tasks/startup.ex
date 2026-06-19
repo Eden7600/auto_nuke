@@ -38,6 +38,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # The reason we don't use 50% is that we'll already have the retention tank
   # process running and targeting 50%, and it might linger around 49%.
 
+  # To get reactor up to temperature, increase 
+  # the core temperature target by 1°C per second.
+  @core_temp_increase 1
+  @core_temp_interval AutoNuke.Ticker.ticks_per_second()
+  # Clamp this at 5°C above the current actual temperature.
+  @core_temp_max_delta 5
+
   def run([]) do
     startup(&get_installed_secondary_loops/0)
   end
@@ -374,17 +381,20 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait_for_temperature(100, false)
   end
 
-  defp increase_temp_target_loop(current, max) when current >= max, do: :break
+  defp increase_temp_target_loop(target, max) when target >= max, do: :break
 
-  @tick_modulo AutoNuke.Ticker.ticks_per_second()
-  defp increase_temp_target_loop(current, max) do
+  defp increase_temp_target_loop(old, max) do
     receive do
       {:tick, t} ->
-        if rem(t, @tick_modulo) == 0 do
-          AutoNuke.Operator.ControlRods.set_target(current + 1)
-          increase_temp_target_loop(current + 1, max)
+        if rem(t, @core_temp_interval) == 0 do
+          new =
+            (old + @core_temp_increase)
+            |> min(get_core_temp() + @core_temp_max_delta)
+
+          AutoNuke.Operator.ControlRods.set_target(new)
+          increase_temp_target_loop(new, max)
         else
-          increase_temp_target_loop(current, max)
+          increase_temp_target_loop(old, max)
         end
     end
   end
@@ -395,10 +405,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.ProgressBar.wait(
       config: UI.ProgressBar.Config.target(0, temp, "°C"),
       label: "Core Temp",
-      current_fn: fn -> API.get_float("CORE_TEMP") end,
+      current_fn: &get_core_temp/0,
       done_fn: &(&1 >= temp)
     )
   end
+
+  defp get_core_temp, do: API.get_float("CORE_TEMP")
 
   def start_secondary_circulation(loops) do
     UI.console("Steam Generator")
