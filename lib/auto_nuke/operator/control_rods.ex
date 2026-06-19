@@ -41,9 +41,10 @@ defmodule AutoNuke.Operator.ControlRods do
 
     axis =
       ControlAxis.new(
-        kp: 0.01,
-        ki: 0.001,
-        deadzone: 0.1,
+        kp: 0.05,
+        ki: 0.005,
+        kd: 0.01,
+        deadzone: 0.5,
         to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
         offset: rods |> rods_to_axis(),
         initial_value: rods
@@ -93,7 +94,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
     case ControlAxis.step(state.axis, state.target, temp) do
       {:changed, axis, new, old} ->
-        set_bank_rods(state.banks, old, new)
+        set_bank_rods(state.banks, old, new, state.target)
         maybe_clamp(state.banks, axis, new)
 
       {:unchanged, axis, _old_value} ->
@@ -128,13 +129,17 @@ defmodule AutoNuke.Operator.ControlRods do
     |> Enum.map(fn n -> API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL") end)
   end
 
-  defp set_bank_rods(banks, old_rods, new_rods) do
+  defp set_bank_rods(banks, old_rods, new_rods, target) do
     Enum.zip_with([banks, old_rods, new_rods], fn
       [_bank, same, same] ->
         same
 
       [bank, old, new] ->
-        Logger.info(@log_prefix <> "Changing bank #{bank} rods from #{old} to #{new}.")
+        Logger.info(
+          @log_prefix <>
+            "Changing bank #{bank} rods #{old}% → #{new}% to reach #{Float.round(target, 2)}°C."
+        )
+
         API.put("ROD_BANK_POS_#{bank - 1}_ORDERED", new)
         new
     end)
