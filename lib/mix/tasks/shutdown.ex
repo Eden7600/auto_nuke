@@ -7,6 +7,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI
+  alias AutoNuke.Operator, as: Op
   alias Mix.Tasks.AutoNuke.Startup
 
   @loops 1..3
@@ -17,12 +18,13 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   @core API.Vessels.core_vessel()
 
   @remote_operators %{
-    auto_drift: {AutoNuke.Operator.AutoDrift, "Automatic Drift Operator"},
-    core_factor: {AutoNuke.Operator.CoreFactor, "Core Factor Operator"},
-    core_temp: {AutoNuke.Operator.CoreTemp, "Core Temperature Operator"},
-    steam_flow: {AutoNuke.Operator.SteamFlow, "Steam Flow Operator"},
-    vacuum_tank: {AutoNuke.Operator.VacuumTank, "Vacuum Tank Operator"},
-    condenser_cooling: {AutoNuke.Operator.CondenserCooling, "Condenser Cooling Operator"}
+    core_temp: {Op.CoreTemp, "Core Temperature Operator"},
+    control_rods: {Op.ControlRods, "Control Rods Operator"},
+    primary_pumps: {Op.PrimaryPumps, "Primary Pumps Operator"},
+    steam_flow: {Op.SteamFlow, "Steam Flow Operator"},
+    vacuum_tank: {Op.VacuumTank, "Vacuum Tank Operator"},
+    condenser_cooling: {Op.CondenserCooling, "Condenser Cooling Operator"},
+    boron_level: {Op.BoronLevel, "Boron Level Operator"}
   }
 
   def run([]) do
@@ -35,7 +37,14 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     open_breakers()
     set_shutdown_mode()
 
-    disable_remotes(node, [:auto_drift, :core_factor, :core_temp, :steam_flow])
+    disable_remotes(node, [
+      :core_temp,
+      :control_rods,
+      :primary_pumps,
+      :steam_flow,
+      :boron_level
+    ])
+
     insert_control_rods()
     set_full_bypass()
     set_max_pump_speed()
