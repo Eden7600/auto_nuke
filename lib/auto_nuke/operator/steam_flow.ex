@@ -89,7 +89,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   def clear_target_override(pid \\ __MODULE__) do
-    GenServer.cast(pid, :clear_override)
+    GenServer.call(pid, :clear_override)
   end
 
   @impl true
@@ -171,9 +171,9 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_cast(:clear_override, %State{} = state) do
+  def handle_call(:clear_override, _false, %State{} = state) do
     Logger.notice(@log_prefix <> "Target override cleared.")
-    {:noreply, %State{state | target_override: nil}}
+    {:reply, :ok, %State{state | target_override: nil}}
   end
 
   @impl true

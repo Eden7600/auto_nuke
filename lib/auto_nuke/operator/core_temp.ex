@@ -5,7 +5,11 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   defmodule State do
     @enforce_keys [:vessels, :axis]
-    defstruct(@enforce_keys)
+    defstruct(
+      vessels: nil,
+      axis: nil,
+      override: nil
+    )
   end
 
   alias AutoNuke.API
@@ -26,6 +30,16 @@ defmodule AutoNuke.Operator.CoreTemp do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, loops, opts)
+  end
+
+  def set_override(temp, pid \\ __MODULE__)
+      when temp >= @temp_range.first and temp <= @temp_range.last do
+    temp = temp + 0.0
+    GenServer.call(pid, {:set_override, temp})
+  end
+
+  def clear_override(pid \\ __MODULE__) do
+    GenServer.call(pid, :clear_override)
   end
 
   @impl true
@@ -67,7 +81,31 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
+  def handle_call({:set_override, temp}, _from, %State{} = state) when is_float(temp) do
+    Logger.info(@log_prefix <> "Overriding temperature to #{temp}°C.")
+
+    axis =
+      state.axis
+      |> ControlAxis.clamp_min(temp)
+      |> ControlAxis.clamp_max(temp)
+
+    {:reply, :ok, %State{state | axis: axis, override: temp}}
+  end
+
+  @impl true
+  def handle_call(:clear_override, _from, %State{} = state) do
+    Logger.info(@log_prefix <> "Clearing override.")
+    {:reply, :ok, %State{state | override: nil}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
+
+  @impl true
+  def handle_info({:tick, _}, %State{override: temp} = state) do
+    PubSub.publish(:core_temp, {:core_temp, temp})
+    {:noreply, state}
+  end
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
