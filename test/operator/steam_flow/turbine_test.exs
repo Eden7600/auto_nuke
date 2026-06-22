@@ -113,7 +113,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       smoother = Smoother.new(3)
 
       {final_turbine, _} =
-        1..@settle_time
+        1..(@settle_time * 2)
         |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
           smoother = Smoother.add(smoother, steam_fun.(old_t.bypass))
           API.mock_get("STEAM_GEN_0_OUTLET", Smoother.average(smoother))
