@@ -36,6 +36,9 @@ defmodule AutoNuke.Operator.BoronLevel do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
+  def get_dosing_rate, do: GenServer.call(__MODULE__, :get_dosing_rate)
+  def get_filter_rate, do: GenServer.call(__MODULE__, :get_filter_rate)
+
   @impl true
   def init(nil) do
     using_chemicals?()
@@ -63,6 +66,16 @@ defmodule AutoNuke.Operator.BoronLevel do
     ])
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_dosing_rate, _from, %State{dosing_rate: rate} = state) do
+    {:reply, rate, state}
+  end
+
+  @impl true
+  def handle_call(:get_filter_rate, _from, %State{filter_rate: rate} = state) do
+    {:reply, rate, state}
   end
 
   @impl true
@@ -114,7 +127,7 @@ defmodule AutoNuke.Operator.BoronLevel do
     [@dosing_pump, @filter_pump] |> Enum.any?(&API.Pumps.installed?/1)
   end
 
-  defp get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
+  def get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
 
   defp calculate_dosing_rate(rods) do
     # Add 1 g/min for every 2% above 50% rods, to a max of 25 g/min.

@@ -23,13 +23,10 @@ defmodule AutoNuke.Operator.ControlRods do
     GenServer.start_link(__MODULE__, target, opts)
   end
 
-  def get_target(pid \\ __MODULE__) do
-    GenServer.call(pid, :get_target)
-  end
+  def get_target(pid \\ __MODULE__), do: GenServer.call(pid, :get_target)
+  def set_target(target, pid \\ __MODULE__), do: GenServer.call(pid, {:set_target, target})
 
-  def set_target(target, pid \\ __MODULE__) do
-    GenServer.call(pid, {:set_target, target})
-  end
+  def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
 
   @impl true
   def init(target) when is_number(target) or is_nil(target) do
@@ -81,6 +78,15 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   @impl true
+  def handle_call(:get_rods, _from, %State{} = state) do
+    banks_and_rods =
+      state.banks
+      |> Enum.zip(state.banks |> get_bank_rods())
+
+    {:reply, banks_and_rods, state}
+  end
+
+  @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
     {:noreply, %State{state | target: t}}
   end
@@ -105,9 +111,11 @@ defmodule AutoNuke.Operator.ControlRods do
     end)
   end
 
+  def get_core_temp, do: API.Vessels.get_temperature(@core)
+
   # Avoid transients:
   defp get_verified_core_temp(seen) do
-    temp = API.Vessels.get_temperature(@core)
+    temp = get_core_temp()
 
     if temp in seen do
       temp
