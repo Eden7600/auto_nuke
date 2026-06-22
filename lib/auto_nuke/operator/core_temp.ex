@@ -60,7 +60,7 @@ defmodule AutoNuke.Operator.CoreTemp do
       ControlAxis.new(
         kp: 0.01,
         ki: 0.001,
-        kd: 0.01,
+        kd: 0.03,
         deadzone: @deadzone,
         to_value_fn: &axis_to_temp/1,
         offset: temp |> temp_to_axis(),
