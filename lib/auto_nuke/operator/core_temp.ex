@@ -102,18 +102,17 @@ defmodule AutoNuke.Operator.CoreTemp do
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info({:tick, _}, %State{override: temp} = state) do
+  def handle_info({:tick, _}, %State{override: temp} = state) when is_float(temp) do
     PubSub.publish(:core_temp, {:core_temp, temp})
     {:noreply, state}
   end
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    min_pressure = get_min_pressure(state.vessels)
+    current_pressure = get_current_pressure(state.vessels)
 
-    case ControlAxis.step(state.axis, @target_pressure, min_pressure) do
-      {:changed, axis, new, old} ->
-        Logger.debug(@log_prefix <> "Changing temperature from #{old}°C to #{new}°C.")
+    case ControlAxis.step(state.axis, @target_pressure, current_pressure) do
+      {:changed, axis, new, _old} ->
         PubSub.publish(:core_temp, {:core_temp, new})
         axis
 
@@ -126,16 +125,16 @@ defmodule AutoNuke.Operator.CoreTemp do
     end)
   end
 
-  defp get_min_pressure([]) do
-    # No active loops, reactor idle.  Pretend minimum pressure is a bit too
+  defp get_current_pressure([]) do
+    # No active loops, reactor idle.  Pretend current pressure is a bit too
     # high, so we slowly slew our target temperature towards the minimum.
     @target_pressure + @deadzone * 1.1
   end
 
-  defp get_min_pressure(vessels) do
+  defp get_current_pressure(vessels) do
     vessels
     |> Enum.map(&API.Vessels.get_pressure/1)
-    |> Enum.min()
+    |> Statistex.average()
   end
 
   @temp_span (@temp_range.last - @temp_range.first) / 2
