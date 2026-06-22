@@ -25,8 +25,8 @@ defmodule AutoNuke.Operator.BoronLevel do
   # Peform ready check once every 10 in-game seconds:
   tps = AutoNuke.Ticker.ticks_per_second()
   @ready_check_interval 10 * tps
-  # If filter pump does not turn on within 3 seconds, begin issuing warnings:
-  @pump_check_interval 3 * tps
+  # If filter pump does not turn on within 10 seconds, begin issuing warnings:
+  @pump_check_interval 10 * tps
 
   @dosing_pump API.Pumps.boron_dosing()
   @filter_pump API.Pumps.boron_filter()
