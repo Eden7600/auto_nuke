@@ -94,7 +94,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       ["nonode", "nohost"] ->
         Mix.raise("This task must be run via `./task.sh auto_nuke.loop.stop <loop>`.")
 
-      ["auto_nuke_loop_stop", host] ->
+      ["auto_nuke_loop_stop_" <> _, host] ->
         remote = :"nuke@#{host}"
 
         case Node.ping(remote) do

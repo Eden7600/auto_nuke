@@ -277,7 +277,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       ["nonode", "nohost"] ->
         Mix.raise("This task must be run via `./task.sh auto_nuke.loop.stop <loop>`.")
 
-      ["auto_nuke_shutdown", host] ->
+      ["auto_nuke_shutdown_" <> _, host] ->
         remote = :"nuke@#{host}"
 
         case Node.ping(remote) do

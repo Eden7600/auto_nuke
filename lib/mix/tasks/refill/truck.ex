@@ -36,6 +36,10 @@ defmodule Mix.Tasks.AutoNuke.Refill.Truck do
     }
   ]
 
+  def run([]) do
+    Mix.raise("Usage: mix auto_nuke.refill.truck <cargo type>")
+  end
+
   def run(args) do
     Enum.join(args, " ")
     |> find_cargo()
