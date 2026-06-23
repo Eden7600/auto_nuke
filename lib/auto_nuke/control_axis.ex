@@ -62,27 +62,22 @@ defmodule AutoNuke.ControlAxis do
     end
   end
 
-  def clamp_max(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, max, new_value \\ nil) do
-    new_p = min(pidc.p, max)
-    new_i = min(pidc.i, max - new_p)
+  def clamp(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, new_output, new_value \\ nil) do
+    p = pidc.config.kp * pidc.e0
+    d = pidc.config.kd * pidc.d
+    i = new_output - p - d
 
     %ControlAxis{
       axis
-      | pidc: %PIDControl{pidc | p: new_p, i: new_i},
+      | pidc: %PIDControl{pidc | i: i},
         last_value: new_value || axis.last_value
     }
   end
 
-  def clamp_min(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, min, new_value \\ nil) do
-    new_p = max(pidc.p, min)
-    new_i = max(pidc.i, min - new_p)
-
-    %ControlAxis{
-      axis
-      | pidc: %PIDControl{pidc | p: new_p, i: new_i},
-        last_value: new_value || axis.last_value
-    }
-  end
+  @deprecated "Use ControlAxis.clamp/3 instead."
+  def clamp_min(axis, min, new_value \\ nil), do: clamp(axis, min, new_value)
+  @deprecated "Use ControlAxis.clamp/3 instead."
+  def clamp_max(axis, max, new_value \\ nil), do: clamp(axis, max, new_value)
 
   defp step_with_deadzone(%PIDControl{} = pidc, +0.0, target, measurement) do
     PIDControl.step(pidc, target, measurement)

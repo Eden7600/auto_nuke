@@ -183,12 +183,12 @@ defmodule AutoNuke.Operator.ControlRods do
       ordered > max_rods ->
         # We're asking for too much rods at once, clamp down.
         Logger.debug(@log_prefix <> "Clamping down to #{max_rods}%.")
-        axis |> ControlAxis.clamp_min(max_rods |> rods_to_axis())
+        axis |> ControlAxis.clamp(max_rods |> rods_to_axis())
 
       ordered < min_rods ->
         # We're asking for too little rods at once, clamp up.
         Logger.debug(@log_prefix <> "Clamping up to #{min_rods}%.")
-        axis |> ControlAxis.clamp_max(min_rods |> rods_to_axis())
+        axis |> ControlAxis.clamp(min_rods |> rods_to_axis())
 
       true ->
         axis
