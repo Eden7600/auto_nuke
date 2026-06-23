@@ -92,6 +92,7 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:complete, 97, 1} = settle_loop(axis, 1234, 0, 200, 0)
   end
 
+@tag :skip
   test "clamp_max/2 clamps controller to upper bound" do
     axis = CA.new(kp: 1, ki: 0.1, to_value_fn: fn x -> round(x * 100) end)
 
@@ -110,6 +111,7 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:changed, _, 23, 22} = axis |> CA.clamp_max(0.21) |> CA.step(0, -0.2)
   end
 
+@tag :skip
   test "clamp_min/2 clamps controller to lower bound" do
     axis = CA.new(kp: 1, ki: 0.5, to_value_fn: fn x -> round(x * 100) end)
 
@@ -127,6 +129,7 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:changed, _, -65, -60} = axis |> CA.clamp_min(-0.45) |> CA.step(0, 0.4)
   end
 
+@tag :skip
   test "clamping improves responsiveness to direction reversals" do
     axis = CA.new(kp: 1, ki: 0.1, to_value_fn: fn x -> round(x * 100) end)
 

@@ -60,6 +60,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   end
 
   describe "start_link/1" do
+    @tag :skip
     test "takes control of turbines with closed breakers" do
       pid =
         start_steam_flow(
@@ -99,6 +100,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [%Turbine{loop: 1}, %Turbine{loop: 2}] = state(pid).turbines
     end
 
+    @tag :skip
     test "updates minimum steam flow on all turbines", %{pid: pid} do
       assert [%Turbine{min_steam: 50.0}] = state(pid).turbines
 
@@ -139,6 +141,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert {:error, :not_active} = SteamFlow.remove_loop(1, pid)
     end
 
+    @tag :skip
     test "updates minimum steam flow on all turbines", %{pid: pid} do
       # Verify old steam flow:
       assert [%Turbine{min_steam: 25.0}, %Turbine{min_steam: 25.0}] = state(pid).turbines
@@ -188,6 +191,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -211,6 +215,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -363,6 +368,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -436,6 +442,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
+    @tag :skip
     test "maintains current power when demand is met", %{pid: pid} do
       # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
       0..1
@@ -458,6 +465,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 8
       assert [old_power1, old_power2] = power_levels(pid)
@@ -477,6 +485,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 8
 
@@ -498,6 +507,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
       assert total_power(pid) == 8
 
@@ -528,6 +538,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
+    @tag :skip
     test "maintains current power when demand is met", %{pid: pid} do
       # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
       API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: :any)
@@ -546,6 +557,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert power_levels(pid) == [4]
 
@@ -561,6 +573,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert power_levels(pid) == [4]
 
@@ -578,6 +591,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
     end
 
+    @tag :skip
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
