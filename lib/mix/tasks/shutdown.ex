@@ -33,6 +33,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     UI.init()
     UI.log_to_file("startup.log")
 
+    reduce_throttle(node)
     Startup.enable_resistor_bank()
     open_breakers()
     set_shutdown_mode()
@@ -60,6 +61,33 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     disable_remotes(node, [:condenser_cooling])
     stop_all_pumps()
     disable_resistor_banks()
+  end
+
+  @min_power_level Op.SteamFlow.Turbine.allowed_power_levels().first
+
+  defp reduce_throttle(node) do
+    UI.tablet("AutoNuke Remote Control")
+
+    UI.set_wait(
+      "Steam Flow Target Override",
+      "SET TO 0%",
+      remote_fn(node, fn ->
+        Op.SteamFlow.get_target_override() |> IO.inspect() == {0, :never}
+      end),
+      remote_fn(node, fn ->
+        Op.SteamFlow.set_target_override(0, :never)
+        |> IO.inspect()
+      end)
+    )
+
+    UI.wait(
+      "Main Steam Control Valves",
+      "WAIT FOR #{@min_power_level}%",
+      remote_fn(node, fn ->
+        Op.SteamFlow.get_power_levels()
+        |> Enum.all?(&(&1 == @min_power_level))
+      end)
+    )
   end
 
   defp open_breakers do

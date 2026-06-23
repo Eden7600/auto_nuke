@@ -24,7 +24,10 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   def get_target(pid \\ __MODULE__), do: GenServer.call(pid, :get_target)
-  def set_target(target, pid \\ __MODULE__), do: GenServer.call(pid, {:set_target, target})
+
+  def set_target(target, pid \\ __MODULE__) when is_number(target) do
+    GenServer.call(pid, {:set_target, target + 0.0})
+  end
 
   def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
 

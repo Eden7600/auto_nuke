@@ -17,9 +17,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Slowly increase reactor to the CoreTemp midpoint:
+  # Slowly increase reactor to target temperature:
   core_temp_range = AutoNuke.Operator.CoreTemp.temp_range()
-  @startup_core_temp (core_temp_range.first + core_temp_range.last) |> div(2)
+  @startup_core_temp 320
   # Wait for this temperature before starting turbines:
   @turbine_temp core_temp_range.first
   # Control MSCV to maintain this much pressure:
@@ -237,6 +237,27 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp wait_before_load_fuel(loops) do
     UI.console("Coolant System")
 
+    UI.console("Pressurizer")
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(0, 150, " bar"),
+      label: "Core Pressure",
+      current_fn: fn -> API.get_float("CORE_PRESSURE") end,
+      done_fn: &(&1 >= 150)
+    )
+
+    if using_boron?() do
+      UI.console("Chemical Treatemnt")
+      target = @boron_target - 50
+
+      UI.ProgressBar.wait(
+        config: UI.ProgressBar.Config.target(0, target, " ppm"),
+        label: "Boron PPM",
+        current_fn: fn -> API.get_float("CHEM_BORON_PPM") end,
+        done_fn: &(&1 >= target)
+      )
+    end
+
     loops
     |> Enum.map(&API.Pumps.primary/1)
     |> Enum.each(&UI.Pumps.set_speed(&1, @startup_primary_speed, wait: true))
@@ -258,27 +279,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
     |> Enum.each(&UI.Valves.set(&1, 100, wait: true))
-
-    UI.console("Pressurizer")
-
-    UI.ProgressBar.wait(
-      config: UI.ProgressBar.Config.target(0, 150, " bar"),
-      label: "Core Pressure",
-      current_fn: fn -> API.get_float("CORE_PRESSURE") end,
-      done_fn: &(&1 >= 150)
-    )
-
-    if using_boron?() do
-      UI.console("Chemical Treatemnt")
-      target = @boron_target - 50
-
-      UI.ProgressBar.wait(
-        config: UI.ProgressBar.Config.target(0, target, " ppm"),
-        label: "Boron PPM",
-        current_fn: fn -> API.get_float("CHEM_BORON_PPM") end,
-        done_fn: &(&1 >= target)
-      )
-    end
   end
 
   def enable_resistor_bank do
@@ -579,11 +579,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     init_boron = API.get_float("CHEM_BORON_PPM")
 
-    UI.set_wait_unless(
+    UI.set_wait(
       "Boron Injection",
       "BEGIN",
-      fn -> init_boron >= @boron_target end,
-      fn -> API.get_float("CHEM_BORON_PPM") > init_boron end,
+      fn -> API.get_float("CHEM_BORON_PPM") > min(init_boron, @boron_target) end,
       fn ->
         spawn_link(fn ->
           # Ensure only one:

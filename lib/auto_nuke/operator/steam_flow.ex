@@ -90,6 +90,14 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :clear_override)
   end
 
+  def get_target_override(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_override)
+  end
+
+  def get_power_levels(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_power_levels)
+  end
+
   @impl true
   def init(nil) do
     connected = get_closed_breakers()
@@ -160,6 +168,16 @@ defmodule AutoNuke.Operator.SteamFlow do
   def handle_call(:clear_override, _false, %State{} = state) do
     Logger.notice(@log_prefix <> "Target override cleared.")
     {:reply, :ok, %State{state | target_override: nil}}
+  end
+
+  @impl true
+  def handle_call(:get_override, _false, %State{target_override: override} = state) do
+    {:reply, override, state}
+  end
+
+  @impl true
+  def handle_call(:get_power_levels, _false, %State{turbines: turbines} = state) do
+    {:reply, turbines |> Enum.map(& &1.power_level), state}
   end
 
   @impl true
