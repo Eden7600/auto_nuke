@@ -129,21 +129,34 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   def get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
 
+  defp calculate_dosing_rate(rods) when rods <= 50, do: 0
+
   defp calculate_dosing_rate(rods) do
-    # Add 1 g/min for every 2% above 50% rods, to a max of 25 g/min.
-    ((rods - 50) / 2)
-    |> floor()
+    # Cube curve:
+    # - 0.4 g/min at 60%
+    # - 3.2 g/min at 70%
+    # - 10.8 g/min at 80%
+    # - 25.6 g/min at 90%
+    # - 50.0 g/min at 100%
+    (50 * ((rods - 50) / 50) ** 3)
+    |> round()
     # Limit our rate to whatever rate will get us to 3500 ppm.
     |> min(@dosing_max_ppm - get_boron_ppm())
     |> max(0)
   end
 
+  defp calculate_filter_rate(rods) when rods >= 20, do: 0
+
   defp calculate_filter_rate(rods) do
-    # Add 5% rate for every 1% below 20% rods, to a max of 100%.
-    ((20 - rods) * 5)
+    # Square curve:
+    # - 6.25 at 15%
+    # - 25% at 10%
+    # - 56.25 at 5%
+    # - 100% at 0%
+    (100 * ((20 - rods) / 20) ** 2)
     # Below 100 ppm, start throttling back.
     |> min(get_boron_ppm())
-    |> floor()
+    |> round()
     |> max(0)
     |> min(100)
   end
@@ -192,8 +205,8 @@ defmodule AutoNuke.Operator.BoronLevel do
   end
 
   # Not time for another check yet:
-  defp pump_check(%State{next_pump_check: t2} = state, t1, _)
-       when is_integer(t2) and t2 < t1, do: state
+  defp pump_check(%State{next_pump_check: next} = state, curr, _)
+       when is_integer(next) and curr < next, do: state
 
   # Filtration is requested, and it's time for a check:
   defp pump_check(%State{} = state, t, f) when f > 0 do
