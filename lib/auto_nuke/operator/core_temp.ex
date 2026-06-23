@@ -26,6 +26,10 @@ defmodule AutoNuke.Operator.CoreTemp do
   # We could probably go lower, but I don't want to risk turbine stalls.
   def temp_range, do: @temp_range
 
+  # Clamp values to within 5°C of current temperature.
+  @clamp_temp_delta 5
+  # Note: This will decrease as we approach @temp_range bounds.
+
   def start_link(opts \\ []) do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -50,17 +54,13 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def init(loops) when is_list(loops) do
-    temp =
-      API.Vessels.core_vessel()
-      |> API.Vessels.get_temperature()
-
+    temp = get_core_temp()
     vessels = loops |> Enum.map(&API.Vessels.steam_generator/1)
 
     axis =
       ControlAxis.new(
         kp: 0.01,
-        ki: 0.001,
-        kd: 0.03,
+        ki: 0.0005,
         deadzone: @deadzone,
         to_value_fn: &axis_to_temp/1,
         offset: temp |> temp_to_axis(),
@@ -84,11 +84,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   def handle_call({:set_override, temp}, _from, %State{} = state) when is_float(temp) do
     Logger.info(@log_prefix <> "Overriding temperature to #{temp}°C.")
 
-    axis =
-      state.axis
-      |> ControlAxis.clamp_min(temp)
-      |> ControlAxis.clamp_max(temp)
-
+    axis = state.axis |> ControlAxis.clamp(temp)
     {:reply, :ok, %State{state | axis: axis, override: temp}}
   end
 
@@ -113,16 +109,58 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     case ControlAxis.step(state.axis, @target_pressure, current_pressure) do
       {:changed, axis, new, _old} ->
-        PubSub.publish(:core_temp, {:core_temp, new})
-        axis
+        publish_core_temp(axis, new)
 
       {:unchanged, axis, old} ->
-        PubSub.publish(:core_temp, {:core_temp, old})
-        axis
+        publish_core_temp(axis, old)
     end
     |> then(fn axis ->
       {:noreply, %State{state | axis: axis}}
     end)
+  end
+
+  defp publish_core_temp(axis, wanted) do
+    current = get_core_temp()
+    min_temp = min_relative(current) |> clamp_to_range(@temp_range)
+    max_temp = max_relative(current) |> clamp_to_range(@temp_range)
+
+    {action, new_temp} =
+      cond do
+        wanted < min_temp -> {:clamp, min_temp}
+        wanted > max_temp -> {:clamp, max_temp}
+        true -> {:allow, wanted}
+      end
+
+    PubSub.publish(:core_temp, {:core_temp, new_temp})
+
+    case action do
+      :allow -> axis
+      :clamp -> ControlAxis.clamp(axis, temp_to_axis(new_temp), new_temp)
+    end
+  end
+
+  @relative_low @temp_range.first + @clamp_temp_delta * 2
+  @relative_high @temp_range.last - @clamp_temp_delta * 2
+
+  defp min_relative(temp) when temp < @relative_low do
+    # Half of the distance to the lower bound:
+    temp - (temp - @temp_range.first) / 2
+  end
+
+  defp min_relative(temp), do: temp - @clamp_temp_delta
+
+  defp max_relative(temp) when temp > @relative_high do
+    # Half of the distance to the upper bound:
+    temp + (@temp_range.last - temp) / 2
+  end
+
+  defp max_relative(temp), do: temp + @clamp_temp_delta
+
+  defp clamp_to_range(value, low..high//_) when is_float(value) do
+    value
+    |> max(low)
+    |> min(high)
+    |> Kernel.+(0.0)
   end
 
   defp get_current_pressure([]) do
@@ -135,6 +173,11 @@ defmodule AutoNuke.Operator.CoreTemp do
     vessels
     |> Enum.map(&API.Vessels.get_pressure/1)
     |> Statistex.average()
+  end
+
+  defp get_core_temp do
+    API.Vessels.core_vessel()
+    |> API.Vessels.get_temperature()
   end
 
   @temp_span (@temp_range.last - @temp_range.first) / 2
