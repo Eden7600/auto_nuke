@@ -21,7 +21,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   defmodule PowerLevel do
-    @enforce_keys [:loop, :capacity, :power_level, :max_power_level]
+    @enforce_keys [:loop, :capacity, :power_level, :max_power_level, :pressure]
     defstruct(@enforce_keys)
 
     @min_power_level Turbine.allowed_power_levels().first
@@ -272,7 +272,8 @@ defmodule AutoNuke.Operator.SteamFlow do
           loop: t.loop,
           capacity: t.primary_capacity,
           power_level: t.power_level,
-          max_power_level: Turbine.max_power_level(t)
+          max_power_level: Turbine.max_power_level(t),
+          pressure: Turbine.guess_future_pressure(t)
         }
       end)
 
@@ -324,8 +325,8 @@ defmodule AutoNuke.Operator.SteamFlow do
         if(PowerLevel.at_min?(pl), do: 2, else: 1),
         # Over-max powers come first so we can lower them ASAP
         if(PowerLevel.at_max?(pl), do: 1, else: 2),
-        # Otherwise, sort by highest power ratio first.
-        -PowerLevel.power_ratio(pl)
+        # Otherwise, sort by lowest pressure first
+        pl.pressure
       }
     end)
     |> then(fn [old_pl | rest] ->
@@ -348,8 +349,8 @@ defmodule AutoNuke.Operator.SteamFlow do
       {
         # Under-max powers come first, we can't increase maxed out ones
         if(PowerLevel.at_max?(pl), do: 2, else: 1),
-        # Otherwise, sort by lowest power ratio first.
-        PowerLevel.power_ratio(pl)
+        # Otherwise, sort by highest pressure first
+        -pl.pressure
       }
     end)
     |> then(fn [old_pl | rest] ->

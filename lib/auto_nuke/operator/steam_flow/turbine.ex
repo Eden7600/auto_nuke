@@ -20,7 +20,9 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :min_steam,
     # Latest readings
     :steam,
-    :pressure
+    :pressure,
+    # Historical pressure readings, used to project future trend
+    :pressure_history
   ]
   defstruct(@enforce_keys)
 
@@ -37,10 +39,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # of min steam flow, disallow bypass decreases.
   @steam_lock_zone 3
 
+  # Keep the last 5 pressure readings:
+  @pressure_history_size 5
+
   require Logger
   alias __MODULE__
   alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator}
   alias AutoNuke.ControlAxis
+  alias AutoNuke.Smoother
 
   def new(loop) when loop in 1..3 do
     steam_gen = SteamGen.for_loop(loop)
@@ -67,6 +73,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         initial_value: bypass
       )
 
+    pressure = SteamGen.get_pressure(steam_gen)
+
     %Turbine{
       loop: loop,
       steam_axis: steam_axis,
@@ -78,7 +86,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       power_level: mscv |> mscv_to_power_level(),
       min_steam: 0,
       steam: SteamGen.get_outlet(steam_gen),
-      pressure: SteamGen.get_pressure(steam_gen)
+      pressure: pressure,
+      pressure_history: Smoother.new(@pressure_history_size) |> Smoother.add(pressure)
     }
   end
 
@@ -114,6 +123,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
   def steam_via_bypass(%Turbine{power_level: power_level, steam: steam}),
     do: steam - power_level * 10
+
+  # Guess where pressure will be in `from_now` ticks.
+  def guess_future_pressure(
+        %Turbine{pressure: pressure, pressure_history: history},
+        from_now \\ @pressure_history_size
+      ) do
+    pressure + Smoother.rate_of_change(history) * from_now
+  end
 
   def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
     steam = SteamGen.get_outlet(steam_gen)
@@ -154,7 +171,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         pressure_axis: pressure_axis,
         bypass: new,
         steam: steam,
-        pressure: pressure
+        pressure: pressure,
+        pressure_history: turbine.pressure_history |> Smoother.add(pressure)
     }
   end
 
