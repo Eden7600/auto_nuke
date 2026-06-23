@@ -8,7 +8,6 @@ defmodule AutoNuke.Test.TurbineFactory do
   def create(opts \\ []) do
     {loop, opts} = maybe_random(opts, :loop, 1..3)
     {power_level, opts} = maybe_random(opts, :power_level, 2..30)
-    {min_steam, opts} = maybe_random(opts, :min_steam, 1..50)
     {bypass, opts} = maybe_random(opts, :bypass, 0..100)
     {primary_pump, opts} = maybe_random(opts, :primary_pump, @primary_pumps)
     {secondary_pump, opts} = maybe_random(opts, :secondary_pump, @secondary_pumps)
@@ -23,7 +22,7 @@ defmodule AutoNuke.Test.TurbineFactory do
     API.mock_get("STEAM_GEN_#{loop - 1}_OUTLET", 50)
 
     unless mock_only do
-      %Turbine{} = turbine = Turbine.new(loop, min_steam)
+      %Turbine{} = turbine = Turbine.new(loop)
       [] = API.unused_mocks()
       turbine
     end

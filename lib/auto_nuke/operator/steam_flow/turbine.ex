@@ -16,7 +16,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :bypass,
     # Target power level, assigned by parent (based on power requirements)
     :power_level,
-    # Minimum steam requirement, assigned by parent (based on number of turbines)
+    # Minimum steam requirement, assigned by parent
     :min_steam,
     # Latest readings
     :steam,
@@ -42,7 +42,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator}
   alias AutoNuke.ControlAxis
 
-  def new(loop, min_steam) when loop in 1..3 and min_steam > 0 do
+  def new(loop) when loop in 1..3 do
     steam_gen = SteamGen.for_loop(loop)
     mscv = Valves.get_open_percent(steam_gen.mscv) |> round()
     bypass = Valves.get_open_percent(steam_gen.bypass) |> round()
@@ -76,14 +76,13 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       steam_gen: steam_gen,
       bypass: bypass,
       power_level: mscv |> mscv_to_power_level(),
-      min_steam: min_steam,
+      min_steam: 0,
       steam: SteamGen.get_outlet(steam_gen),
       pressure: SteamGen.get_pressure(steam_gen)
     }
   end
 
-  def set_min_steam(%Turbine{loop: loop, min_steam: old} = turbine, new) do
-    Logger.info(log_prefix(loop) <> "Changing minimum steam from #{old} to #{new}.")
+  def set_min_steam(%Turbine{} = turbine, new) do
     %Turbine{turbine | min_steam: new}
   end
 

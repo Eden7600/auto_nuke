@@ -18,7 +18,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60)
       API.mock_get("STEAM_GEN_2_OUTLET", 50)
 
-      assert %Turbine{} = turbine = Turbine.new(3, 50)
+      assert %Turbine{} = turbine = Turbine.new(3)
       assert turbine.loop == 3
       assert turbine.power_level == 4
       assert turbine.pressure == 60

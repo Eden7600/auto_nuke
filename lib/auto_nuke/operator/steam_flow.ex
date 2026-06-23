@@ -54,10 +54,8 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Precalculate power level axis conversion factors:
   @power_levels Turbine.allowed_power_levels()
   @power_level_span (Range.size(@power_levels) - 1) / 2
-  # Ensure that all managed turbines produce at least 50 kg/min of steam between them.
+  # Ensure that all turbines produce at least 50 kg/min of steam between them.
   @min_steam 50
-  defp steam_per_turbine(count) when count in 1..3, do: @min_steam / count
-  defp steam_per_turbine(0), do: 0.0
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -97,7 +95,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     connected = get_closed_breakers()
     count = Enum.count(connected)
 
-    turbines = connected |> Enum.map(&Turbine.new(&1, steam_per_turbine(count)))
+    turbines = connected |> Enum.map(&Turbine.new/1)
     initial = turbines |> Enum.sum_by(& &1.power_level) |> total_power_to_axis(count)
 
     axis =
@@ -128,15 +126,8 @@ defmodule AutoNuke.Operator.SteamFlow do
         {:reply, {:error, :already_active}, state}
 
       false ->
-        steam =
-          (Enum.count(old_turbines) + 1)
-          |> steam_per_turbine()
-
         new_turbines =
-          [
-            Turbine.new(loop, steam)
-            | old_turbines |> Enum.map(&Turbine.set_min_steam(&1, steam))
-          ]
+          [Turbine.new(loop) | old_turbines]
           |> Enum.sort_by(& &1.loop)
 
         {:reply, :ok, %State{state | turbines: new_turbines}}
@@ -152,12 +143,7 @@ defmodule AutoNuke.Operator.SteamFlow do
         {:reply, {:error, :not_active}, state}
 
       [%Turbine{}] ->
-        steam =
-          Enum.count(rest)
-          |> steam_per_turbine()
-
-        new_turbines = rest |> Enum.map(&Turbine.set_min_steam(&1, steam))
-        {:reply, :ok, %State{state | turbines: new_turbines}}
+        {:reply, :ok, %State{state | turbines: rest}}
     end
   end
 
@@ -235,7 +221,10 @@ defmodule AutoNuke.Operator.SteamFlow do
        %State{
          state
          | axis: axis,
-           turbines: turbines |> Enum.map(&Turbine.tick/1)
+           turbines:
+             turbines
+             |> distribute_min_steam()
+             |> Enum.map(&Turbine.tick/1)
        }}
     end)
   end
@@ -399,5 +388,23 @@ defmodule AutoNuke.Operator.SteamFlow do
       {dd, hh, _mm} -> {dd, hh + 1, 0}
     end)
     |> AutoNuke.Time.parse_time()
+  end
+
+  @steam_gens API.SteamGen.all()
+
+  defp distribute_min_steam([]), do: []
+
+  defp distribute_min_steam(turbines) do
+    count = Enum.count(turbines)
+    managed_loops = turbines |> Enum.map(& &1.loop)
+
+    unmanaged_steam =
+      @steam_gens
+      |> Enum.reject(&(&1.loop in managed_loops))
+      |> Enum.sum_by(&API.SteamGen.get_outlet/1)
+
+    remaining = (@min_steam - unmanaged_steam) |> max(0.0)
+    per_turbine = remaining / count
+    turbines |> Enum.map(&Turbine.set_min_steam(&1, per_turbine))
   end
 end
