@@ -4,23 +4,23 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
   alias AutoNuke.Test.MockAPI, as: API
 
   describe "new/0" do
-    test "assumes we've generated 90% of demand for the current hour (20MW/45min)" do
+    test "assumes we've generated 100% of demand for the current hour (20MW/45min)" do
       API.mock_get("TIME_STAMP", 45)
       API.mock_get("POWER_DEMAND_MW", 20)
       assert %DT{} = dt = DT.new()
       assert dt.demand_kwh == 20000
-      assert dt.supplied_kwh == 13500
+      assert dt.supplied_kwh == 15000
     end
 
-    test "assumes we've generated 90% of demand for the current hour (35MW/15min)" do
+    test "assumes we've generated 100% of demand for the current hour (35MW/15min)" do
       API.mock_get("TIME_STAMP", 15)
       API.mock_get("POWER_DEMAND_MW", 35)
       assert %DT{} = dt = DT.new()
       assert dt.demand_kwh == 35000
-      assert dt.supplied_kwh == 7875
+      assert dt.supplied_kwh == 8750
     end
 
-    test "assumes we've generated 90% of demand for the current hour (100MW/0min)" do
+    test "assumes we've generated 10% of demand for the current hour (100MW/0min)" do
       API.mock_get("TIME_STAMP", 60)
       API.mock_get("POWER_DEMAND_MW", 100)
       assert %DT{} = dt = DT.new()

@@ -96,10 +96,10 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     )
   end
 
-  # On start, assume that we've supplied 90% of the demand for as much of the
+  # On start, assume that we've supplied 100% of the demand for as much of the
   # hour as has elapsed so far.
   defp guess_supplied_kwh(timestamp, demand_kwh),
-    do: hour_elapsed_percent(timestamp) * demand_kwh * 0.90
+    do: hour_elapsed_percent(timestamp) * demand_kwh
 
   defp hour_elapsed_percent(timestamp), do: rem(timestamp, 60) / 60
   defp hour_remaining_percent(timestamp), do: 1.0 - hour_elapsed_percent(timestamp)
