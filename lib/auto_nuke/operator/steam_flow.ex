@@ -58,7 +58,7 @@ defmodule AutoNuke.Operator.SteamFlow do
         |> min(pl.max_power_level)
         |> max(@min_power_level)
 
-      new_pressure = old_pressure + (new_power - old_power) * @power_cost
+      new_pressure = old_pressure - (new_power - old_power) * @power_cost
 
       %PL{pl | power_level: new_power, pressure: new_pressure}
     end
@@ -252,22 +252,22 @@ defmodule AutoNuke.Operator.SteamFlow do
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
 
     case ControlAxis.step(old_axis, target, ratio) do
-      {:changed, new_axis, new_value, _old_value} ->
-        turbine_count = Enum.count(old_turbines)
-        total_power = axis_to_total_power(new_value, turbine_count)
-
-        case update_power_levels(old_turbines, total_power) do
-          {:ok, new_turbines} ->
-            {new_axis, new_turbines}
-
-          {:error, :at_max, max_total_power, new_turbines} ->
-            max_axis = total_power_to_axis(max_total_power, turbine_count)
-            {new_axis |> ControlAxis.clamp(max_axis), new_turbines}
-        end
-
-      {:unchanged, new_axis, _old} ->
-        {new_axis, old_turbines}
+      {:changed, axis, new, _old} -> {axis, new}
+      {:unchanged, axis, old} -> {axis, old}
     end
+    |> then(fn {%ControlAxis{} = axis, value} ->
+      turbine_count = Enum.count(old_turbines)
+      total_power = axis_to_total_power(value, turbine_count)
+
+      case update_power_levels(old_turbines, total_power) do
+        {:ok, new_turbines} ->
+          {axis, new_turbines}
+
+        {:error, :at_max, max_total_power, new_turbines} ->
+          max_axis = total_power_to_axis(max_total_power, turbine_count)
+          {axis |> ControlAxis.clamp(max_axis), new_turbines}
+      end
+    end)
     |> then(fn {%ControlAxis{} = axis, turbines} ->
       {:noreply,
        %State{

@@ -92,71 +92,26 @@ defmodule AutoNuke.ControlAxisTest do
     assert {:complete, 97, 1} = settle_loop(axis, 1234, 0, 200, 0)
   end
 
-  @tag :skip
-  test "clamp/2 clamps controller to upper bound" do
-    axis = CA.new(kp: 1, ki: 0.1, to_value_fn: fn x -> round(x * 100) end)
+  test "clamp/2 resets controller to specified value" do
+    axis = CA.new(kp: 1, ki: 0.1, kd: 0.1, to_value_fn: fn x -> round(x * 100) end)
 
     assert {:changed, axis, 22, nil} = CA.step(axis, 0, -0.2)
 
-    # Unclamped:
-    assert {:changed, _, 24, 22} = axis |> CA.step(0, -0.2)
-    # Clamped to +0.40 (no effect):
-    assert {:changed, _, 24, 22} = axis |> CA.clamp(0.4) |> CA.step(0, -0.2)
-    # Clamped to +0.20:
-    assert {:unchanged, _, 22} = axis |> CA.clamp(0.2) |> CA.step(0, -0.2)
-    # Clamped to +0.05: Unchanged, because the 20 is from proportional, 
-    # while the 2 is from integral, and all we're doing is clearing the integral.
-    assert {:unchanged, _, 22} = axis |> CA.clamp(0.05) |> CA.step(0, -0.2)
-    # Clamped to +0.21: This just reduces integral from 0.02 to 0.01.
-    assert {:changed, _, 23, 22} = axis |> CA.clamp(0.21) |> CA.step(0, -0.2)
-  end
+    # Unclamped: Stepped by +2 each time.
+    assert {:changed, axis, 24, 22} = axis |> CA.step(0, -0.2)
+    assert {:changed, axis, 26, 24} = axis |> CA.step(0, -0.2)
+    assert {:changed, axis, 28, 26} = axis |> CA.step(0, -0.2)
 
-  @tag :skip
-  test "clamp/2 clamps controller to lower bound" do
-    axis = CA.new(kp: 1, ki: 0.5, to_value_fn: fn x -> round(x * 100) end)
+    # Clamped: Set to 40, then held there each time.
+    assert {:changed, axis, 42, 28} = axis |> CA.clamp(0.4) |> CA.step(0, -0.2)
+    assert {:unchanged, axis, 42} = axis |> CA.clamp(0.4) |> CA.step(0, -0.2)
+    assert {:unchanged, axis, 42} = axis |> CA.clamp(0.4) |> CA.step(0, -0.2)
+    assert {:unchanged, axis, 42} = axis |> CA.clamp(0.4) |> CA.step(0, -0.2)
 
-    assert {:changed, axis, -60, nil} = CA.step(axis, 0, 0.4)
-
-    # Unclamped:
-    assert {:changed, _, -80, -60} = axis |> CA.step(0, 0.4)
-    # Clamped to -0.90 (no effect):
-    assert {:changed, _, -80, -60} = axis |> CA.clamp(-0.9) |> CA.step(0, 0.4)
-    # Clamped to -0.40:
-    assert {:unchanged, _, -60} = axis |> CA.clamp(-0.4) |> CA.step(0, 0.4)
-    # Clamped to -0.25: Unchanged — see clamp explanation.
-    assert {:unchanged, _, -60} = axis |> CA.clamp(-0.25) |> CA.step(0, 0.4)
-    # Clamped to -0.45: Reduces integral from -0.2 to -0.25.
-    assert {:changed, _, -65, -60} = axis |> CA.clamp(-0.45) |> CA.step(0, 0.4)
-  end
-
-  @tag :skip
-  test "clamping improves responsiveness to direction reversals" do
-    axis = CA.new(kp: 1, ki: 0.1, to_value_fn: fn x -> round(x * 100) end)
-
-    {clamped, unclamped} =
-      1..10
-      |> Enum.reduce({axis, axis}, fn _, {old_c, old_u} ->
-        new_c = old_c |> CA.step(0, -0.4) |> elem(1) |> CA.clamp(0.5)
-        new_u = old_u |> CA.step(0, -0.4) |> elem(1)
-        {new_c, new_u}
-      end)
-
-    # Unclamped has significant upwards windup, is slow to decrease:
-    assert {:changed, _, 7, 80} = unclamped |> CA.step(0, 0.3)
-    # Clamped never went much higher than 0.5, so it goes negative immediately:
-    assert {:changed, _, -23, 54} = clamped |> CA.step(0, 0.3)
-
-    {clamped, unclamped} =
-      1..10
-      |> Enum.reduce({axis, axis}, fn _, {old_c, old_u} ->
-        new_c = old_c |> CA.step(0, 0.6) |> elem(1) |> CA.clamp(-0.2)
-        new_u = old_u |> CA.step(0, 0.6) |> elem(1)
-        {new_c, new_u}
-      end)
-
-    # Unclamped has bottomed out at -100, is slow to increase:
-    assert {:changed, _, -27, -100} = unclamped |> CA.step(0, -0.3)
-    # Clamped stopped decreasing, flips quickly:
-    assert {:changed, _, 33, -66} = clamped |> CA.step(0, -0.3)
+    # Still responds to proportional, but integral remains clamped:
+    assert {:changed, axis, 64, 42} = axis |> CA.clamp(0.4) |> CA.step(0.2, -0.2)
+    assert {:changed, axis, 0, 64} = axis |> CA.clamp(0.4) |> CA.step(-0.2, -0.2)
+    assert {:changed, axis, 18, 0} = axis |> CA.clamp(0.4) |> CA.step(-0.4, -0.2)
+    assert {:changed, _a, -28, 18} = axis |> CA.clamp(0.4) |> CA.step(-1, -0.2)
   end
 end

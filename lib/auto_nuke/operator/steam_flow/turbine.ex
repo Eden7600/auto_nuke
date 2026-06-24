@@ -6,8 +6,6 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     :steam_axis,
     # ControlAxis controlling turbine bypass needed to stay at a safe pressure
     :pressure_axis,
-    # Primary pump capacity, used to determine our PL ratio compared to other turbines
-    :primary_capacity,
     # Secondary pump capacity, used to determine our max power level
     :secondary_capacity,
     # Steam generator, used to access outlet and valves
@@ -79,7 +77,6 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       loop: loop,
       steam_axis: steam_axis,
       pressure_axis: pressure_axis,
-      primary_capacity: Pumps.primary(loop) |> Pumps.get_capacity(),
       secondary_capacity: Pumps.secondary(loop) |> Pumps.get_capacity(),
       steam_gen: steam_gen,
       bypass: bypass,

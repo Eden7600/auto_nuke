@@ -60,7 +60,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
   end
 
   describe "start_link/1" do
-    @tag :skip
     test "takes control of turbines with closed breakers" do
       pid =
         start_steam_flow(
@@ -73,12 +72,10 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       assert t1.loop == 1
       assert t1.power_level == 5
-      assert t1.min_steam == 25
       assert t1.bypass == 5
 
       assert t3.loop == 3
       assert t3.power_level == 3
-      assert t3.min_steam == 25
       assert t3.bypass == 10
     end
   end
@@ -98,22 +95,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       # Verify we have turbines 1 and 2:
       assert [%Turbine{loop: 1}, %Turbine{loop: 2}] = state(pid).turbines
-    end
-
-    @tag :skip
-    test "updates minimum steam flow on all turbines", %{pid: pid} do
-      assert [%Turbine{min_steam: 50.0}] = state(pid).turbines
-
-      TurbineFactory.create(loop: 1, mock_only: true)
-      assert :ok = SteamFlow.add_loop(1, pid)
-      assert [%Turbine{min_steam: 25.0}, %Turbine{min_steam: 25.0}] = state(pid).turbines
-
-      TurbineFactory.create(loop: 3, mock_only: true)
-      assert :ok = SteamFlow.add_loop(3, pid)
-      assert [t1, t2, t3] = state(pid).turbines
-      assert_in_delta t1.min_steam, 16.66666, 0.0001
-      assert_in_delta t2.min_steam, 16.66666, 0.0001
-      assert_in_delta t3.min_steam, 16.66666, 0.0001
     end
 
     test "returns error when turbine already added", %{pid: pid} do
@@ -140,42 +121,23 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     test "returns error when turbine not active", %{pid: pid} do
       assert {:error, :not_active} = SteamFlow.remove_loop(1, pid)
     end
-
-    @tag :skip
-    test "updates minimum steam flow on all turbines", %{pid: pid} do
-      # Verify old steam flow:
-      assert [%Turbine{min_steam: 25.0}, %Turbine{min_steam: 25.0}] = state(pid).turbines
-
-      # Remove turbine 3:
-      assert :ok = SteamFlow.remove_loop(3, pid)
-
-      # Verify minimum steam flow has increased:
-      assert [%Turbine{min_steam: 50.0}] = state(pid).turbines
-    end
   end
 
-  describe "tick with three loops of equal capacity" do
+  describe "tick with three loops of equal pressure" do
     setup do
-      pump = [200, 300, 600] |> Enum.random()
+      pressure = TurbineFactory.random_pressure()
 
       [
         pid:
           start_steam_flow(
-            turbine1: [power_level: 3, primary_pump: pump],
-            turbine2: [power_level: 5, primary_pump: pump],
-            turbine3: [power_level: 4, primary_pump: pump]
+            turbine1: [power_level: 3, pressure: pressure],
+            turbine2: [power_level: 5, pressure: pressure],
+            turbine3: [power_level: 4, pressure: pressure]
           )
       ]
     end
 
     test "maintains current power when demand is met", %{pid: pid} do
-      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
-      0..2
-      |> Enum.each(fn n ->
-        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
-        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
-      end)
-
       assert power_levels(pid) == [3, 5, 4]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -185,14 +147,14 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 100% of demand (MW).
       demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [3, 5, 4]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
-    test "increases power when supply does not meet demand", %{pid: pid} do
+    test "increases power evenly when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -204,18 +166,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert total_power(pid) > 12
-      # Only loops 1 and 3 are increased.  Loop 2 is already high enough.
-      assert power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert power3 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
-      assert [^power1, 5, ^power3] = powers = power_levels(pid)
-
-      # No level should be more than 1 greater than the others.
-      assert Enum.max(powers) - Enum.min(powers) <= 1
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert [4, 6, 5] = power_levels(pid)
     end
 
-    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -228,15 +181,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert total_power(pid) < 12
-      # Only loops 2 and 3 are decreased, loop 1 is low enough already.
-      assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert API.mock_put_value("MSCV_2_OPENING_ORDERED")
-      assert powers = power_levels(pid)
-
-      # No level should be more than 1 greater than the others.
-      assert Enum.max(powers) - Enum.min(powers) <= 1
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert [2, 4, 3] = power_levels(pid)
     end
 
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
@@ -259,7 +204,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [5, 7, 6]
     end
 
-    @tag :skip
     test "does not increase power if turbines are starved for pressure", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -334,26 +278,19 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
-  describe "tick with three loops of uneven capacity" do
+  describe "tick with three loops of uneven pressure" do
     setup do
       [
         pid:
           start_steam_flow(
-            turbine1: [power_level: 3, primary_pump: 200],
-            turbine2: [power_level: 5, primary_pump: 300],
-            turbine3: [power_level: 4, primary_pump: 600]
+            turbine1: [power_level: 3, pressure: 64.857],
+            turbine2: [power_level: 5, pressure: 58.477],
+            turbine3: [power_level: 4, pressure: 61.436]
           )
       ]
     end
 
-    test "maintains current power when demand is met", %{pid: pid} do
-      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
-      0..2
-      |> Enum.each(fn n ->
-        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
-        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
-      end)
-
+    test "rebalances current power even when demand is met", %{pid: pid} do
       assert power_levels(pid) == [3, 5, 4]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -363,13 +300,18 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 100% of demand (MW).
       demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [3, 5, 4]
+      # Loop 1 has high pressure while loop 2 has low pressure,
+      # so they get swapped around to help them equalise.
+      # (Loop 3 happens to be fairly balanced compared to these two.)
+      assert power_levels(pid) == [5, 3, 4]
+      assert 5 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 3 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -382,13 +324,15 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert total_power(pid) > 12
-      # Only loops 3 is increased, because it has much higher capacity.
-      assert 7 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
-      assert [3, 5, 7] = power_levels(pid)
+      # Loop 1 gets the brunt of it, being high pressure.
+      # Loop 2 is still decreased slightly due to low pressure.
+      assert [6, 4, 5] = power_levels(pid)
+      assert 6 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 4 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert 5 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -402,11 +346,13 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, Enum.random(@tick)})
 
       assert total_power(pid) < 12
-      # Only loops 1 and 2 are decreased, 
-      # loop 3 (with its high capacity) is low enough already.
-      assert 2 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert 3 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert [2, 3, 4] = power_levels(pid)
+      # Loops 2 and 3 are decreased to increase pressure,
+      # but some power is reallocated to the high-pressure loop 1.
+      assert [4, 2, 3] = power_levels(pid)
+      assert 4 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 2 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert 3 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
@@ -430,29 +376,21 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
-  describe "tick with two loops of equal capacity" do
+  describe "tick with two loops of equal pressure" do
     setup do
-      pump = [200, 300, 600] |> Enum.random()
+      pressure = TurbineFactory.random_pressure()
 
       [
         pid:
           start_steam_flow(
-            turbine1: [power_level: 3, primary_pump: pump],
-            turbine2: [power_level: 5, primary_pump: pump],
+            turbine1: [power_level: 3, pressure: pressure],
+            turbine2: [power_level: 5, pressure: pressure],
             turbine3: false
           )
       ]
     end
 
-    @tag :skip
     test "maintains current power when demand is met", %{pid: pid} do
-      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
-      0..1
-      |> Enum.each(fn n ->
-        API.mock_get("STEAM_GEN_#{n}_OUTLET", 1000, times: :any)
-        API.mock_get("COOLANT_SEC_#{n}_PRESSURE", 60, times: :any)
-      end)
-
       assert power_levels(pid) == [3, 5]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -461,33 +399,31 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 99.9% of demand (MW).
       demand_tracker_mocks(demand_mw: (kw1 + kw2) / 1000)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [3, 5]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 8
-      assert [old_power1, old_power2] = power_levels(pid)
+      assert power_levels(pid) == [3, 5]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       demand_tracker_mocks(demand_mw: (kw1 + kw2) * 1.20 / 1000)
-      turbine_mocks(1..2)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert total_power(pid) > 8
-      assert new_power1 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert new_power1 > old_power1
-      assert [^new_power1, ^old_power2] = power_levels(pid)
+      assert power_levels(pid) == [4, 6]
+      assert 4 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 6 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 8
 
@@ -495,21 +431,17 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       demand_tracker_mocks(demand_mw: (kw1 + kw2) * 0.80 / 1000)
-      turbine_mocks(1..2)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert total_power(pid) < 8
-      # Loop 1 is already low enough, was not decreased.
-      assert API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert [power1, power2] = power_levels(pid)
-
-      # Levels should be within 1 of each other:
-      assert abs(power1 - power2) in 0..1
+      # Both decreased by one:
+      assert power_levels(pid) == [2, 4]
+      assert 2 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 4 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
       assert total_power(pid) == 8
 
@@ -522,6 +454,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60, times: :any)
       API.mock_get("COOLANT_SEC_1_PRESSURE", 60, times: :any)
 
+      turbine_mocks(3)
       send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [4, 9]
@@ -540,12 +473,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
-    @tag :skip
     test "maintains current power when demand is met", %{pid: pid} do
-      # Steam output and pressure gets queried by `Turbine.tick/1`, but we don't care.
-      API.mock_get("STEAM_GEN_2_OUTLET", 1000, times: :any)
-      API.mock_get("COOLANT_SEC_2_PRESSURE", 60, times: :any)
-
       assert power_levels(pid) == [4]
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
@@ -553,47 +481,45 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Ensure supply (kW) is 100% of demand (MW).
       demand_tracker_mocks(demand_mw: kw3 / 1000)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [4]
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert power_levels(pid) == [4]
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       demand_tracker_mocks(demand_mw: kw3 * 1.20 / 1000)
-      turbine_mocks(3)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert [power3] = power_levels(pid)
       assert power3 > 4
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert power_levels(pid) == [4]
 
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
       demand_tracker_mocks(demand_mw: kw3 * 0.80 / 1000)
-      turbine_mocks(3)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert [power3] = power_levels(pid)
       assert power3 < 4
-      # This could fail if tuning ever drops us down to power level 1 (MSCV 2).
-      # However, I don't think "20% lower demand" should ever drop us from 4 to 1.
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == power3
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    @tag :skip
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
       API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000)
       API.mock_get("POWER_FROM_TURBINE_KW", 0)
@@ -601,10 +527,12 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       API.mock_get("STEAM_GEN_2_OUTLET", 46, times: :any)
       API.mock_get("COOLANT_SEC_2_PRESSURE", 60, times: :any)
 
+      turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
       assert power_levels(pid) == [6]
       assert API.mock_put_value("MSCV_2_OPENING_ORDERED") == 6
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
   end
 
@@ -740,6 +668,8 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     API.mock_get("RES_ABSORPTION_CAPACITY_MW", resistors, times: :any)
     unless is_nil(demand), do: API.mock_get("POWER_DEMAND_MW", demand)
   end
+
+  defp turbine_mocks(loops \\ 1..3)
 
   defp turbine_mocks(loop) when is_integer(loop) do
     API.mock_get("STEAM_GEN_#{loop - 1}_OUTLET", 1000, times: :any)
