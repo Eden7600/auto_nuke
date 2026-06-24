@@ -21,22 +21,56 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   defmodule PowerLevel do
-    @enforce_keys [:loop, :capacity, :power_level, :max_power_level, :pressure]
+    @enforce_keys [:loop, :power_level, :max_power_level, :pressure]
     defstruct(@enforce_keys)
+    alias __MODULE__, as: PL
+
+    # Every power level is considered "worth" 2 bar of pressure.
+    # So if we assign a power level to a turbine, we deduct 2 bar pressure.
+    # If we take it away, it gains 2 bar.
+    @power_cost 2
+    # It's not an exact science, it's just meant 
+    # to avoid taking the highest pressure loop 
+    # and piling all the power onto it.
 
     @min_power_level Turbine.allowed_power_levels().first
 
-    def at_min?(%PowerLevel{power_level: p}), do: p <= @min_power_level
-    def at_max?(%PowerLevel{power_level: p, max_power_level: m}), do: p >= m
-    def power_ratio(%PowerLevel{capacity: c, power_level: p}), do: p / c
+    def at_min?(%PL{power_level: p}), do: p <= @min_power_level
+    def at_max?(%PL{power_level: p, max_power_level: m}), do: p >= m
 
-    def change_power_level(%PowerLevel{} = pl, change) do
+    def new(%Turbine{loop: loop, power_level: power_level} = turbine) do
+      # Refund all power levels into pressure:
+      refund = power_level - @min_power_level
+      credit = refund * @power_cost
+
+      %PL{
+        loop: loop,
+        power_level: @min_power_level,
+        max_power_level: Turbine.max_power_level(turbine),
+        pressure: Turbine.guess_future_pressure(turbine) + credit
+      }
+    end
+
+    def add_power_level(%PL{power_level: old_power, pressure: old_pressure} = pl, amount)
+        when is_integer(amount) and amount >= 1 do
       new_power =
-        (pl.power_level + change)
+        (old_power + amount)
         |> min(pl.max_power_level)
         |> max(@min_power_level)
 
-      %PowerLevel{pl | power_level: new_power}
+      new_pressure = old_pressure + (new_power - old_power) * @power_cost
+
+      %PL{pl | power_level: new_power, pressure: new_pressure}
+    end
+
+    def add_until_pressure(%PL{} = pl, 0, _), do: pl
+    def add_until_pressure(%PL{pressure: p} = pl, _, p_limit) when p < p_limit, do: pl
+    def add_until_pressure(%PL{power_level: max, max_power_level: max} = pl, _, _), do: pl
+
+    def add_until_pressure(%PL{} = pl, amount, p_limit) do
+      pl
+      |> add_power_level(1)
+      |> add_until_pressure(amount - 1, p_limit)
     end
   end
 
@@ -283,107 +317,65 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   defp update_power_levels(old_turbines, target_total) do
-    power_levels =
-      old_turbines
-      |> Enum.map(fn %Turbine{} = t ->
-        %PowerLevel{
-          loop: t.loop,
-          capacity: t.primary_capacity,
-          power_level: t.power_level,
-          max_power_level: Turbine.max_power_level(t),
-          pressure: Turbine.guess_future_pressure(t)
-        }
+    power_levels = old_turbines |> Enum.map(&PowerLevel.new/1)
+    current_total = power_levels |> Enum.sum_by(& &1.power_level)
+    to_allocate = target_total - current_total
+
+    new_power_levels = power_levels |> allocate_power(to_allocate)
+
+    new_turbines =
+      new_power_levels
+      |> Enum.sort_by(& &1.loop)
+      |> Enum.zip_with(old_turbines, fn
+        %PowerLevel{loop: loop, power_level: power},
+        %Turbine{loop: loop, power_level: power} = turbine ->
+          # Power unchanged.
+          turbine
+
+        %PowerLevel{loop: loop, power_level: power}, %Turbine{loop: loop} = turbine ->
+          turbine |> Turbine.set_power_level(power)
       end)
 
-    current_total = power_levels |> Enum.sum_by(& &1.power_level)
+    new_total = new_power_levels |> Enum.sum_by(& &1.power_level)
 
-    if current_total == target_total do
-      {:ok, old_turbines}
-    else
-      delta = target_total - current_total
-
-      new_power_levels =
-        allocate_power(power_levels, delta)
-        |> Enum.sort_by(& &1.loop)
-
-      new_turbines =
-        old_turbines
-        |> Enum.zip_with(new_power_levels, fn
-          %Turbine{loop: loop, power_level: power} = turbine,
-          %PowerLevel{loop: loop, power_level: power} ->
-            # Power unchanged.
-            turbine
-
-          %Turbine{loop: loop} = turbine, %PowerLevel{loop: loop, power_level: power} ->
-            turbine |> Turbine.set_power_level(power)
-        end)
-
-      new_total = new_power_levels |> Enum.sum_by(& &1.power_level)
-
-      cond do
-        new_total == target_total -> {:ok, new_turbines}
-        new_total < target_total -> {:error, :at_max, new_total, new_turbines}
-      end
+    cond do
+      new_total == target_total -> {:ok, new_turbines}
+      new_total < target_total -> {:error, :at_max, new_total, new_turbines}
     end
   end
 
+  # Nothing to allocate.
   defp allocate_power(power_levels, 0), do: power_levels
 
   # Single turbine case is very simple, just allocate whatever we can.
   defp allocate_power([%PowerLevel{} = old_pl], to_allocate) do
-    new_pl = PowerLevel.change_power_level(old_pl, to_allocate)
+    new_pl = PowerLevel.add_power_level(old_pl, to_allocate)
     [new_pl]
   end
 
-  defp allocate_power(power_levels, to_allocate) when to_allocate < 0 do
-    power_levels
-    |> Enum.sort_by(fn %PowerLevel{} = pl ->
-      {
-        # At-minimum powers come last, we can't lower those
-        if(PowerLevel.at_min?(pl), do: 2, else: 1),
-        # Over-max powers come first so we can lower them ASAP
-        if(PowerLevel.at_max?(pl), do: 1, else: 2),
-        # Otherwise, sort by lowest pressure first
-        pl.pressure
-      }
-    end)
-    |> then(fn [old_pl | rest] ->
-      new_pl = PowerLevel.change_power_level(old_pl, -1)
-      new_power_levels = [new_pl | rest]
-
-      if new_pl.power_level == old_pl.power_level do
-        # Can't reduce anything, give up.
-        new_power_levels
-      else
-        allocate_power([new_pl | rest], to_allocate + 1)
-      end
-    end)
-  end
-
   defp allocate_power(power_levels, to_allocate) when to_allocate > 0 do
-    power_levels
-    # Lowest power ratio first, BUT maxed-out powers go last.
-    |> Enum.sort_by(fn pl ->
-      {
-        # Under-max powers come first, we can't increase maxed out ones
-        if(PowerLevel.at_max?(pl), do: 2, else: 1),
-        # Otherwise, sort by highest pressure first
-        -pl.pressure
-      }
-    end)
-    |> then(fn [old_pl | rest] ->
-      if PowerLevel.at_max?(old_pl) do
-        # Can't increase anything.
-        power_levels
-      else
-        new_pl = PowerLevel.change_power_level(old_pl, +1)
+    {at_max, under_max} = power_levels |> Enum.split_with(&PowerLevel.at_max?/1)
 
-        if new_pl.power_level == old_pl.power_level do
-          raise "Can't increase power level: #{inspect(old_pl)}"
-        end
+    case under_max |> Enum.sort_by(& &1.pressure, :desc) do
+      # Nothing left to allocate to.
+      [] ->
+        []
 
-        allocate_power([new_pl | rest], to_allocate - 1)
-      end
+      # Just one, so use the one-item version above.
+      [pl] ->
+        allocate_power([pl], to_allocate)
+
+      [old_first, second | rest] ->
+        next_pressure = second.pressure
+        new_first = old_first |> PowerLevel.add_until_pressure(to_allocate, next_pressure)
+        allocated = new_first.power_level - old_first.power_level
+        if allocated == 0, do: raise("infinite loop, should not happen")
+
+        [new_first, second | rest]
+        |> allocate_power(to_allocate - allocated)
+    end
+    |> then(fn new_under_max ->
+      at_max ++ new_under_max
     end)
   end
 

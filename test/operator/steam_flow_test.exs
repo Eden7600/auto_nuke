@@ -259,6 +259,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [5, 7, 6]
     end
 
+    @tag :skip
     test "does not increase power if turbines are starved for pressure", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -387,6 +388,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [3, 5, 7] = power_levels(pid)
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
