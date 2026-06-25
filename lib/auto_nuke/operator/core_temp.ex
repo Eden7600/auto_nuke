@@ -3,16 +3,46 @@ defmodule AutoNuke.Operator.CoreTemp do
   use AutoNuke.Operator
   require Logger
 
+  alias AutoNuke.API
+
   defmodule State do
-    @enforce_keys [:vessels, :axis]
+    @enforce_keys [:monitored, :axis]
     defstruct(
-      vessels: nil,
+      monitored: nil,
       axis: nil,
       override: nil
     )
   end
 
-  alias AutoNuke.API
+  defmodule MonitoredVessel do
+    @enforce_keys [:loop, :vessel, :history]
+    defstruct(@enforce_keys)
+
+    alias __MODULE__, as: MV
+    alias AutoNuke.Smoother
+
+    @history_size 10
+    @lookahead 5
+
+    def new(loop) do
+      vessel = API.Vessels.steam_generator(loop)
+      pressure = API.Vessels.get_pressure(vessel)
+
+      %MV{
+        loop: loop,
+        vessel: vessel,
+        history: Smoother.new(@history_size) |> Smoother.add(pressure)
+      }
+    end
+
+    def tick(%MV{vessel: vessel, history: history} = mv) do
+      pressure = API.Vessels.get_pressure(vessel)
+      %MV{mv | history: history |> Smoother.add(pressure)}
+    end
+
+    def guess_future_pressure(%MV{history: h}), do: h |> Smoother.extrapolate(@lookahead)
+  end
+
   alias AutoNuke.ControlAxis
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
@@ -55,7 +85,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   @impl true
   def init(loops) when is_list(loops) do
     temp = get_core_temp()
-    vessels = loops |> Enum.map(&API.Vessels.steam_generator/1)
+    monitored = loops |> Enum.map(&MonitoredVessel.new/1)
 
     axis =
       ControlAxis.new(
@@ -67,7 +97,7 @@ defmodule AutoNuke.Operator.CoreTemp do
         initial_value: temp
       )
 
-    state = %State{vessels: vessels, axis: axis}
+    state = %State{monitored: monitored, axis: axis}
 
     PubSub.subscribe(self(), :ticker)
 
@@ -105,9 +135,10 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    current_pressure = get_current_pressure(state.vessels)
+    monitored = state.monitored |> Enum.map(&MonitoredVessel.tick/1)
+    future_pressure = get_future_pressure(monitored)
 
-    case ControlAxis.step(state.axis, @target_pressure, current_pressure) do
+    case ControlAxis.step(state.axis, @target_pressure, future_pressure) do
       {:changed, axis, new, _old} ->
         publish_core_temp(axis, new)
 
@@ -115,7 +146,7 @@ defmodule AutoNuke.Operator.CoreTemp do
         publish_core_temp(axis, old)
     end
     |> then(fn axis ->
-      {:noreply, %State{state | axis: axis}}
+      {:noreply, %State{state | axis: axis, monitored: monitored}}
     end)
   end
 
@@ -163,15 +194,15 @@ defmodule AutoNuke.Operator.CoreTemp do
     |> Kernel.+(0.0)
   end
 
-  defp get_current_pressure([]) do
+  defp get_future_pressure([]) do
     # No active loops, reactor idle.  Pretend current pressure is a bit too
     # high, so we slowly slew our target temperature towards the minimum.
     @target_pressure + @deadzone * 1.1
   end
 
-  defp get_current_pressure(vessels) do
-    vessels
-    |> Enum.map(&API.Vessels.get_pressure/1)
+  defp get_future_pressure(monitored) do
+    monitored
+    |> Enum.map(&MonitoredVessel.guess_future_pressure/1)
     |> Statistex.average()
   end
 
