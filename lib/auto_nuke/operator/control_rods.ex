@@ -4,18 +4,23 @@ defmodule AutoNuke.Operator.ControlRods do
   require Logger
 
   defmodule State do
-    @enforce_keys [:banks, :target, :axis, :last_temp]
+    @enforce_keys [:banks, :target, :axis, :last_temp, :temp_history]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API
+  alias AutoNuke.Smoother
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @core API.Vessels.core_vessel()
 
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
+  # Keep the last 10 temperature readings:
+  @temp_history_size 10
+  # Look ahead 5 more readings during control loop:
+  @temp_lookahead 5
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
@@ -55,7 +60,8 @@ defmodule AutoNuke.Operator.ControlRods do
         banks: banks,
         target: target,
         axis: axis,
-        last_temp: temp
+        last_temp: temp,
+        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp)
       }
 
     PubSub.subscribe(self(), :ticker)
@@ -99,9 +105,10 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    temp = get_verified_core_temp([state.last_temp])
+    current_temp = get_verified_core_temp([state.last_temp])
+    future_temp = Smoother.extrapolate(state.temp_history, @temp_lookahead)
 
-    case ControlAxis.step(state.axis, state.target, temp) do
+    case ControlAxis.step(state.axis, state.target, future_temp) do
       {:changed, axis, new, old} ->
         set_bank_rods(state.banks, old, new, state.target)
         maybe_clamp(state.banks, axis, new)
@@ -110,7 +117,13 @@ defmodule AutoNuke.Operator.ControlRods do
         axis
     end
     |> then(fn %ControlAxis{} = axis ->
-      {:noreply, %State{state | axis: axis, last_temp: temp}}
+      {:noreply,
+       %State{
+         state
+         | axis: axis,
+           last_temp: current_temp,
+           temp_history: state.temp_history |> Smoother.add(current_temp)
+       }}
     end)
   end
 
