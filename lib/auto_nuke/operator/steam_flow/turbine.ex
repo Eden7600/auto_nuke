@@ -37,8 +37,10 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # of min steam flow, disallow bypass decreases.
   @steam_lock_zone 3
 
-  # Keep the last 5 pressure readings:
-  @pressure_history_size 5
+  # Keep the last 10 pressure readings:
+  @pressure_history_size 10
+  # Look ahead 5 more readings during power allocation:
+  @pressure_lookahead 5
 
   require Logger
   alias __MODULE__
@@ -122,11 +124,8 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     do: steam - power_level * 10
 
   # Guess where pressure will be in `from_now` ticks.
-  def guess_future_pressure(
-        %Turbine{pressure: pressure, pressure_history: history},
-        from_now \\ @pressure_history_size
-      ) do
-    pressure + Smoother.rate_of_change(history) * from_now
+  def guess_future_pressure(%Turbine{pressure_history: history}) do
+    Smoother.extrapolate(history, @pressure_lookahead)
   end
 
   def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do

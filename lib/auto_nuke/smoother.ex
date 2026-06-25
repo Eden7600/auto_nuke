@@ -54,4 +54,10 @@ defmodule AutoNuke.Smoother do
     scale_factor = (size - 1) / (max - 1)
     (last - first) / scale_factor
   end
+
+  # Guess where reading will be in `from_now` ticks.
+  def extrapolate(%Smoother{data: data, size: size} = smoother, from_now) when size > 0 do
+    {:value, last} = :queue.peek_r(data)
+    last + rate_of_change(smoother) * from_now
+  end
 end
