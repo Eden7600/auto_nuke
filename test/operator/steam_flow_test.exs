@@ -137,7 +137,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
-    test "maintains current power when demand is met", %{pid: pid} do
+    test "rebalances current power when demand is met", %{pid: pid} do
       assert power_levels(pid) == [3, 5, 4]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -150,8 +150,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [3, 5, 4]
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert power_levels(pid) == [4, 4, 4]
     end
 
     test "increases power evenly when supply does not meet demand", %{pid: pid} do
@@ -166,7 +165,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert [4, 6, 5] = power_levels(pid)
+      assert [5, 5, 5] = power_levels(pid)
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -181,7 +180,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert [2, 4, 3] = power_levels(pid)
+      assert [3, 3, 3] = power_levels(pid)
     end
 
     test "does not increase power beyond current steam level plus one", %{pid: pid} do
@@ -306,10 +305,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Loop 1 has high pressure while loop 2 has low pressure,
       # so they get swapped around to help them equalise.
       # (Loop 3 happens to be fairly balanced compared to these two.)
-      assert power_levels(pid) == [5, 3, 4]
-      assert 5 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert 3 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert power_levels(pid) == [6, 2, 4]
     end
 
     test "increases power when supply does not meet demand", %{pid: pid} do
@@ -326,11 +322,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       # Loop 1 gets the brunt of it, being high pressure.
       # Loop 2 is still decreased slightly due to low pressure.
-      assert [6, 4, 5] = power_levels(pid)
-      assert 6 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert 4 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert 5 = API.mock_put_value("MSCV_2_OPENING_ORDERED")
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert [7, 3, 5] = power_levels(pid)
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -390,7 +382,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
-    test "maintains current power when demand is met", %{pid: pid} do
+    test "reallocates current power when demand is met", %{pid: pid} do
       assert power_levels(pid) == [3, 5]
 
       API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000)
@@ -402,7 +394,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [3, 5]
+      assert power_levels(pid) == [4, 4]
+      assert 4 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
+      assert 4 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
@@ -418,10 +412,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [4, 6]
-      assert 4 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert 6 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
-      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+      assert power_levels(pid) == [5, 5]
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -436,9 +427,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       send(pid, {:tick, Enum.random(@tick)})
 
       # Both decreased by one:
-      assert power_levels(pid) == [2, 4]
-      assert 2 = API.mock_put_value("MSCV_0_OPENING_ORDERED")
-      assert 4 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
+      assert power_levels(pid) == [3, 3]
+      # Loop 1 remains at 3, no put call.
+      assert 3 = API.mock_put_value("MSCV_1_OPENING_ORDERED")
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 

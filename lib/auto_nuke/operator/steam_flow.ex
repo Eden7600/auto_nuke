@@ -38,16 +38,12 @@ defmodule AutoNuke.Operator.SteamFlow do
     def at_min?(%PL{power_level: p}), do: p <= @min_power_level
     def at_max?(%PL{power_level: p, max_power_level: m}), do: p >= m
 
-    def new(%Turbine{loop: loop, power_level: power_level} = turbine) do
-      # Refund all power levels into pressure:
-      refund = power_level - @min_power_level
-      credit = refund * @power_cost
-
+    def new(%Turbine{loop: loop} = turbine) do
       %PL{
         loop: loop,
         power_level: @min_power_level,
         max_power_level: Turbine.max_power_level(turbine),
-        pressure: Turbine.guess_future_pressure(turbine) + credit
+        pressure: Turbine.guess_future_pressure(turbine)
       }
     end
 
