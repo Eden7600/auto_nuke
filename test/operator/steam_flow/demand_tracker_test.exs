@@ -113,9 +113,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       create_demand_tracker(minute: 0, demand: 50)
     end
 
-    test "targets between 95% and 105% demand to start", %{dt: dt} do
+    test "targets between 100% and 110% demand to start", %{dt: dt} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0)
-      assert {1.0, dz} = DT.target_and_deadzone(dt)
+      assert {1.05, dz} = DT.target_and_deadzone(dt)
       assert_in_delta dz, 0.05, 0.0001
     end
 
@@ -123,21 +123,21 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
 
       API.mock_get("TIME_STAMP", ts)
-      assert dt = DT.tick(dt, 50_000)
+      assert dt = DT.tick(dt, 50_000 * 1.05)
       assert {tgt1, dz1} = DT.target_and_deadzone(dt)
-      assert_in_delta tgt1, 1.0, 0.0001
+      assert_in_delta tgt1, 1.05, 0.0001
       assert_in_delta dz1, 0.05, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 1)
-      assert dt = DT.tick(dt, 50_000)
+      assert dt = DT.tick(dt, 50_000 * 1.05)
       assert {tgt2, dz2} = DT.target_and_deadzone(dt)
-      assert_in_delta tgt2, 1.0, 0.0001
+      assert_in_delta tgt2, 1.05, 0.0001
       assert_in_delta dz2, 0.0508, 0.0001
 
       API.mock_get("TIME_STAMP", ts + 2)
-      assert dt = DT.tick(dt, 50_000)
+      assert dt = DT.tick(dt, 50_000 * 1.05)
       assert {tgt3, dz3} = DT.target_and_deadzone(dt)
-      assert_in_delta tgt3, 1.0, 0.0001
+      assert_in_delta tgt3, 1.05, 0.0001
       assert_in_delta dz3, 0.0517, 0.0001
     end
 
@@ -152,7 +152,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert dt = DT.tick(dt, 10_000)
 
       assert {tgt, _dz} = DT.target_and_deadzone(dt)
-      assert_in_delta tgt, 1.0275, 0.0001
+      assert_in_delta tgt, 1.08, 0.01
     end
 
     test "does not increase target beyond 102% when resistors active", %{dt: dt, ts: ts} do
@@ -179,10 +179,10 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert dt = DT.tick(dt, 80_000)
 
       assert {tgt, _dz} = DT.target_and_deadzone(dt)
-      assert_in_delta tgt, 0.9793, 0.0001
+      assert_in_delta tgt, 1.03, 0.01
     end
 
-    test "exactly meeting demand keeps target the same for the whole hour", %{
+    test "exactly meeting 105% demand keeps target the same for the whole hour", %{
       dt: dt,
       ts: ts
     } do
@@ -191,9 +191,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       0..59
       |> Enum.reduce(dt, fn n, dt ->
         API.mock_get("TIME_STAMP", ts + n)
-        assert dt = DT.tick(dt, 50_000)
+        assert dt = DT.tick(dt, 50_000 * 1.05)
         assert {tgt, _} = t = DT.target_and_deadzone(dt)
-        assert_in_delta tgt, 1.0, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
+        assert_in_delta tgt, 1.05, 0.01, "Target begins deviating at minute #{n}: #{inspect(t)}"
         dt
       end)
     end

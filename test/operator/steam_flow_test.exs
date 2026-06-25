@@ -150,7 +150,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       turbine_mocks()
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [4, 4, 4]
+      assert power_levels(pid) == [5, 4, 4]
     end
 
     test "increases power evenly when supply does not meet demand", %{pid: pid} do
@@ -165,7 +165,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert [5, 5, 5] = power_levels(pid)
+      assert [5, 5, 6] = power_levels(pid)
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
@@ -220,7 +220,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       send(pid, {:tick, Enum.random(@tick)})
 
-      assert power_levels(pid) == [3, 14, 4]
+      assert power_levels(pid) == [3, 15, 4]
     end
 
     test "takes the plant's own used power into account", %{pid: pid} do
@@ -252,9 +252,9 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       turbine_mocks(1..3)
 
       mock_power = fn ->
-        API.mock_get("GENERATOR_0_KW", kw1)
-        API.mock_get("GENERATOR_1_KW", kw2)
-        API.mock_get("GENERATOR_2_KW", kw3)
+        API.mock_get("GENERATOR_0_KW", kw1 * 1.05)
+        API.mock_get("GENERATOR_1_KW", kw2 * 1.05)
+        API.mock_get("GENERATOR_2_KW", kw3 * 1.05)
         API.mock_get("POWER_FROM_TURBINE_KW", 0)
         demand_tracker_mocks(demand_mw: nil)
       end
@@ -305,7 +305,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       # Loop 1 has high pressure while loop 2 has low pressure,
       # so they get swapped around to help them equalise.
       # (Loop 3 happens to be fairly balanced compared to these two.)
-      assert power_levels(pid) == [6, 2, 4]
+      assert power_levels(pid) == [6, 3, 4]
     end
 
     test "increases power when supply does not meet demand", %{pid: pid} do
@@ -322,7 +322,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
       # Loop 1 gets the brunt of it, being high pressure.
       # Loop 2 is still decreased slightly due to low pressure.
-      assert [7, 3, 5] = power_levels(pid)
+      assert [7, 4, 5] = power_levels(pid)
     end
 
     test "decreases power when supply exceeds demand", %{pid: pid} do
