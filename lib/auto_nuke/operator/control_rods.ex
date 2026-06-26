@@ -4,7 +4,7 @@ defmodule AutoNuke.Operator.ControlRods do
   require Logger
 
   defmodule State do
-    @enforce_keys [:banks, :target, :axis, :last_temp, :temp_history]
+    @enforce_keys [:banks, :target, :axis, :mode, :last_temp, :temp_history]
     defstruct(@enforce_keys)
   end
 
@@ -22,10 +22,14 @@ defmodule AutoNuke.Operator.ControlRods do
   # Look ahead 5 more readings during control loop:
   @temp_lookahead 5
 
+  @modes [:predictive, :direct]
+  @default_mode List.first(@modes)
+
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
+    {mode, opts} = Keyword.pop(opts, :mode, @default_mode)
     opts = Keyword.put_new(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, target, opts)
+    GenServer.start_link(__MODULE__, {target, mode}, opts)
   end
 
   def get_target(pid \\ __MODULE__), do: GenServer.call(pid, :get_target)
@@ -34,10 +38,14 @@ defmodule AutoNuke.Operator.ControlRods do
     GenServer.call(pid, {:set_target, target + 0.0})
   end
 
+  def set_mode(mode, pid \\ __MODULE__) when mode in @modes do
+    GenServer.call(pid, {:set_mode, mode})
+  end
+
   def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
 
   @impl true
-  def init(target) when is_number(target) or is_nil(target) do
+  def init({target, mode}) when (is_number(target) or is_nil(target)) and mode in @modes do
     {banks, rods} = get_banks_and_rods()
     bank_count = Enum.count(banks)
 
@@ -49,7 +57,7 @@ defmodule AutoNuke.Operator.ControlRods do
         kp: 0.05,
         ki: 0.005,
         kd: 0.01,
-        deadzone: 0.5,
+        deadzone: 1.0,
         to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
         offset: rods |> rods_to_axis(),
         initial_value: rods
@@ -60,6 +68,7 @@ defmodule AutoNuke.Operator.ControlRods do
         banks: banks,
         target: target,
         axis: axis,
+        mode: mode,
         last_temp: temp,
         temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp)
       }
@@ -87,6 +96,12 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   @impl true
+  def handle_call({:set_mode, mode}, _from, %State{} = state) when mode in @modes do
+    Logger.info(@log_prefix <> "Mode changed from '#{state.mode}' to '#{mode}'.")
+    {:reply, :ok, %State{state | mode: mode}}
+  end
+
+  @impl true
   def handle_call(:get_rods, _from, %State{} = state) do
     banks_and_rods =
       state.banks
@@ -106,9 +121,15 @@ defmodule AutoNuke.Operator.ControlRods do
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
     current_temp = get_verified_core_temp([state.last_temp])
-    future_temp = Smoother.extrapolate(state.temp_history, @temp_lookahead)
+    history = state.temp_history |> Smoother.add(current_temp)
 
-    case ControlAxis.step(state.axis, state.target, future_temp) do
+    measurement =
+      case state.mode do
+        :predictive -> Smoother.extrapolate(history, @temp_lookahead)
+        :direct -> current_temp
+      end
+
+    case ControlAxis.step(state.axis, state.target, measurement) do
       {:changed, axis, new, old} ->
         set_bank_rods(state.banks, old, new, state.target)
         maybe_clamp(state.banks, axis, new)
@@ -122,7 +143,7 @@ defmodule AutoNuke.Operator.ControlRods do
          state
          | axis: axis,
            last_temp: current_temp,
-           temp_history: state.temp_history |> Smoother.add(current_temp)
+           temp_history: history
        }}
     end)
   end
@@ -196,19 +217,22 @@ defmodule AutoNuke.Operator.ControlRods do
     ordered = ordered |> Statistex.average()
 
     cond do
-      ordered > max_rods ->
-        # We're asking for too much rods at once, clamp down.
-        Logger.debug(@log_prefix <> "Clamping down to #{max_rods}%.")
-        axis |> ControlAxis.clamp(max_rods |> rods_to_axis())
-
-      ordered < min_rods ->
-        # We're asking for too little rods at once, clamp up.
-        Logger.debug(@log_prefix <> "Clamping up to #{min_rods}%.")
-        axis |> ControlAxis.clamp(min_rods |> rods_to_axis())
-
-      true ->
-        axis
+      # We're asking for too much rods at once, clamp down.
+      ordered > max_rods -> {:down, max_rods}
+      # We're asking for too little rods at once, clamp up.
+      ordered < min_rods -> {:up, min_rods}
+      true -> :as_is
     end
+    |> then(fn
+      {direction, bounds} ->
+        Logger.debug(@log_prefix <> "Clamping #{direction} to #{Float.round(bounds, 1)}%.")
+        output = bounds |> rods_to_axis()
+        value = output |> axis_to_rods(Enum.count(banks))
+        axis |> ControlAxis.clamp(output, value)
+
+      :as_is ->
+        axis
+    end)
   end
 
   defp rods_to_axis(rods) when is_list(rods) do
