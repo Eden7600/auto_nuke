@@ -79,4 +79,18 @@ defmodule AutoNuke.Time do
   end
 
   defp div_rem(a, b), do: {div(a, b), rem(a, b)}
+
+  def parse_expiry(:never), do: :never
+  def parse_expiry(:next_hour), do: get_next_hour()
+  def parse_expiry(e), do: parse_time(e, :now)
+
+  defp get_next_hour do
+    get_current_time()
+    |> timestamp_to_tuple()
+    |> then(fn
+      {dd, 23, _mm} -> {dd + 1, 0, 0}
+      {dd, hh, _mm} -> {dd, hh + 1, 0}
+    end)
+    |> parse_time()
+  end
 end

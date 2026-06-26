@@ -4,13 +4,16 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   alias AutoNuke.API
+  alias AutoNuke.Operator.CoreTemp.Drift
+  alias AutoNuke.Time, as: ANTime
 
   defmodule State do
     @enforce_keys [:monitored, :axis]
     defstruct(
       monitored: nil,
       axis: nil,
-      override: nil
+      override: nil,
+      drift: nil
     )
   end
 
@@ -66,14 +69,24 @@ defmodule AutoNuke.Operator.CoreTemp do
     GenServer.start_link(__MODULE__, loops, opts)
   end
 
-  def set_override(temp, pid \\ __MODULE__)
+  def set_override(temp, expiry \\ :next_hour, pid \\ __MODULE__)
       when temp >= @temp_range.first and temp <= @temp_range.last do
-    temp = temp + 0.0
-    GenServer.call(pid, {:set_override, temp})
+    GenServer.call(pid, {:override, temp + 0.0, ANTime.parse_expiry(expiry)})
   end
 
   def clear_override(pid \\ __MODULE__) do
     GenServer.call(pid, :clear_override)
+  end
+
+  def drift(opts, pid \\ __MODULE__) do
+    opts
+    |> Keyword.put_new(:start_time, :now)
+    |> Drift.new()
+    |> then(&GenServer.call(pid, {:drift, &1}))
+  end
+
+  def stop_drift(pid \\ __MODULE__) do
+    GenServer.call(pid, :stop_drift)
   end
 
   @impl true
@@ -111,11 +124,15 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
-  def handle_call({:set_override, temp}, _from, %State{} = state) when is_float(temp) do
-    Logger.info(@log_prefix <> "Overriding temperature to #{temp}°C.")
+  def handle_call({:override, temp, expiry}, _from, %State{} = state) when is_float(temp) do
+    expires_desc =
+      case expiry do
+        :never -> "does not expire"
+        ts -> "expires at #{ANTime.timestamp_to_string(ts)}"
+      end
 
-    axis = state.axis |> ControlAxis.clamp(temp)
-    {:reply, :ok, %State{state | axis: axis, override: temp}}
+    Logger.info(@log_prefix <> "Override set to #{temp}°C, #{expires_desc}.")
+    {:reply, :ok, %State{state | override: {temp, expiry}}}
   end
 
   @impl true
@@ -125,32 +142,88 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
-  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
-
-  @impl true
-  def handle_info({:tick, _}, %State{override: temp} = state) when is_float(temp) do
-    PubSub.publish(:core_temp, {:core_temp, temp})
-    {:noreply, state}
+  def handle_call({:drift, %Drift{} = drift}, _from, %State{} = state) do
+    Logger.info(@log_prefix <> "Now planning to drift #{Drift.describe(drift)}.")
+    {:reply, :ok, %State{state | drift: {drift, false}}}
   end
 
   @impl true
+  def handle_call(:stop_drift, _from, %State{} = state) do
+    Logger.info(@log_prefix <> "Cancelling drift.")
+    {:reply, :ok, %State{state | drift: nil}}
+  end
+
+  @impl true
+  def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
+
+  @impl true
   def handle_info({:tick, _}, %State{} = state) do
+    state =
+      state
+      |> apply_drift()
+      |> maybe_expire_override()
+
     monitored = state.monitored |> Enum.map(&MonitoredVessel.tick/1)
     future_pressure = get_future_pressure(monitored)
 
     case ControlAxis.step(state.axis, @target_pressure, future_pressure) do
       {:changed, axis, new, _old} ->
-        publish_core_temp(axis, new)
+        publish_core_temp(axis, new, state.override)
 
       {:unchanged, axis, old} ->
-        publish_core_temp(axis, old)
+        publish_core_temp(axis, old, state.override)
     end
     |> then(fn axis ->
       {:noreply, %State{state | axis: axis, monitored: monitored}}
     end)
   end
 
-  defp publish_core_temp(axis, wanted) do
+  defp apply_drift(%State{drift: nil} = state), do: state
+
+  defp apply_drift(%State{drift: {%Drift{} = drift, started}} = state) do
+    case Drift.current_value(drift) do
+      :not_started ->
+        state
+
+      {:drifting, :current} ->
+        temp = state.axis.last_value
+        drift = %Drift{drift | start_time: temp}
+        Logger.info(@log_prefix <> "Starting drift #{Drift.describe(drift)} ...")
+        %State{state | override: {temp, :never}, drift: {drift, true}}
+
+      {:drifting, temp} ->
+        case started do
+          false ->
+            Logger.info(@log_prefix <> "Starting drift #{Drift.describe(drift)} ...")
+            %State{state | override: {temp, :never}, drift: {drift, true}}
+
+          true ->
+            %State{state | override: {temp, :never}}
+        end
+
+      {:complete, temp} ->
+        %State{state | override: {temp, :never}, drift: nil}
+    end
+  end
+
+  defp maybe_expire_override(%State{override: nil} = state), do: state
+  defp maybe_expire_override(%State{override: {_, :never}} = state), do: state
+
+  defp maybe_expire_override(%State{override: {_, ts}} = state) when is_integer(ts) do
+    if ANTime.get_current_time() >= ts do
+      Logger.notice(@log_prefix <> "Override has expired.")
+      %State{state | override: nil}
+    else
+      state
+    end
+  end
+
+  defp publish_core_temp(axis, _wanted, {override, _expires}) do
+    PubSub.publish(:core_temp, {:core_temp, override})
+    ControlAxis.clamp(axis, temp_to_axis(override), override)
+  end
+
+  defp publish_core_temp(axis, wanted, nil) do
     current = get_core_temp()
     min_temp = min_relative(current) |> clamp_to_range(@temp_range)
     max_temp = max_relative(current) |> clamp_to_range(@temp_range)
