@@ -90,18 +90,39 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     end
   end
 
+  describe "tick/2 with variable demand" do
+    setup do
+      create_demand_tracker(minute: 0, demand_times: 1)
+    end
+
+    test "re-reads demand every minute", %{dt: dt, ts: ts} do
+      API.mock_get("TIME_STAMP", ts + 1)
+      API.mock_get("POWER_DEMAND_MW", 123.4)
+      assert dt = DT.tick(dt, 1_000)
+      assert dt.demand_kwh == 123_400
+
+      # Doesn't read because minute hasn't changed:
+      API.mock_get("TIME_STAMP", ts + 1)
+      assert dt = DT.tick(dt, 1_000)
+      assert dt.demand_kwh == 123_400
+
+      API.mock_get("TIME_STAMP", ts + 2)
+      API.mock_get("POWER_DEMAND_MW", 456.7)
+      assert dt = DT.tick(dt, 1_000)
+      assert dt.demand_kwh == 456_700
+    end
+  end
+
   describe "tick/2 when hour rolls over" do
     setup do
       create_demand_tracker(minute: Enum.random(5..55))
     end
 
-    test "resets data and retrieves current demand", %{dt: dt, ts: ts} do
+    test "resets data", %{dt: dt, ts: ts} do
       assert dt.supplied_kwh > 0.0
 
       API.mock_get("TIME_STAMP", ts + 60)
-      API.mock_get("POWER_DEMAND_MW", 123.4)
       assert dt = DT.tick(dt, 1_000)
-      assert dt.demand_kwh == 123_400
       assert dt.supplied_kwh == 0
       # Current supply is not counted towards tally:
       assert dt.supply_per_second.size == 0
@@ -203,11 +224,12 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     {hour, opts} = Keyword.pop(opts, :hour, Enum.random(9..100))
     {minute, opts} = Keyword.pop(opts, :minute, Enum.random(0..59))
     {demand, opts} = Keyword.pop(opts, :demand, (10 + :rand.uniform() * 490) |> Float.round(1))
+    {demand_times, opts} = Keyword.pop(opts, :demand_times, :any)
     unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
 
     timestamp = hour * 60 + minute
     API.mock_get("TIME_STAMP", timestamp)
-    API.mock_get("POWER_DEMAND_MW", demand)
+    API.mock_get("POWER_DEMAND_MW", demand, times: demand_times)
     dt = DT.new()
 
     [dt: dt, ts: timestamp]

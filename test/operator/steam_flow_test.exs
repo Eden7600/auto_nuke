@@ -246,9 +246,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       kw1 = :rand.uniform() * 25000
       kw2 = :rand.uniform() * 25000
       kw3 = :rand.uniform() * 25000
-      # Demand is picked up by DemandTracker on the first run,
-      # so it doesn't need to be part of the repeating mocks.
-      API.mock_get("POWER_DEMAND_MW", (kw1 + kw2 + kw3) / 1000)
       turbine_mocks(1..3)
 
       mock_power = fn ->
@@ -256,7 +253,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
         API.mock_get("GENERATOR_1_KW", kw2 * 1.05)
         API.mock_get("GENERATOR_2_KW", kw3 * 1.05)
         API.mock_get("POWER_FROM_TURBINE_KW", 0)
-        demand_tracker_mocks(demand_mw: nil)
+        demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
       end
 
       # Tick 1, nothing changes:
@@ -536,7 +533,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     pid = start_steam_flow([])
 
     # Set an arbitrary demand for the entire test.
-    API.mock_get("POWER_DEMAND_MW", demand = Enum.random(100..300))
+    API.mock_get("POWER_DEMAND_MW", demand = Enum.random(100..300), times: :any)
     # Assume resistors are off for this entire test.
     API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
     # Steam outlet and coolant pressure are outside the scope of this test.
@@ -657,7 +654,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
     API.mock_get("TIME_STAMP", 60 + minute)
     API.mock_get("RES_ABSORPTION_CAPACITY_MW", resistors, times: :any)
-    unless is_nil(demand), do: API.mock_get("POWER_DEMAND_MW", demand)
+    unless is_nil(demand), do: API.mock_get("POWER_DEMAND_MW", demand, times: :any)
   end
 
   defp turbine_mocks(loops \\ 1..3)

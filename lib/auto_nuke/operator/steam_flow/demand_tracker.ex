@@ -71,6 +71,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     %DT{
       dt
       | timestamp: new_ts,
+        # Demand sometimes changes due to "generate extra power" objectives.
+        demand_kwh: API.Power.get_demand_kw(),
         supplied_kwh: dt.supplied_kwh + average_supply / 60.0,
         supply_per_second: Smoother.new(@seconds_per_minute)
     }
@@ -79,7 +81,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   defp tick_hour(%DT{} = dt, same, same), do: dt
 
   defp tick_hour(%DT{} = dt, _, _) do
-    %DT{dt | demand_kwh: API.Power.get_demand_kw(), supplied_kwh: 0}
+    %DT{dt | supplied_kwh: 0}
   end
 
   defp add_supply(%DT{demand_kwh: demand_kwh, supply_per_second: sps} = dt, supply_kwh) do
