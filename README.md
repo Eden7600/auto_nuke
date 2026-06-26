@@ -15,39 +15,58 @@ Now you have one of two choices:
 
 In either case, if you see a bunch of `Req` errors about not being able to connect, check that you can reach the Nucleares webserver.
 
-Once you run `./start.sh`, the `AutoNuke` operators will take over and begin automation.  They'll handle all the factors listed in the `Operators` section, below.  Your only concern is to handle the manual things, like choosing a target core factor, deciding when to bring loops up and down, etc.
+Once you run `./start.sh`, the `AutoNuke` operators will take over and begin automation.  They'll handle all the factors listed in the `Operators` section, below.  Your only concern is to handle the manual things, like deciding when to bring loops up and down, doing maintenance, buying upgrades, etc.
 
 ## Operators
 
-- [`CoreFactor`](lib/auto_nuke/operators/core_factor.ex) - Controls core reactivity.
-  — Maintains a steady core factor above all.
-  - Performs gradual rod changes to deal with changing conditions (xenon buildup, loss of fissile material, etc).
-  - To change it, you can manually set a new target (`CoreFactor.set_target/1`), or you can initiate a controlled drift (`CoreFactor.drift/1`) to slowly change factor over time.
-  - The startup script (below) uses a large `drift` to get up to the target temperature.
-- [`CoreTemp`](lib/auto_nuke/operators/core_temp.ex) — Adjusts primary pumps based on speed.
-  - Sets minimum speed (10%) at 320°C.
+### Core operators
+
+- [`SteamFlow`](lib/auto_nuke/operators/steam_flow.ex) - Manages the MSCV and bypass of each turbine.
+  - Power output is managed by adjusting the total combined open percentage of all MSCV valves.
+  - Within that total, the per-turbine MSCV setting will be adjusted to try to keep pressure balanced across all steam generators.
+  - Turbine bypass will be opened if the combined steam output is too low for the vacuum system (below 50 kg/min), or if a steam generator begins to overpressurise due to too much heat.
+- [`CoreTemp`](lib/auto_nuke/operators/core_temp.ex) — Adjusts temperature target based on steam generator pressure.
+  - Tries to ensure that all active steam generators average out to 60 bar of pressure.
+  - Sends its calculated target to `ControlRods`.
+- [`ControlRods`](lib/auto_nuke/operators/control_rods.ex) — Uses control rods to achieve the target temperature.
+  - Receives its target temperature from `CoreTemp`.
+  - Due to both the target temperature constantly changing, and the difficulty in maintaining a precise temperature, this will unfortunately result in near-constant movement of the control rods.  Sorry for all the noise.
+- [`PrimaryPumps`](lib/auto_nuke/operators/primary_pumps.ex) — Adjust the speed of the primary circulation pumps.
+  - Sets minimum speed (5%) at 300°C.
   - Sets maximum speed (49%) at 400°C.
-  - Everything in between uses a smooth linear scale (e.g. around 30% at 360°C).
-  - The net effect is just to bias the reactor towards 360°C while delivering a continuous, stable amount of heat (at a given core factor).
-- [`SteamFlow`](lib/auto_nuke/operators/steam_flow.ex) - Scales power up and down to handle demand.
-  - Each turbine will have its MSCV scaled up and down to meet power demand.
-  - This happens on a round-robin basis, meaning that e.g. if all turbines are at MSCV 5 and it needs a bit more power, it'll increase one of them to 6 but keep the others at 5.
-  - Also controls turbine bypass to maintain at least 50 kg/min steam flow when there's very low power demand, and to prevent any steam generator from reaching saturation pressure due to too much heat.
+  - Everything inbetween scales linearly between those two extremes.
+  - The net effect is that heat flow scales with temperature in order to deliver a continuous, stable, and predictable amount of heat.
+- [`BoronLevel`](lib/auto_nuke/operators/boron_level.ex) — Increases or decreases boron concentration to maintain reactor control.
+  - If control rods are more than 50% inserted, will begin slowly dosing the core with more boron (to hopefully reduce iodine production).
+  - If control rods are less than 20% inserted, will begin filtering boron out of the core.
+  - Both of these use exponential curves, such that dosing and filtering start out slow, but climb rapidly as you approach 100% and 0% rods, respectively.
+
+### Other operators
+
+- [`CoreFill`](lib/auto_nuke/operators/core_fill.ex) - Maintains fill level in the core.
+  - Opens the drain valve if the core is overfilled.
+    - This typically happens when boron is being added.
+  - Pumps in more coolant if the core is underfilled.
+    - This most typically happens at initial startup, when the primary coolant pipes are empty and must be filled before any coolant can be returned to the core.
 - [`SecondaryFill`](lib/auto_nuke/operators/secondary_fill.ex) - Maintains fill level in each steam generator.
   - Primarily targets the "proper" pump speed, which is based on capacity + steam outlet.
     - At the start of the game, this is half the steam outlet, e.g. 50 kg/min = 25% pump speed.
     - This changes as you upgrade the pumps.
   - Adds a tiny 1% bias (higher or lower) to try to push fill level towards 50.
   - If fill level gets **really** low or high (under 30% or over 70% respectively), it's capable of scaling pump speed all the way to 100% or 0%, respectively.
-- [`VacuumTank`](lib/auto_nuke/operators/vacuum_tank.ex) - Maintains vacuum in the condennser.
+- [`VacuumTank`](lib/auto_nuke/operators/vacuum_tank.ex) - Maintains vacuum in the condenser.
   - Has two modes: Pump mode, and CRV mode.
   - In pump mode, it adjust OMSI/SMSI to maintain 50% retention tank level.
   - In CRV mode, it adjusts OMSI/SMSI to maintain 99% vacuum.
   - Automatically switches modes based on total steam flow.
+- [`CondenserFill`](lib/auto_nuke/operators/condenser_fill.ex) - Manages the condenser fill level.
+  - Tries to maintain a level between 35% and 65% (i.e. within 15% of half full).
+  - If level increases beyond 65%, opens the drain valve until it drops to below 60%.
+  - If level drops below 35%, runs the freight pump until level is back up to 40%.
 - [`CondenserCooling`](lib/auto_nuke/operators/condenser_cooling.ex) - Manages the condenser cooling pump.
   - Runs the pump at the lowest speed it can get away with (down to 10%) without temperature climbing.
   - Uses a probe/backoff strategy, where it will (very slowly) reduce speed until temperature starts climbing, then back off and leave it alone for 15+ minutes at a time.
-  - Sole aim is just to reduce wear on the cooling pump, since you can't service it without taking the plant offline.
+  - The goal is just to reduce wear on the cooling pump, since you can't service it without taking the plant offline.
 
 ## Tasks
 
@@ -59,6 +78,7 @@ These need to be run via `task.sh` in order to set up communication with a runni
 
 - [`./task.sh auto_nuke.loop.start`](lib/mix/tasks/loop/start.ex) — Starts a loop (steam generator + turbine) and connects it to the grid.
 - [`./task.sh auto_nuke.loop.stop`](lib/mix/tasks/loop/stop.ex) — Disconnects a loop and safely shuts it down.
+- [`./task.sh auto_nuke.shutdown`](lib/mix/tasks/shutdown.ex) — Begins a controlled shutdown of the entire plant.
 
 ### Refilling tanks
 
