@@ -118,9 +118,9 @@ defmodule AutoNuke.TaskUI.ProgressBar do
       "\r",
       bar.prefix,
       " ",
-      String.duplicate(@full_bar, full_bars),
+      String.duplicate(@full_bar, max(full_bars, 0)),
       Enum.at(@partial_bars, partial_bar),
-      String.duplicate(@empty_bar, empties),
+      String.duplicate(@empty_bar, max(empties, 0)),
       " ",
       suffix
     ]
