@@ -40,8 +40,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   # To get reactor up to temperature, increase 
   # the core temperature target by 1°C per second.
-  @core_temp_increase 1
-  @core_temp_interval AutoNuke.Ticker.ticks_per_second()
+  @core_temp_increase 1 / AutoNuke.Ticker.ticks_per_second()
   # Clamp this at 5°C above the current actual temperature.
   @core_temp_max_delta 5
 
@@ -86,7 +85,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
 
     {:ok, _} = AutoNuke.Operator.CondenserFill.start_link()
-    {:ok, _} = AutoNuke.Operator.ControlRods.start_link()
+    {:ok, _} = AutoNuke.Operator.ControlRods.start_link(mode: :direct)
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.PrimaryPumps.start_link()
 
@@ -385,17 +384,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp increase_temp_target_loop(old, max) do
     receive do
-      {:tick, t} ->
-        if rem(t, @core_temp_interval) == 0 do
-          new =
-            (old + @core_temp_increase)
-            |> min(get_core_temp() + @core_temp_max_delta)
+      {:tick, _} ->
+        new =
+          (old + @core_temp_increase)
+          |> min(get_core_temp() + @core_temp_max_delta)
 
-          AutoNuke.Operator.ControlRods.set_target(new)
-          increase_temp_target_loop(new, max)
-        else
-          increase_temp_target_loop(old, max)
-        end
+        AutoNuke.Operator.ControlRods.set_target(new)
+        increase_temp_target_loop(new, max)
     end
   end
 

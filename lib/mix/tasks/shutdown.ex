@@ -46,6 +46,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       :boron_level
     ])
 
+    stop_boron_changes()
     insert_control_rods()
     set_full_bypass()
     set_max_pump_speed()
@@ -130,6 +131,27 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         end)
       )
     end)
+  end
+
+  defp stop_boron_changes do
+    UI.console("Chemical Treatment")
+
+    dosing_pump = API.Pumps.boron_dosing()
+    filter_pump = API.Pumps.boron_filter()
+
+    UI.set_wait(
+      "Boron Dosing",
+      "SET TO 0",
+      fn -> API.Pumps.get_actual_speed(dosing_pump) < 0.1 end,
+      fn -> API.Pumps.set_speed(dosing_pump, 0) end
+    )
+
+    UI.set_wait(
+      "Ion Filter",
+      "SET TO 0%",
+      fn -> API.Pumps.get_actual_speed(filter_pump) < 0.1 end,
+      fn -> API.Pumps.set_speed(filter_pump, 0) end
+    )
   end
 
   defp insert_control_rods do
@@ -238,10 +260,12 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   defp wait_core_cooldown do
     UI.console("Reactor Core")
 
-    UI.set("Internal Temperature", "COOL TO 100°C")
-
     initial = get_core_temp()
-    target = 100
+    target = 50
+
+    # This is semi-redundant, since we already waited for
+    # the steam generators to cool to 50°C.
+    UI.set("Internal Temperature", "COOL TO #{target}°C")
 
     UI.ProgressBar.wait(
       config: UI.ProgressBar.Config.target(initial, target, "°C"),
