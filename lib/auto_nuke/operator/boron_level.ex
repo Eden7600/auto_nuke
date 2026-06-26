@@ -139,7 +139,7 @@ defmodule AutoNuke.Operator.BoronLevel do
     # - 25.6 g/min at 90%
     # - 50.0 g/min at 100%
     (50 * ((rods - 50) / 50) ** 3)
-    |> round()
+    |> ceil()
     # Limit our rate to whatever rate will get us to 3500 ppm.
     |> min(@dosing_max_ppm - get_boron_ppm())
     |> max(0)
@@ -156,7 +156,7 @@ defmodule AutoNuke.Operator.BoronLevel do
     (100 * ((20 - rods) / 20) ** 2)
     # Below 100 ppm, start throttling back.
     |> min(get_boron_ppm())
-    |> round()
+    |> ceil()
     |> max(0)
     |> min(100)
   end
