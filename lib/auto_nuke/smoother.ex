@@ -8,6 +8,7 @@ defmodule AutoNuke.Smoother do
 
   alias __MODULE__
   require Integer
+  alias Scholar.Linear.LinearRegression
 
   def new(max_size) when is_integer(max_size) and max_size > 1, do: %Smoother{max: max_size}
 
@@ -56,8 +57,16 @@ defmodule AutoNuke.Smoother do
   end
 
   # Guess where reading will be in `from_now` ticks.
-  def extrapolate(%Smoother{data: data, size: size} = smoother, from_now) when size > 0 do
-    {:value, last} = :queue.peek_r(data)
-    last + rate_of_change(smoother) * from_now
+  def extrapolate(%Smoother{data: data, size: size}, from_now) when size > 0 do
+    # Last data point will be X = 0
+    xs = -(size - 1)..0 |> Enum.map(&[&1]) |> Nx.tensor()
+    ys = :queue.to_list(data) |> Enum.map(&[&1]) |> Nx.tensor()
+    # Treat the latest value as having 3x the predictive power of the first.
+    weights = 1..size |> Enum.map(&(1.0 + 2 * &1 / size))
+
+    # Calculate value at X = from_now
+    LinearRegression.fit(xs, ys, sample_weights: weights)
+    |> LinearRegression.predict(Nx.tensor([from_now]))
+    |> Nx.to_number()
   end
 end

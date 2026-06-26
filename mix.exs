@@ -35,7 +35,8 @@ defmodule AutoNuke.MixProject do
       {:ex_git_test, "~> 0.1.2", only: [:dev, :test], runtime: false},
       {:mix_test_watch, "~> 1.4", only: [:dev, :test], runtime: false},
       {:statistex, "~> 1.1"},
-      {:memoize, "~> 1.4"}
+      {:memoize, "~> 1.4"},
+      {:scholar, "~> 0.4"}
     ]
   end
 end
