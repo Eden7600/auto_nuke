@@ -8,10 +8,10 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   @seconds_per_minute AutoNuke.Ticker.seconds_per_minute()
 
-  # Final supply should be between 100% and 110% of the hour's demand.
-  # The game accepts 90% and 110%, but our API-based math may not be perfect.
-  @lower_limit 1.0
-  @upper_limit 1.10
+  # Final supply should be between 100% and 110% of the hour's demand,
+  # or between demand and demand+5MWh, whichever is smaller.
+  defp lower_limit(kwh), do: kwh
+  defp upper_limit(kwh), do: min(kwh * 1.10, kwh + 5000)
 
   def new do
     timestamp = API.Misc.get_time_stamp()
@@ -27,8 +27,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   end
 
   def target_and_deadzone(%DT{timestamp: ts, supplied_kwh: supply, demand_kwh: demand}) do
-    lower_kw = (demand * @lower_limit - supply) / hour_remaining_percent(ts)
-    upper_kw = (demand * @upper_limit - supply) / hour_remaining_percent(ts)
+    lower_kw = (lower_limit(demand) - supply) / hour_remaining_percent(ts)
+    upper_kw = (upper_limit(demand) - supply) / hour_remaining_percent(ts)
 
     lower_ratio = lower_kw / demand
     upper_ratio = upper_kw / demand
