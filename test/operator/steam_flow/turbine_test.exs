@@ -52,35 +52,32 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     end
   end
 
-  describe "max_power_level/1" do
+  describe "max_power_level/2" do
     setup do
       [turbine: new_turbine(loop: 1)]
     end
 
-    @tag :skip
     test "returns one level higher than current steam output", %{turbine: turbine} do
       API.mock_get("STEAM_GEN_0_OUTLET", 40)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60)
-      assert Turbine.max_power_level(turbine) == 5
+      assert Turbine.max_power_level(turbine, false) == 5
     end
 
-    @tag :skip
     test "maxes out at one tenth of the pump capacity", %{turbine: %Turbine{} = turbine} do
       API.mock_get("STEAM_GEN_0_OUTLET", 10000, times: 2)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 60, times: 2)
 
       turbine = %Turbine{turbine | secondary_capacity: 200}
-      assert Turbine.max_power_level(turbine) == 20
+      assert Turbine.max_power_level(turbine, false) == 20
 
       turbine = %Turbine{turbine | secondary_capacity: 300}
-      assert Turbine.max_power_level(turbine) == 30
+      assert Turbine.max_power_level(turbine, false) == 30
     end
 
-    @tag :skip
     test "refuses to increase if pressure is too low", %{turbine: turbine} do
       API.mock_get("STEAM_GEN_0_OUTLET", 10000)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 54)
-      assert Turbine.max_power_level(turbine) == turbine.power_level
+      assert Turbine.max_power_level(turbine, false) == turbine.power_level
     end
   end
 
