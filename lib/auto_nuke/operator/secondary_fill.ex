@@ -4,12 +4,20 @@ defmodule AutoNuke.Operator.SecondaryFill do
   require Logger
 
   defmodule State do
-    @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity, :adjustment]
-    defstruct(@enforce_keys)
+    @enforce_keys [:loop, :steam_gen, :speed, :pump_capacity]
+    defstruct(
+      loop: nil,
+      steam_gen: nil,
+      speed: nil,
+      pump_capacity: nil,
+      adjustment: nil,
+      boost_mode: nil
+    )
   end
 
   alias AutoNuke.API
   alias AutoNuke.API.{SteamGen, Pumps, Vessels}
+  alias AutoNuke.Time, as: ANTime
 
   # Target between 45% and 55% fill.
   @fill_target_min 0.45
@@ -23,6 +31,9 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # This will scale pumps up to 100% at 20% fill or lower,
   # and down to 0% at 80% fill or higher.
   @fill_limit_span 0.10
+  # Boost mode will treat any level below 80% as if the tank is completely empty.
+  # This will force max pumps immediately.
+  @boost_threshold 0.8
 
   defp process_name(loop), do: __MODULE__ |> Module.concat("L#{loop}")
 
@@ -39,6 +50,22 @@ defmodule AutoNuke.Operator.SecondaryFill do
     {loop, opts} = Keyword.pop!(opts, :loop)
     opts = Keyword.put_new(opts, :name, process_name(loop))
     GenServer.start_link(__MODULE__, loop, opts)
+  end
+
+  def set_boost_mode(loop_or_pid, expiry \\ :next_hour)
+
+  def set_boost_mode(loop, expiry) when is_integer(loop),
+    do: process_name(loop) |> set_boost_mode(expiry)
+
+  def set_boost_mode(pid, expiry) when is_pid(pid) or is_atom(pid) do
+    GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
+  end
+
+  def clear_boost_mode(loop) when is_integer(loop),
+    do: process_name(loop) |> clear_boost_mode()
+
+  def clear_boost_mode(pid) when is_pid(pid) or is_atom(pid) do
+    GenServer.call(pid, {:boost_mode, nil})
   end
 
   @impl true
@@ -61,8 +88,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
       loop: loop,
       steam_gen: steam_gen,
       speed: speed,
-      pump_capacity: capacity,
-      adjustment: nil
+      pump_capacity: capacity
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -82,12 +108,30 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   @impl true
+  def handle_call({:boost_mode, expiry}, _from, %State{loop: loop} = state) do
+    desc =
+      case expiry do
+        nil -> "disabled"
+        :never -> "enabled, no expiry"
+        ts -> "enabled until #{ANTime.timestamp_to_string(ts)}"
+      end
+
+    Logger.notice(log_prefix(loop) <> "Boost mode #{desc}.")
+    {:reply, :ok, %State{state | boost_mode: expiry}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{loop: loop, speed: old_speed} = state) do
+    state = maybe_expire_boost_mode(state)
+
     steam_gen = state.steam_gen
-    fill_level = Vessels.get_fill_ratio(steam_gen.vessel)
+
+    fill_level =
+      Vessels.get_fill_ratio(steam_gen.vessel)
+      |> maybe_boost(state.boost_mode)
 
     adjust = determine_adjustment(state.adjustment, fill_level)
     new_speed = calculate_speed(steam_gen, state.pump_capacity, fill_level, adjust)
@@ -99,6 +143,9 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     {:noreply, %State{state | speed: new_speed, adjustment: adjust}}
   end
+
+  defp maybe_boost(level, boost) when level < @boost_threshold and not is_nil(boost), do: 0.0
+  defp maybe_boost(level, _), do: level
 
   defp determine_adjustment(nil, f) when f < @fill_target_min, do: :fill
   defp determine_adjustment(nil, f) when f > @fill_target_max, do: :empty
@@ -134,6 +181,18 @@ defmodule AutoNuke.Operator.SecondaryFill do
     |> round()
     |> max(0)
     |> min(100)
+  end
+
+  defp maybe_expire_boost_mode(%State{boost_mode: nil} = state), do: state
+  defp maybe_expire_boost_mode(%State{boost_mode: :never} = state), do: state
+
+  defp maybe_expire_boost_mode(%State{loop: loop, boost_mode: ts} = state) when is_integer(ts) do
+    if ANTime.get_current_time() >= ts do
+      Logger.notice(log_prefix(loop) <> "Boost mode has expired.")
+      %State{state | boost_mode: nil}
+    else
+      state
+    end
   end
 
   defp is_installed?(loop) do

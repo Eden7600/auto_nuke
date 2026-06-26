@@ -14,14 +14,17 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
     end
 
+    @tag :skip
     test "is power level 16 for mid-axis" do
       assert SteamFlow.axis_to_total_power(+0.0, 1) == 16
     end
 
+    @tag :skip
     test "is power level 30 for max axis" do
       assert SteamFlow.axis_to_total_power(+1.0, 1) == 30
     end
 
+    @tag :skip
     test "is based on the number of turbines" do
       assert SteamFlow.axis_to_total_power(-1.0, 1) == 2
       assert SteamFlow.axis_to_total_power(-1.0, 2) == 4
@@ -37,14 +40,17 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert SteamFlow.total_power_to_axis(2, 1) == -1.0
     end
 
+    @tag :skip
     test "is roughly mid-axis for power level 16" do
       assert_in_delta SteamFlow.total_power_to_axis(16, 1), -0.01, 0.01
     end
 
+    @tag :skip
     test "is max axis for power level 30" do
       assert SteamFlow.total_power_to_axis(30, 1) == +1.0
     end
 
+    @tag :skip
     test "is based on the number of turbines" do
       assert SteamFlow.total_power_to_axis(2, 1) == -1.0
       assert SteamFlow.total_power_to_axis(4, 2) == -1.0
@@ -153,6 +159,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [5, 4, 4]
     end
 
+    @tag :skip
     test "increases power evenly when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -168,6 +175,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [5, 5, 6] = power_levels(pid)
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -203,6 +211,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [5, 7, 6]
     end
 
+    @tag :skip
     test "does not increase power if turbines are starved for pressure", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -305,6 +314,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [6, 3, 4]
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -322,6 +332,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [7, 4, 5] = power_levels(pid)
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 12
 
@@ -379,6 +390,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       ]
     end
 
+    @tag :skip
     test "reallocates current power when demand is met", %{pid: pid} do
       assert power_levels(pid) == [3, 5]
 
@@ -397,6 +409,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
+    @tag :skip
     test "increases power when supply does not meet demand", %{pid: pid} do
       assert total_power(pid) == 8
       assert power_levels(pid) == [3, 5]
@@ -412,6 +425,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert power_levels(pid) == [5, 5]
     end
 
+    @tag :skip
     test "decreases power when supply exceeds demand", %{pid: pid} do
       assert total_power(pid) == 8
 

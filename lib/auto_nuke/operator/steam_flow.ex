@@ -5,6 +5,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   alias AutoNuke.Smoother
   alias AutoNuke.Operator.SteamFlow.{Turbine, DemandTracker}
+  alias AutoNuke.Time, as: ANTime
 
   defmodule State do
     # Give us the average of the last 5 ticks of power generation:
@@ -16,7 +17,8 @@ defmodule AutoNuke.Operator.SteamFlow do
       turbines: nil,
       demand_tracker: nil,
       smoothed_supply: Smoother.new(@supply_smoothing),
-      target_override: nil
+      target_override: nil,
+      boost_mode: nil
     )
   end
 
@@ -38,11 +40,11 @@ defmodule AutoNuke.Operator.SteamFlow do
     def at_min?(%PL{power_level: p}), do: p <= @min_power_level
     def at_max?(%PL{power_level: p, max_power_level: m}), do: p >= m
 
-    def new(%Turbine{loop: loop} = turbine) do
+    def new(%Turbine{loop: loop} = turbine, boost_mode) do
       %PL{
         loop: loop,
         power_level: @min_power_level,
-        max_power_level: Turbine.max_power_level(turbine),
+        max_power_level: Turbine.max_power_level(turbine, boost_mode),
         pressure: Turbine.guess_future_pressure(turbine)
       }
     end
@@ -106,14 +108,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   def set_target_override(target, expiry \\ :next_hour, pid \\ __MODULE__)
       when is_number(target) do
-    expires_at =
-      case expiry do
-        :never -> :never
-        :next_hour -> get_next_hour()
-        e -> AutoNuke.Time.parse_time(e)
-      end
-
-    GenServer.cast(pid, {:override, target / 100.0, expires_at})
+    GenServer.call(pid, {:override, target / 100.0, ANTime.parse_expiry(expiry)})
   end
 
   def clear_target_override(pid \\ __MODULE__) do
@@ -122,6 +117,14 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   def get_target_override(pid \\ __MODULE__) do
     GenServer.call(pid, :get_override)
+  end
+
+  def enable_boost_mode(expiry \\ :next_hour, pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
+  end
+
+  def disable_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, nil})
   end
 
   def get_power_levels(pid \\ __MODULE__) do
@@ -195,31 +198,44 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_call(:clear_override, _false, %State{} = state) do
+  def handle_call({:override, ratio, expiry}, _from, %State{} = state) do
+    expires_desc =
+      case expiry do
+        :never -> "does not expire"
+        ts -> "expires at #{ANTime.timestamp_to_string(ts)}"
+      end
+
+    Logger.notice(@log_prefix <> "Target set to #{percent(ratio)}, #{expires_desc}.")
+    {:reply, :ok, %State{state | target_override: {ratio, expiry}}}
+  end
+
+  @impl true
+  def handle_call(:clear_override, _from, %State{} = state) do
     Logger.notice(@log_prefix <> "Target override cleared.")
     {:reply, :ok, %State{state | target_override: nil}}
   end
 
   @impl true
-  def handle_call(:get_override, _false, %State{target_override: override} = state) do
+  def handle_call(:get_override, _from, %State{target_override: override} = state) do
     {:reply, override, state}
   end
 
   @impl true
-  def handle_call(:get_power_levels, _false, %State{turbines: turbines} = state) do
+  def handle_call(:get_power_levels, _from, %State{turbines: turbines} = state) do
     {:reply, turbines |> Enum.map(& &1.power_level), state}
   end
 
   @impl true
-  def handle_cast({:override, ratio, expiry}, %State{} = state) do
-    expires_desc =
+  def handle_call({:boost_mode, expiry}, _from, %State{} = state) do
+    desc =
       case expiry do
-        :never -> "does not expire"
-        ts -> "expires at #{AutoNuke.Time.timestamp_to_string(ts)}"
+        nil -> "disabled"
+        :never -> "enabled, no expiry"
+        ts -> "enabled until #{ANTime.timestamp_to_string(ts)}"
       end
 
-    Logger.notice(@log_prefix <> "Target set to #{percent(ratio)}, #{expires_desc}.")
-    {:noreply, %State{state | target_override: {ratio, expiry}}}
+    Logger.notice(@log_prefix <> "Boost mode #{desc}.")
+    {:reply, :ok, %State{state | boost_mode: expiry}}
   end
 
   @impl true
@@ -242,10 +258,12 @@ defmodule AutoNuke.Operator.SteamFlow do
           smoothed_supply: state.smoothed_supply |> Smoother.add(supply_kw)
       }
       |> maybe_expire_override()
+      |> maybe_expire_boost_mode()
 
     ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
     {target, deadzone} = get_target_ratio_and_deadzone(state)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
+    boost_mode = !is_nil(state.boost_mode)
 
     case ControlAxis.step(old_axis, target, ratio) do
       {:changed, axis, new, _old} -> {axis, new}
@@ -255,7 +273,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       turbine_count = Enum.count(old_turbines)
       total_power = axis_to_total_power(value, turbine_count)
 
-      case update_power_levels(old_turbines, total_power) do
+      case update_power_levels(old_turbines, total_power, boost_mode) do
         {:ok, new_turbines} ->
           {axis, new_turbines}
 
@@ -312,8 +330,8 @@ defmodule AutoNuke.Operator.SteamFlow do
     |> Kernel.+(@power_levels.first * count)
   end
 
-  defp update_power_levels(old_turbines, target_total) do
-    power_levels = old_turbines |> Enum.map(&PowerLevel.new/1)
+  defp update_power_levels(old_turbines, target_total, boost_mode) do
+    power_levels = old_turbines |> Enum.map(&PowerLevel.new(&1, boost_mode))
     current_total = power_levels |> Enum.sum_by(& &1.power_level)
     to_allocate = target_total - current_total
 
@@ -379,7 +397,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   defp maybe_expire_override(%State{target_override: {_, :never}} = state), do: state
 
   defp maybe_expire_override(%State{target_override: {_, ts}} = state) when is_integer(ts) do
-    if AutoNuke.Time.get_current_time() >= ts do
+    if ANTime.get_current_time() >= ts do
       Logger.notice(@log_prefix <> "Target override has expired.")
       %State{state | target_override: nil}
     else
@@ -387,14 +405,16 @@ defmodule AutoNuke.Operator.SteamFlow do
     end
   end
 
-  defp get_next_hour do
-    AutoNuke.Time.get_current_time()
-    |> AutoNuke.Time.timestamp_to_tuple()
-    |> then(fn
-      {dd, 23, _mm} -> {dd + 1, 0, 0}
-      {dd, hh, _mm} -> {dd, hh + 1, 0}
-    end)
-    |> AutoNuke.Time.parse_time()
+  defp maybe_expire_boost_mode(%State{boost_mode: nil} = state), do: state
+  defp maybe_expire_boost_mode(%State{boost_mode: :never} = state), do: state
+
+  defp maybe_expire_boost_mode(%State{boost_mode: ts} = state) when is_integer(ts) do
+    if ANTime.get_current_time() >= ts do
+      Logger.notice(@log_prefix <> "Boost mode has expired.")
+      %State{state | boost_mode: nil}
+    else
+      state
+    end
   end
 
   @steam_gens API.SteamGen.all()

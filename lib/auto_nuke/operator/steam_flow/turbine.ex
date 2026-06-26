@@ -25,17 +25,19 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   defstruct(@enforce_keys)
 
   # Allowed power levels:
-  @power_levels 2..30
+  @power_levels 2..50
   def allowed_power_levels, do: @power_levels
   # Keep pressure under 65 bar.
   @max_pressure 65
   # If pressure is below 55 bar, we're starved for steam and shouldn't try to
   # push power level any higher.
   @min_pressure 55
-
   # To avoid excessive flapping, if we're within 3 kg/min 
   # of min steam flow, disallow bypass decreases.
   @steam_lock_zone 3
+  # Allow power levels beyond pump capacity at a rate
+  # of one level per 20 hL of water volume beyond 100 hL.
+  defp boost_limit(water_hl), do: ((water_hl - 10000) / 2000) |> floor()
 
   # Keep the last 10 pressure readings:
   @pressure_history_size 10
@@ -44,7 +46,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
 
   require Logger
   alias __MODULE__
-  alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator}
+  alias AutoNuke.API.{SteamGen, Valves, Pumps, Generator, Vessels}
   alias AutoNuke.ControlAxis
   alias AutoNuke.Smoother
 
@@ -101,11 +103,15 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     %Turbine{turbine | power_level: new}
   end
 
-  def max_power_level(%Turbine{
-        steam_gen: steam_gen,
-        power_level: current_power_level,
-        secondary_capacity: capacity
-      }) do
+  def max_power_level(
+        %Turbine{
+          steam_gen: steam_gen,
+          power_level: current_power_level,
+          secondary_capacity: capacity
+        },
+        boost_mode
+      )
+      when is_boolean(boost_mode) do
     if SteamGen.get_pressure(steam_gen) < @min_pressure do
       current_power_level
     else
@@ -114,8 +120,19 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       |> Kernel./(10)
       |> round()
       |> Kernel.+(1)
-      |> min(div(capacity, 10))
+      |> limit_power_level(div(capacity, 10), boost_mode, steam_gen.vessel)
     end
+  end
+
+  defp limit_power_level(power_level, pump_capacity, _, _)
+       when power_level <= pump_capacity,
+       do: power_level
+
+  defp limit_power_level(_, pump_capacity, false, _), do: pump_capacity
+
+  defp limit_power_level(power_level, pump_capacity, true, %Vessels.Vessel{} = vessel) do
+    boost = Vessels.get_fill_volume(vessel) |> boost_limit()
+    power_level |> min(pump_capacity + boost)
   end
 
   def get_generated_power(%Turbine{loop: loop}), do: Generator.get_power_kw(loop)
