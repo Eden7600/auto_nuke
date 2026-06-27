@@ -89,6 +89,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     achieve_criticality()
     {:ok, _} = AutoNuke.Operator.PrimaryPumps.start_link()
 
+    wait_for_min_steam()
     start_vacuum_pump()
     {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
 
@@ -222,7 +223,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> Enum.each(&UI.Valves.set(&1, 100, wait: false))
 
     UI.console("Condenser")
-    API.Valves.smsi() |> UI.Valves.set(100, wait: false)
+    API.Valves.smsi() |> UI.Valves.set(0, wait: false)
     API.Valves.omsi() |> UI.Valves.set(0, wait: false)
     API.Valves.crv() |> UI.Valves.set(0, wait: false)
   end
@@ -263,7 +264,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     UI.console("Condenser")
     API.Pumps.condenser_cooling() |> UI.Pumps.set_speed(@startup_cooling_speed, wait: true)
-    API.Valves.smsi() |> UI.Valves.set(100, wait: true)
+    API.Valves.smsi() |> UI.Valves.set(0, wait: true)
     API.Valves.omsi() |> UI.Valves.set(0, wait: true)
     API.Valves.crv() |> UI.Valves.set(0, wait: true)
 
@@ -425,8 +426,22 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> Enum.each(&UI.Pumps.start/1)
   end
 
+  defp wait_for_min_steam do
+    UI.console("Steam Generator")
+
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(0, 50, " kg/min", 1),
+      label: "Total Steam",
+      current_fn: &API.SteamGen.get_total_outlet/0,
+      done_fn: &(&1 >= 50)
+    )
+  end
+
   defp start_vacuum_pump do
     UI.console("Condenser")
+
+    API.Valves.smsi() |> UI.Valves.set(100, wait: false)
+
     vessel = API.Vessels.retention_tank()
     UI.Vessels.fill_wait(vessel, percent: @retention_percent)
 
