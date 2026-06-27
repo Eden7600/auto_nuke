@@ -1,4 +1,6 @@
 defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
+  require Logger
+
   @enforce_keys [:timestamp, :demand_kwh, :supplied_kwh, :supply_per_second]
   defstruct(@enforce_keys)
   alias __MODULE__, as: DT
@@ -6,13 +8,15 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   alias AutoNuke.API
   alias AutoNuke.Smoother
 
+  @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
+
   @seconds_per_minute AutoNuke.Ticker.seconds_per_minute()
 
-  # Standard mode: 95% to 110%, ideal 101%, no cap.
+  # Standard mode: 100% to 110%, ideal 105%, no cap.
   @standard_targets %{
-    min: 0.95,
+    min: 1.00,
     max: 1.10,
-    ideal: 1.01,
+    ideal: 1.05,
     hard_cap: 99999.0
   }
 
@@ -62,7 +66,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
       if lower_ratio <= ideal && upper_ratio >= ideal do
         ideal
       else
-        push_into_range(ideal, lower_ratio, upper_ratio)
+        push_into_range(ideal, lower_ratio, upper_ratio, demand)
         |> min(hard_cap)
       end
 
@@ -72,14 +76,36 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     {target, {upper_deadzone, lower_deadzone}}
   end
 
-  defp push_into_range(ideal, lower, upper) when ideal < lower do
+  defp push_into_range(ideal, lower, upper, demand) when ideal < lower do
     # Push 10% above lower, or halfway into the range, whichever is less.
-    lower + min(0.1, (upper - lower) / 2)
+    target = lower + min(0.1, (upper - lower) / 2)
+
+    Logger.warning([
+      @log_prefix,
+      "Not enough power: Minimum is ",
+      format_kw(lower * demand),
+      ", pushing to ",
+      format_kw(target * demand),
+      "."
+    ])
+
+    target
   end
 
-  defp push_into_range(ideal, lower, upper) when ideal > upper do
+  defp push_into_range(ideal, lower, upper, demand) when ideal > upper do
     # Push 10% below upper, or halfway into the range, whichever is less.
-    upper - min(0.1, (upper - lower) / 2)
+    target = upper - min(0.1, (upper - lower) / 2)
+
+    Logger.warning([
+      @log_prefix,
+      "Too much power: Maximum is ",
+      format_kw(lower * demand),
+      ", pushing to ",
+      format_kw(target * demand),
+      "."
+    ])
+
+    target
   end
 
   def current_ratio(%DT{demand_kwh: demand}, supply), do: supply / demand
@@ -138,4 +164,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   defp hour_elapsed_percent(timestamp), do: rem(timestamp, 60) / 60
   defp hour_remaining_percent(timestamp), do: 1.0 - hour_elapsed_percent(timestamp)
+
+  defp format_kw(kw) do
+    mw = Float.round(kw / 1000, 1)
+    "#{mw} MW"
+  end
 end
