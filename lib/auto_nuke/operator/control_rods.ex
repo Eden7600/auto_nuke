@@ -23,7 +23,7 @@ defmodule AutoNuke.Operator.ControlRods do
   @temp_lookahead 5
 
   @modes [:predictive, :direct]
-  @default_mode List.first(@modes)
+  @default_mode :predictive
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
@@ -56,8 +56,7 @@ defmodule AutoNuke.Operator.ControlRods do
       ControlAxis.new(
         kp: 0.05,
         ki: 0.005,
-        kd: 0.01,
-        deadzone: 1.0,
+        deadzone: 0.1,
         to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
         offset: rods |> rods_to_axis(),
         initial_value: rods
@@ -131,7 +130,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
     case ControlAxis.step(state.axis, state.target, measurement) do
       {:changed, axis, new, old} ->
-        set_bank_rods(state.banks, old, new, state.target)
+        set_bank_rods(state.banks, old, new, current_temp, state.target)
         maybe_clamp(state.banks, axis, new)
 
       {:unchanged, axis, _old_value} ->
@@ -174,19 +173,36 @@ defmodule AutoNuke.Operator.ControlRods do
     |> Enum.map(fn n -> API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL") end)
   end
 
-  defp set_bank_rods(banks, old_rods, new_rods, target) do
+  defp set_bank_rods(banks, old_rods, new_rods, current_temp, target_temp) do
     Enum.zip_with([banks, old_rods, new_rods], fn
       [_bank, same, same] ->
-        same
+        nil
 
-      [bank, old, new] ->
-        Logger.info(
-          @log_prefix <>
-            "Changing bank #{bank} rods #{old}% → #{new}% to reach #{Float.round(target, 2)}°C."
-        )
-
+      [bank, _old, new] ->
         API.put("ROD_BANK_POS_#{bank - 1}_ORDERED", new)
-        new
+        {bank, new}
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.group_by(fn {_bank, rods} -> rods end)
+    |> Enum.map(fn {rods, pairs} ->
+      {rods,
+       pairs
+       |> Enum.map(fn {bank, _rods} -> bank end)
+       |> Enum.sort()}
+    end)
+    |> Enum.sort_by(fn {_key, [head | _rest]} -> head end)
+    |> Enum.map(fn {rods, banks} ->
+      "#{rods}% (#{Enum.join(banks, "+")})"
+    end)
+    |> Enum.join(", ")
+    |> then(fn desc ->
+      Logger.info([
+        @log_prefix,
+        "Target #{format_temp(target_temp)}°C",
+        " (#{format_delta(current_temp, target_temp)}°C).  Set ",
+        desc,
+        "."
+      ])
     end)
   end
 
@@ -244,4 +260,12 @@ defmodule AutoNuke.Operator.ControlRods do
   defp rods_to_axis(avg) when is_float(avg) do
     (50 - avg) / 50
   end
+
+  defp format_delta(a, b) do
+    delta = b - a
+    str = format_temp(delta)
+    if delta >= 0, do: "+#{str}", else: str
+  end
+
+  defp format_temp(temp), do: :erlang.float_to_binary(temp, decimals: 2)
 end
