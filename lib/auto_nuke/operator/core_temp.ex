@@ -189,7 +189,7 @@ defmodule AutoNuke.Operator.CoreTemp do
 
       {:drifting, :current} ->
         temp = state.axis.last_value
-        drift = %Drift{drift | start_time: temp}
+        drift = %Drift{drift | start_temp: temp}
         Logger.info(@log_prefix <> "Starting drift #{Drift.describe(drift)} ...")
         %State{state | override: {temp, :never}, drift: {drift, true}}
 

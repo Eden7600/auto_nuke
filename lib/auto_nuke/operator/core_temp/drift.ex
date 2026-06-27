@@ -17,8 +17,8 @@ defmodule AutoNuke.Operator.CoreTemp.Drift do
     drift = %Drift{
       start_time: start_time,
       end_time: end_time,
-      start_temp: start_temp,
-      end_temp: end_temp
+      start_temp: start_temp + 0.0,
+      end_temp: end_temp + 0.0
     }
 
     cond do
@@ -46,10 +46,10 @@ defmodule AutoNuke.Operator.CoreTemp.Drift do
   end
 
   def current_value(drift, time \\ :now)
+  def current_value(%Drift{start_temp: :current}, _), do: {:drifting, :current}
   def current_value(%Drift{} = drift, :now), do: current_value(drift, get_current_time())
   def current_value(%Drift{start_time: st}, t) when t < st, do: :not_started
   def current_value(%Drift{end_time: et, end_temp: temp}, t) when t >= et, do: {:complete, temp}
-  def current_value(%Drift{start_time: :current}, _), do: {:drifting, :current}
 
   def current_value(%Drift{} = drift, time) do
     span = drift.end_time - drift.start_time
