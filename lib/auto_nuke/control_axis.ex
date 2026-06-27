@@ -10,7 +10,7 @@ defmodule AutoNuke.ControlAxis do
     {t_v_fn, opts} = Keyword.pop(opts, :to_value_fn, &Function.identity/1)
     {t_v_state, opts} = Keyword.pop(opts, :to_value_state)
     {offset, opts} = Keyword.pop(opts, :offset, 0.0)
-    {deadzone, opts} = Keyword.pop(opts, :deadzone, 0.0)
+    {deadzone, opts} = Keyword.pop(opts, :deadzone, nil)
     {initial, opts} = Keyword.pop(opts, :initial_value, nil)
     {zero_d, opts} = Keyword.pop(opts, :zero_d, true)
 
@@ -78,13 +78,12 @@ defmodule AutoNuke.ControlAxis do
   @deprecated "Use ControlAxis.clamp/3 instead."
   def clamp_max(axis, max, new_value \\ nil), do: clamp(axis, max, new_value)
 
-  defp step_with_deadzone(%PIDControl{} = pidc, +0.0, target, measurement) do
+  defp step_with_deadzone(%PIDControl{} = pidc, nil, target, measurement) do
     PIDControl.step(pidc, target, measurement)
   end
 
   defp step_with_deadzone(%PIDControl{} = pidc, dz, target, measurement) do
-    delta = abs(target - measurement)
-    dz_ratio = delta / dz
+    dz_ratio = calculate_dz_ratio(dz, target, measurement)
 
     if dz_ratio < 1.0 do
       old_config = pidc.config
@@ -97,6 +96,18 @@ defmodule AutoNuke.ControlAxis do
     else
       PIDControl.step(pidc, target, measurement)
     end
+  end
+
+  def calculate_dz_ratio({dz_lower, dz_upper}, target, measurement) do
+    if measurement > target do
+      (measurement - target) / dz_upper
+    else
+      (target - measurement) / dz_lower
+    end
+  end
+
+  def calculate_dz_ratio(dz, target, measurement) when is_number(dz) do
+    abs(measurement - target) / dz
   end
 
   # Allow axis_to_value functions to use args (new, old) or just (new).
