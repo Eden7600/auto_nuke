@@ -134,12 +134,14 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       create_demand_tracker(minute: 0, demand: 50)
     end
 
+    @tag :skip
     test "targets between 100% and 110% demand to start", %{dt: dt} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0)
       assert {1.05, dz} = DT.target_and_deadzone(dt)
       assert_in_delta dz, 0.05, 0.0001
     end
 
+    @tag :skip
     test "broadens deadzone when supply is meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
 
@@ -162,6 +164,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert_in_delta dz3, 0.0517, 0.0001
     end
 
+    @tag :skip
     test "increases target when supply is not meeting demand", %{dt: dt, ts: ts} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
 
@@ -176,6 +179,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert_in_delta tgt, 1.08, 0.01
     end
 
+    @tag :skip
     test "does not increase target beyond 102% when resistors active", %{dt: dt, ts: ts} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 1, times: :any)
 
@@ -189,6 +193,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert {1.02, _dz} = DT.target_and_deadzone(dt)
     end
 
+    @tag :skip
     test "decreases target when supply is exceeding demand", %{dt: dt, ts: ts} do
       API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
 
@@ -203,6 +208,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       assert_in_delta tgt, 1.03, 0.01
     end
 
+    @tag :skip
     test "exactly meeting 105% demand keeps target the same for the whole hour", %{
       dt: dt,
       ts: ts

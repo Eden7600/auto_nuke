@@ -8,10 +8,23 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   @seconds_per_minute AutoNuke.Ticker.seconds_per_minute()
 
-  # Final supply should be between 100% and 110% of the hour's demand,
-  # or between demand and demand+5MWh, whichever is smaller.
-  defp lower_limit(kwh), do: kwh
-  defp upper_limit(kwh), do: min(kwh * 1.10, kwh + 5000)
+  # Standard mode: 95% to 110%, ideal 101%, no cap.
+  @standard_targets %{
+    min: 0.95,
+    max: 1.10,
+    ideal: 1.01,
+    hard_cap: 99999.0
+  }
+
+  # With resistors enabled: 95% to 110%, ideal 100%, hard cap target to 102%.
+  @resistor_targets %{
+    min: 0.95,
+    max: 1.10,
+    ideal: 1.00,
+    hard_cap: 1.02
+  }
+
+  @max_deadzone 0.5
 
   def new do
     timestamp = API.Misc.get_time_stamp()
@@ -26,27 +39,47 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     }
   end
 
-  def target_and_deadzone(%DT{timestamp: ts, supplied_kwh: supply, demand_kwh: demand}) do
-    lower_kw = (lower_limit(demand) - supply) / hour_remaining_percent(ts)
-    upper_kw = (upper_limit(demand) - supply) / hour_remaining_percent(ts)
+  def target_and_deadzone(%DT{} = dt) do
+    case API.Power.get_active_resistor_kw() > 0 do
+      true -> @resistor_targets
+      false -> @standard_targets
+    end
+    |> target_and_deadzone(dt)
+  end
+
+  defp target_and_deadzone(
+         %{min: min_supply, max: max_supply, ideal: ideal, hard_cap: hard_cap},
+         %DT{timestamp: ts, supplied_kwh: supply, demand_kwh: demand}
+       ) do
+    remaining = hour_remaining_percent(ts)
+    lower_kw = (demand * min_supply - supply) / remaining
+    upper_kw = (demand * max_supply - supply) / remaining
 
     lower_ratio = lower_kw / demand
     upper_ratio = upper_kw / demand
 
-    target = (upper_ratio + lower_ratio) / 2
-    deadzone = (upper_ratio - lower_ratio) / 2
-
     target =
-      if API.Power.get_active_resistor_kw() > 0 do
-        # No point in overproducing if it's just going to get eaten by resistors.
-        # However, seems like even with resistors active, we satisfy about 101.7% of demand.
-        # So hedge our bets and try 102% here.
-        min(target, 1.02)
+      if lower_ratio <= ideal && upper_ratio >= ideal do
+        ideal
       else
-        target
+        push_into_range(ideal, lower_ratio, upper_ratio)
+        |> min(hard_cap)
       end
 
-    {target, deadzone}
+    upper_deadzone = (upper_ratio - target) |> min(@max_deadzone)
+    lower_deadzone = (target - lower_ratio) |> min(@max_deadzone)
+
+    {target, {upper_deadzone, lower_deadzone}}
+  end
+
+  defp push_into_range(ideal, lower, upper) when ideal < lower do
+    # Push 10% above lower, or halfway into the range, whichever is less.
+    lower + min(0.1, (upper - lower) / 2)
+  end
+
+  defp push_into_range(ideal, lower, upper) when ideal > upper do
+    # Push 10% below upper, or halfway into the range, whichever is less.
+    upper - min(0.1, (upper - lower) / 2)
   end
 
   def current_ratio(%DT{demand_kwh: demand}, supply), do: supply / demand
