@@ -4,11 +4,17 @@ defmodule AutoNuke.Operator.CondenserCooling do
   require Logger
 
   defmodule State do
-    @enforce_keys [:last_temp, :last_direction, :probe_timer]
-    defstruct(@enforce_keys)
+    @enforce_keys [:last_temp, :probe_timer]
+    defstruct(
+      last_temp: nil,
+      probe_timer: nil,
+      last_direction: :stable,
+      boost_mode: nil
+    )
   end
 
   alias AutoNuke.API
+  alias AutoNuke.Time, as: ANTime
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @condenser API.Vessels.condenser()
@@ -27,6 +33,14 @@ defmodule AutoNuke.Operator.CondenserCooling do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
+  def enable_boost_mode(expiry \\ :next_hour, pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
+  end
+
+  def disable_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, nil})
+  end
+
   @impl true
   def init(_) do
     temp = get_temperature()
@@ -34,7 +48,6 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
     state = %State{
       last_temp: temp,
-      last_direction: :stable,
       probe_timer: @wait_while_probing
     }
 
@@ -44,10 +57,23 @@ defmodule AutoNuke.Operator.CondenserCooling do
   end
 
   @impl true
+  def handle_call({:boost_mode, expiry}, _from, %State{} = state) do
+    desc =
+      case expiry do
+        nil -> "disabled"
+        :never -> "enabled, no expiry"
+        ts -> "enabled until #{ANTime.timestamp_to_string(ts)}"
+      end
+
+    Logger.notice(@log_prefix <> "Boost mode #{desc}.")
+    {:reply, :ok, %State{state | boost_mode: expiry}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info({:tick, _}, %State{} = state) do
+  def handle_info({:tick, _}, %State{boost_mode: nil} = state) do
     new_temp = get_temperature()
     old_temp = state.last_temp
     threshold = get_violation_threshold()
@@ -91,6 +117,20 @@ defmodule AutoNuke.Operator.CondenserCooling do
       {:noreply, %State{new_state | last_temp: new_temp, last_direction: direction}}
     end)
   end
+
+  @impl true
+  def handle_info({:tick, _} = tick, %State{boost_mode: expiry} = state) do
+    if boost_mode_expired?(expiry) do
+      Logger.notice(@log_prefix <> "Boost mode has expired.")
+      handle_info(tick, %State{state | boost_mode: nil})
+    else
+      set_pump_speed(@speeds.last)
+      {:noreply, state}
+    end
+  end
+
+  defp boost_mode_expired?(:never), do: false
+  defp boost_mode_expired?(ts) when is_integer(ts), do: ANTime.get_current_time() >= ts
 
   defp backoff(%State{} = state, amount, temp) do
     old = get_pump_speed()
