@@ -59,9 +59,12 @@ defmodule AutoNuke.Operator.CoreTemp do
   # We could probably go lower, but I don't want to risk turbine stalls.
   def temp_range, do: @temp_range
 
-  # Clamp values to within 5°C of current temperature.
-  @clamp_temp_delta 5
-  # Note: This will decrease as we approach @temp_range bounds.
+  # Clamp values to within +10°C or -5°C of current temperature.
+  @clamp_upwards 10
+  @clamp_downwards 5
+  # If we get within 10°C of the edge of @temp_range, clamp to
+  # half the difference between current temperature and that boundary.
+  @clamp_near_boundary 10
 
   def start_link(opts \\ []) do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
@@ -243,22 +246,22 @@ defmodule AutoNuke.Operator.CoreTemp do
     end
   end
 
-  @relative_low @temp_range.first + @clamp_temp_delta * 2
-  @relative_high @temp_range.last - @clamp_temp_delta * 2
+  @relative_low @temp_range.first + @clamp_near_boundary
+  @relative_high @temp_range.last - @clamp_near_boundary
 
   defp min_relative(temp) when temp < @relative_low do
     # Half of the distance to the lower bound:
     temp - (temp - @temp_range.first) / 2
   end
 
-  defp min_relative(temp), do: temp - @clamp_temp_delta
+  defp min_relative(temp), do: temp - @clamp_downwards
 
   defp max_relative(temp) when temp > @relative_high do
     # Half of the distance to the upper bound:
     temp + (@temp_range.last - temp) / 2
   end
 
-  defp max_relative(temp), do: temp + @clamp_temp_delta
+  defp max_relative(temp), do: temp + @clamp_upwards
 
   defp clamp_to_range(value, low..high//_) when is_float(value) do
     value
