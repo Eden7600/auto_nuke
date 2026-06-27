@@ -72,8 +72,7 @@ defmodule AutoNuke.Operator.CoreTemp do
     GenServer.start_link(__MODULE__, loops, opts)
   end
 
-  def set_override(temp, expiry \\ :next_hour, pid \\ __MODULE__)
-      when temp >= @temp_range.first and temp <= @temp_range.last do
+  def set_override(temp, expiry \\ :next_hour, pid \\ __MODULE__) do
     GenServer.call(pid, {:override, temp + 0.0, ANTime.parse_expiry(expiry)})
   end
 
