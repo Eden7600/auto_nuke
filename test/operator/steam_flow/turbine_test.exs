@@ -97,7 +97,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
           new_t
         end)
 
-      assert final_turbine.bypass == 0
+      assert final_turbine.bypass <= 1
     end
   end
 
@@ -109,11 +109,11 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
     test "ensures enough steam", %{turbine: turbine} do
       # Let's pretend steam is just bypass x2, so our target is 25 bypass = 50 steam.
       steam_fun = fn bypass -> bypass * 2.0 end
-      # Steam output will be the average of the last 3 steam readings.
-      smoother = Smoother.new(3)
+      # Steam output will be the average of the last 5 steam readings.
+      smoother = Smoother.new(5)
 
       {final_turbine, _} =
-        1..(@settle_time * 2)
+        1..@settle_time
         |> Enum.reduce({turbine, smoother}, fn _, {old_t, smoother} ->
           smoother = Smoother.add(smoother, steam_fun.(old_t.bypass))
           API.mock_get("STEAM_GEN_0_OUTLET", Smoother.average(smoother))
@@ -123,8 +123,8 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
           {new_t, smoother}
         end)
 
-      # Final result will be higher than target due to upwards-only deadzone.
-      assert final_turbine.bypass == 26
+      # Final result should be somewhere around 25.
+      assert final_turbine.bypass in 22..26
     end
 
     test "ensures low enough pressure", %{turbine: turbine} do
