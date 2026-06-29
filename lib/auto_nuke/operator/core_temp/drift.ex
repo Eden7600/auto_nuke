@@ -17,8 +17,8 @@ defmodule AutoNuke.Operator.CoreTemp.Drift do
     drift = %Drift{
       start_time: start_time,
       end_time: end_time,
-      start_temp: start_temp + 0.0,
-      end_temp: end_temp + 0.0
+      start_temp: start_temp |> parse_start_temp(),
+      end_temp: end_temp |> parse_temp()
     }
 
     cond do
@@ -81,4 +81,9 @@ defmodule AutoNuke.Operator.CoreTemp.Drift do
 
   defp parse_start_time(:now), do: ANTime.get_current_time()
   defp parse_start_time(t), do: ANTime.parse_time(t, :now)
+
+  defp parse_start_temp(:current), do: :current
+  defp parse_start_temp(t), do: parse_temp(t)
+  defp parse_temp(t) when is_integer(t), do: t + 0.0
+  defp parse_temp(t) when is_float(t), do: t
 end
