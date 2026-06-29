@@ -81,12 +81,15 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       end)
     )
 
+    mscvs = @steam_gens |> Enum.map(& &1.mscv)
+
     UI.wait(
       "Main Steam Control Valves",
-      "WAIT FOR #{@min_power_level}%",
+      "#{@min_power_level}% OR LOWER",
       remote_fn(node, fn ->
-        Op.SteamFlow.get_power_levels()
-        |> Enum.all?(&(&1 == @min_power_level))
+        mscvs
+        |> Enum.map(&API.Valves.get_open_percent/1)
+        |> Enum.all?(&(&1 <= @min_power_level))
       end)
     )
   end
