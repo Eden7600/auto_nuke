@@ -4,12 +4,13 @@ defmodule AutoNuke.Operator.CondenserFill do
   require Logger
 
   defmodule State do
-    @enforce_keys [:last_fill, :last_status, :freight_pump, :drain_valve]
+    @enforce_keys [:last_fill, :last_status, :freight_pump, :drain_valve, :boost_mode]
     defstruct(@enforce_keys)
   end
 
   alias AutoNuke.API
   alias __MODULE__.{FreightPump, DrainValve}
+  alias AutoNuke.Time, as: ANTime
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @condenser API.Vessels.condenser()
@@ -20,10 +21,20 @@ defmodule AutoNuke.Operator.CondenserFill do
   # Above 65%, open the drain valve to get water down to 60%.
   @max_fill 65
   @max_fill_stop 60
+  # With boost mode enabled, fill to 60%.
+  @boost_mode_limit 60
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
+  end
+
+  def enable_boost_mode(expiry \\ :next_hour, pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
+  end
+
+  def disable_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, {:boost_mode, nil})
   end
 
   @impl true
@@ -34,7 +45,8 @@ defmodule AutoNuke.Operator.CondenserFill do
       last_fill: fill_level,
       last_status: nil,
       freight_pump: FreightPump.new(),
-      drain_valve: DrainValve.new()
+      drain_valve: DrainValve.new(),
+      boost_mode: nil
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -43,15 +55,30 @@ defmodule AutoNuke.Operator.CondenserFill do
   end
 
   @impl true
+  def handle_call({:boost_mode, expiry}, _from, %State{} = state) do
+    desc =
+      case expiry do
+        nil -> "disabled"
+        :never -> "enabled, no expiry"
+        ts -> "enabled until #{ANTime.timestamp_to_string(ts)}"
+      end
+
+    Logger.notice(@log_prefix <> "Boost mode #{desc}.")
+    {:reply, :ok, %State{state | boost_mode: expiry}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
+    state = state |> maybe_expire_boost_mode()
     fill = @condenser |> API.Vessels.get_fill_percent()
     last = state.last_status
 
     status =
       cond do
+        state.boost_mode && fill < @boost_mode_limit -> :low
         fill > @max_fill -> :high
         fill > @max_fill_stop && last == :high -> :high
         fill < @min_fill -> :low
@@ -102,4 +129,16 @@ defmodule AutoNuke.Operator.CondenserFill do
 
   defp close_valve(%State{drain_valve: dv} = state, fill),
     do: %State{state | drain_valve: dv |> DrainValve.close(fill)}
+
+  defp maybe_expire_boost_mode(%State{boost_mode: nil} = state), do: state
+  defp maybe_expire_boost_mode(%State{boost_mode: :never} = state), do: state
+
+  defp maybe_expire_boost_mode(%State{boost_mode: ts} = state) when is_integer(ts) do
+    if ANTime.get_current_time() >= ts do
+      Logger.notice(@log_prefix <> "Boost mode has expired.")
+      %State{state | boost_mode: nil}
+    else
+      state
+    end
+  end
 end
