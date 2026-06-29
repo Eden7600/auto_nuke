@@ -25,10 +25,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   defstruct(@enforce_keys)
 
   # Allowed power levels:
-  @power_levels 2..50
+  @power_levels 2..100
   def allowed_power_levels, do: @power_levels
-  # Keep pressure under 65 bar.
+  # Keep pressure under 65 bar, or 75 bar if flow-controlled.
   @max_pressure 65
+  @max_fc_pressure 75
   # If pressure is below 55 bar, we're starved for steam and shouldn't try to
   # push power level any higher.
   @min_pressure 55
@@ -145,7 +146,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     Smoother.extrapolate(history, @pressure_lookahead)
   end
 
-  def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
+  def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine, flow_controlled) do
     steam = SteamGen.get_outlet(steam_gen)
     pressure = SteamGen.get_pressure(steam_gen)
 
@@ -161,7 +162,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       step_axis(
         turbine.pressure_axis,
         pressure,
-        @max_pressure
+        if(flow_controlled, do: @max_fc_pressure, else: @max_pressure)
       )
 
     old = turbine.bypass

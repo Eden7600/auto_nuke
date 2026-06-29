@@ -66,6 +66,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
       end
 
     Logger.notice(@log_prefix <> "Boost mode #{desc}.")
+    unless is_nil(expiry), do: set_pump_speed(@speeds.last)
     {:reply, :ok, %State{state | boost_mode: expiry}}
   end
 
@@ -73,7 +74,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info({:tick, _}, %State{boost_mode: nil} = state) do
+  def handle_info({:tick, _}, %State{} = state) do
     new_temp = get_temperature()
     old_temp = state.last_temp
     threshold = get_violation_threshold()
@@ -108,8 +109,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
       # - Steadily increasing: Hold off on probing.
       {:below, :increasing, :increasing} -> probe_wait(state, @wait_while_probing)
       # - Recent increase: Skip the timer for this tick.
-      {:below, :increasing, _} -> state
-      {:below, _, :increasing} -> state
+      {:below, :increasing, _} -> probe_skip(state)
+      {:below, _, :increasing} -> probe_skip(state)
       # - No recent increases: Begin probing downwards.
       {:below, _, _} -> maybe_probe(state, new_temp)
     end
@@ -134,26 +135,38 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   defp backoff(%State{} = state, amount, temp) do
     old = get_pump_speed()
-    new = (old + amount) |> min(@speeds.last)
+    new = if state.boost_mode, do: @speeds.last, else: (old + amount) |> min(@speeds.last)
+    vio = fn -> @log_prefix <> "Temperature violation at #{Float.round(temp, 1)}°C" end
 
-    Logger.info(
-      @log_prefix <>
-        "Temperature violation at #{Float.round(temp, 1)}°C, backing off from #{old}% to #{new}%."
-    )
+    if new == old do
+      Logger.warning(vio.() <> ", but pump is maxed!")
+      steam_flow_control(:backoff)
+    else
+      Logger.info(vio.() <> ", backing off from #{old}% to #{new}%.")
+      steam_flow_control(:hold)
+    end
 
     set_pump_speed(new)
     %State{state | probe_timer: @wait_after_violation}
   end
 
   defp probe_wait(%State{} = state, wait) do
+    steam_flow_control(:hold)
     %State{state | probe_timer: max(state.probe_timer, wait)}
   end
 
+  defp maybe_probe(%State{boost_mode: boost} = state, _) when not is_nil(boost) do
+    steam_flow_control(:resume)
+    state
+  end
+
   defp maybe_probe(%State{probe_timer: timer} = state, _) when timer > 0 do
+    steam_flow_control(:resume)
     %State{state | probe_timer: timer - 1}
   end
 
   defp maybe_probe(%State{} = state, temp) do
+    steam_flow_control(:resume)
     new = get_pump_speed() - 1
 
     if new in @speeds do
@@ -161,6 +174,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
       set_pump_speed(new)
       %State{state | probe_timer: @wait_while_probing}
     else
+      # We're at the lowest allowed setting.
       # No point in ever probing any lower!
       # Just set the timer insanely high.
       # Unless we see a violation, we don't care.
@@ -168,10 +182,22 @@ defmodule AutoNuke.Operator.CondenserCooling do
     end
   end
 
+  defp probe_skip(state) do
+    steam_flow_control(:resume)
+    state
+  end
+
+  defp steam_flow_control(action) do
+    PubSub.publish(:steam_flow_control, {:steam_flow_control, action})
+  end
+
   # As total steam output increases, we need to allow more leeway.
   defp get_violation_threshold do
     over_ambient = 5 + get_total_steam() / 50
-    over_ambient + get_ambient()
+
+    (over_ambient + get_ambient())
+    # Never exceed 40°C, though.
+    |> min(40)
   end
 
   @steam_gens API.SteamGen.all()

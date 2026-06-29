@@ -18,7 +18,8 @@ defmodule AutoNuke.Operator.SteamFlow do
       demand_tracker: nil,
       smoothed_supply: Smoother.new(@supply_smoothing),
       target_override: nil,
-      boost_mode: nil
+      boost_mode: nil,
+      flow_control: nil
     )
   end
 
@@ -156,6 +157,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     }
 
     PubSub.subscribe(self(), :ticker)
+    PubSub.subscribe(self(), :steam_flow_control)
     Logger.info(@log_prefix <> "Started with loops #{inspect(connected)}.")
     {:ok, state}
   end
@@ -239,6 +241,37 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
+  def handle_info({:steam_flow_control, :resume}, %State{} = state) do
+    if state.flow_control do
+      Logger.notice(@log_prefix <> "Flow control disabled.")
+    end
+
+    {:noreply, %State{state | flow_control: nil}}
+  end
+
+  @impl true
+  def handle_info({:steam_flow_control, :hold}, %State{} = state) do
+    new_flow_control = current_flow_limited_power(state)
+
+    if state.flow_control != new_flow_control do
+      Logger.notice(@log_prefix <> "Flow control: Holding at #{new_flow_control}.")
+    end
+
+    {:noreply, %State{state | flow_control: new_flow_control}}
+  end
+
+  @impl true
+  def handle_info({:steam_flow_control, :backoff}, %State{} = state) do
+    new_flow_control = current_flow_limited_power(state) - 1
+
+    if state.flow_control != new_flow_control do
+      Logger.notice(@log_prefix <> "Flow control: Backing off to #{new_flow_control}.")
+    end
+
+    {:noreply, %State{state | flow_control: new_flow_control}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
@@ -273,7 +306,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       turbine_count = Enum.count(old_turbines)
       total_power = axis_to_total_power(value, turbine_count)
 
-      case update_power_levels(old_turbines, total_power, boost_mode) do
+      case update_power_levels(old_turbines, total_power, boost_mode, state.flow_control) do
         {:ok, new_turbines} ->
           {axis, new_turbines}
 
@@ -290,7 +323,7 @@ defmodule AutoNuke.Operator.SteamFlow do
            turbines:
              turbines
              |> distribute_min_steam()
-             |> Enum.map(&Turbine.tick/1)
+             |> Enum.map(&Turbine.tick(&1, !is_nil(state.flow_control)))
        }}
     end)
   end
@@ -330,10 +363,12 @@ defmodule AutoNuke.Operator.SteamFlow do
     |> Kernel.+(@power_levels.first * count)
   end
 
-  defp update_power_levels(old_turbines, target_total, boost_mode) do
+  defp update_power_levels(old_turbines, target_total, boost_mode, flow_control) do
     power_levels = old_turbines |> Enum.map(&PowerLevel.new(&1, boost_mode))
     current_total = power_levels |> Enum.sum_by(& &1.power_level)
-    to_allocate = target_total - current_total
+
+    flow_control = flow_control || 9999
+    to_allocate = min(target_total, flow_control) - current_total
 
     new_power_levels = power_levels |> allocate_power(to_allocate)
 
@@ -353,8 +388,18 @@ defmodule AutoNuke.Operator.SteamFlow do
     new_total = new_power_levels |> Enum.sum_by(& &1.power_level)
 
     cond do
-      new_total == target_total -> {:ok, new_turbines}
-      new_total < target_total -> {:error, :at_max, new_total, new_turbines}
+      target_total > flow_control ->
+        Logger.warning(
+          @log_prefix <> "Flow control: Limiting power from #{target_total} to #{flow_control}."
+        )
+
+        {:error, :at_max, new_total, new_turbines}
+
+      new_total == target_total ->
+        {:ok, new_turbines}
+
+      new_total < target_total ->
+        {:error, :at_max, new_total, new_turbines}
     end
   end
 
@@ -433,5 +478,15 @@ defmodule AutoNuke.Operator.SteamFlow do
     remaining = (@min_steam - unmanaged_steam) |> max(0.0)
     per_turbine = remaining / count
     turbines |> Enum.map(&Turbine.set_min_steam(&1, per_turbine))
+  end
+
+  defp current_flow_limited_power(state) do
+    total_power = state.turbines |> Enum.sum_by(& &1.power_level)
+
+    if state.flow_control do
+      total_power |> min(state.flow_control)
+    else
+      total_power
+    end
   end
 end
