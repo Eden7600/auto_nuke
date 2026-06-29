@@ -99,7 +99,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     Logger.warning([
       @log_prefix,
       "Too much power: Maximum is ",
-      format_kw(lower * demand),
+      format_kw(upper * demand),
       ", pushing to ",
       format_kw(target * demand),
       "."
