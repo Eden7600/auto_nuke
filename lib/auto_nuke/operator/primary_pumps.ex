@@ -4,7 +4,7 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   require Logger
 
   defmodule State do
-    @enforce_keys [:pump_speed, :last_temp]
+    @enforce_keys [:pump_speed, :target_temp]
     defstruct(@enforce_keys)
   end
 
@@ -20,9 +20,10 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   # Scale pumps from min speed at @temp_min, to max speed at @temp_max.
   @temp_min 300
   @temp_max 400
-  # Apply a deadband of 0.7 to limit speed oscillation.
-  # So to get from 22 to 23 speed, you need to hit 22.7, not 22.5.
-  @speed_deadband 0.7
+  # Apply a deadband to limit oscillation.
+  # Calculated speed needs to differ from current speed by
+  # at least this much for any change to occur.
+  @speed_deadband 1.4
 
   @pumps API.Pumps.all_primary()
   @core API.Vessels.core_vessel()
@@ -44,10 +45,11 @@ defmodule AutoNuke.Operator.PrimaryPumps do
     state =
       %State{
         pump_speed: speed,
-        last_temp: temp
+        target_temp: temp
       }
 
     PubSub.subscribe(self(), :ticker)
+    PubSub.subscribe(self(), :core_temp)
     Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pumps at #{speed}.")
     {:ok, state}
   end
@@ -58,21 +60,27 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   end
 
   @impl true
+  def handle_info({:core_temp, t}, %State{} = state) do
+    Logger.debug("ct #{t}")
+    {:noreply, %State{state | target_temp: t}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    temp = get_verified_core_temp([state.last_temp])
-
+    temp = state.target_temp
     old = state.pump_speed
     new = temp_to_speed(temp, old)
+    Logger.debug("t #{temp} old #{old} new #{new}")
 
     if new != old do
       Logger.info(@log_prefix <> "Changing pump speeds from #{old} to #{new}.")
       set_pump_speeds(new)
     end
 
-    {:noreply, %State{state | pump_speed: new, last_temp: temp}}
+    {:noreply, %State{state | pump_speed: new}}
   end
 
   defp get_average_pump_speed do
@@ -92,18 +100,6 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   end
 
   defp get_temperature(), do: API.Vessels.get_temperature(@core)
-
-  # Avoid transients:
-  defp get_verified_core_temp(seen) do
-    temp = API.Vessels.get_temperature(@core)
-
-    if temp in seen do
-      temp
-    else
-      Process.sleep(20)
-      get_verified_core_temp([temp | seen])
-    end
-  end
 
   @temp_span @temp_max - @temp_min
   @pump_span @pump_speeds.last - @pump_speeds.first
