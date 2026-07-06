@@ -33,7 +33,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
     Startup.start_primary_circulation([loop], nil)
-    Startup.start_turbine([loop], Enum.count(loops) + 1)
+    Startup.start_turbine([loop])
     Startup.connect_to_grid([loop], false)
 
     UI.tablet("AutoNuke Remote Control")

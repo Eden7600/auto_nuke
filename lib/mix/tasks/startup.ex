@@ -7,9 +7,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.ControlAxis
+  alias AutoNuke.Smoother
 
   # Target PPM for boron injection:
-  @boron_target 3000
+  @boron_target 3300
   # How carefully to inject boron (higher = more):
   @boron_easing 3
   # At easing of 3, we start slowing down when boron PPM is
@@ -18,16 +19,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # and still safely stop at the target.
 
   # Slowly increase reactor to target temperature:
-  core_temp_range = AutoNuke.Operator.CoreTemp.temp_range()
   @startup_core_temp 320
   # Wait for this temperature before starting turbines:
-  @turbine_temp core_temp_range.first
+  @turbine_temp 300
   # Control MSCV to maintain this much pressure:
   @target_pressure 60
-  # Allow this range of MSCV settings based on loop count:
-  @mscv_range_1 5..20
-  @mscv_range_2 3..20
-  @mscv_range_3 2..20
+  # Allow this range of MSCV settings:
+  @mscv_range 5..20
 
   # Start primary pumps at this speed:
   @startup_primary_speed AutoNuke.Operator.PrimaryPumps.speed_range().first
@@ -220,7 +218,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 100, wait: false))
+    |> Enum.each(&UI.Valves.set(&1, 20, wait: false))
 
     UI.console("Condenser")
     API.Valves.smsi() |> UI.Valves.set(0, wait: false)
@@ -235,8 +233,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   end
 
   defp wait_before_load_fuel(loops) do
-    UI.console("Coolant System")
-
     UI.console("Pressurizer")
 
     UI.ProgressBar.wait(
@@ -247,7 +243,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
 
     if using_boron?() do
-      UI.console("Chemical Treatemnt")
+      UI.console("Chemical Treatment")
       target = @boron_target - 50
 
       UI.ProgressBar.wait(
@@ -278,7 +274,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 100, wait: true))
+    |> Enum.each(&UI.Valves.set(&1, 20, wait: true))
   end
 
   def enable_resistor_bank do
@@ -483,8 +479,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     )
   end
 
-  def start_turbine(loops, loop_count \\ nil) do
-    loop_count = loop_count || Enum.count(loops)
+  def start_turbine(loops) do
     UI.console("Drain & Vent Valves")
 
     loops
@@ -502,7 +497,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         steam_gen.mscv.name,
         "SET FOR #{@target_pressure} bar",
         fn -> Process.whereis(name) |> is_pid() end,
-        fn -> monitor_pressure(name, steam_gen, loop_count) end
+        fn -> monitor_pressure(name, steam_gen) end
       )
     end)
 
@@ -513,7 +508,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> Enum.each(&UI.Valves.set(&1, 0, wait: false))
   end
 
-  defp monitor_pressure(name, steam_gen, loop_count) do
+  defp monitor_pressure(name, steam_gen) do
     me = self()
 
     spawn_link(fn ->
@@ -521,16 +516,18 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       PubSub.subscribe(self(), :ticker)
       send(me, {:started, name})
 
+      smoother = Smoother.new(10)
+
       ControlAxis.new(
-        kp: -0.1,
-        ki: -0.0001,
-        kd: -0.01,
+        kp: -0.01,
+        ki: -0.0005,
+        kd: -0.001,
         deadzone: 0.5,
-        to_value_fn: &axis_to_mscv(loop_count, &1),
+        to_value_fn: &axis_to_mscv/1,
         offset: -1.0,
         initial_value: API.Valves.get_open_percent(steam_gen.mscv) |> round()
       )
-      |> pressure_loop(steam_gen)
+      |> pressure_loop(smoother, steam_gen)
     end)
 
     receive do
@@ -540,10 +537,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end
   end
 
-  defp pressure_loop(axis, steam_gen) do
+  defp pressure_loop(axis, smoother, steam_gen) do
     receive do
       {:tick, _} ->
-        case ControlAxis.step(axis, @target_pressure, API.SteamGen.get_pressure(steam_gen)) do
+        smoother = Smoother.add(smoother, API.SteamGen.get_pressure(steam_gen))
+
+        case ControlAxis.step(axis, @target_pressure, Smoother.extrapolate(smoother, 5)) do
           {:changed, axis, new, old} ->
             Logger.debug("Changing MSCV from #{old} to #{new}.")
             API.Valves.set_open_percent(steam_gen.mscv, new)
@@ -552,7 +551,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
           {:unchanged, axis, _old} ->
             axis
         end
-        |> pressure_loop(steam_gen)
+        |> pressure_loop(smoother, steam_gen)
     end
   end
 
@@ -649,10 +648,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
   defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
 
-  @mscv_span_1 (@mscv_range_1.last - @mscv_range_1.first) / 2
-  @mscv_span_2 (@mscv_range_2.last - @mscv_range_2.first) / 2
-  @mscv_span_3 (@mscv_range_3.last - @mscv_range_3.first) / 2
-  defp axis_to_mscv(1, output), do: round((output + 1.0) * @mscv_span_1 + @mscv_range_1.first)
-  defp axis_to_mscv(2, output), do: round((output + 1.0) * @mscv_span_2 + @mscv_range_2.first)
-  defp axis_to_mscv(3, output), do: round((output + 1.0) * @mscv_span_3 + @mscv_range_3.first)
+  @mscv_span (@mscv_range.last - @mscv_range.first) / 2
+  defp axis_to_mscv(output), do: round((output + 1.0) * @mscv_span + @mscv_range.first)
 end
