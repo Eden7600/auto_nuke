@@ -129,34 +129,25 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   def get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
 
-  defp calculate_dosing_rate(rods) when rods <= 50, do: 0
+  defp calculate_dosing_rate(rods) when rods <= 66, do: 0
 
   defp calculate_dosing_rate(rods) do
-    # Cube curve:
-    # - 0.4 g/min at 60%
-    # - 3.2 g/min at 70%
-    # - 10.8 g/min at 80%
-    # - 25.6 g/min at 90%
-    # - 50.0 g/min at 100%
-    (50 * ((rods - 50) / 50) ** 3)
+    # Cube curve from 0 g/min at 66% rods to 50 g/min at 100% rods:
+    (50 * ((rods - 66) / 34) ** 3)
     |> ceil()
     # Limit our rate to whatever rate will get us to 3500 ppm.
     |> min(@dosing_max_ppm - get_boron_ppm())
     |> max(0)
   end
 
-  defp calculate_filter_rate(rods) when rods >= 20, do: 0
+  defp calculate_filter_rate(rods) when rods >= 33, do: 0
 
   defp calculate_filter_rate(rods) do
-    # Square curve:
-    # - 6.25 at 15%
-    # - 25% at 10%
-    # - 56.25 at 5%
-    # - 100% at 0%
-    (100 * ((20 - rods) / 20) ** 2)
-    # Below 100 ppm, start throttling back.
-    |> min(get_boron_ppm())
+    # Square curve from 0% at 33% rods up to 100% at 0% rods:
+    (100 * ((33 - rods) / 33) ** 2)
     |> ceil()
+    # Below 100 ppm, start throttling back.
+    |> min(get_boron_ppm() |> floor())
     |> max(0)
     |> min(100)
   end
