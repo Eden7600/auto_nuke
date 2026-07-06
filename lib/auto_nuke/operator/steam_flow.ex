@@ -323,7 +323,7 @@ defmodule AutoNuke.Operator.SteamFlow do
            turbines:
              turbines
              |> distribute_min_steam()
-             |> Enum.map(&Turbine.tick(&1, !is_nil(state.flow_control)))
+             |> Enum.map(&Turbine.tick/1)
        }}
     end)
   end

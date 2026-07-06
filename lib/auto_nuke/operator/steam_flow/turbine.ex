@@ -27,12 +27,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # Allowed power levels:
   @power_levels 2..100
   def allowed_power_levels, do: @power_levels
-  # Keep pressure under 65 bar, or 75 bar if flow-controlled.
+  # Keep pressure under 65 bar.
   @max_pressure 65
-  @max_fc_pressure 75
   # If pressure is below 55 bar, we're starved for steam and shouldn't try to
   # push power level any higher.
   @min_pressure 55
+  # Target 60 bar — every 1 bar above that = +1 max steam we can pull immediately.
+  @ideal_pressure 60
+  @max_steam_per_bar 1.0
   # To avoid excessive flapping, if we're within 3 kg/min 
   # of min steam flow, disallow bypass decreases.
   @steam_lock_zone 3
@@ -44,6 +46,11 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   @pressure_history_size 10
   # Look ahead 5 more readings during power allocation:
   @pressure_lookahead 5
+
+  # I'm told that as long as MSCV and bypass add up to 11 or higher,
+  # we shouldn't have any risk of pressure excursions on the steam gens.
+  # Let's put that to the test.
+  @bypass_mscv_max_combined 11
 
   require Logger
   alias __MODULE__
@@ -113,14 +120,22 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         boost_mode
       )
       when is_boolean(boost_mode) do
-    if SteamGen.get_pressure(steam_gen) < @min_pressure do
-      current_power_level
+    pressure = SteamGen.get_pressure(steam_gen)
+
+    if pressure < @min_pressure do
+      current_power_level - 1
     else
+      excess =
+        (pressure - @ideal_pressure)
+        |> Kernel.*(@max_steam_per_bar)
+        |> round()
+        |> max(0)
+
       steam_gen
       |> SteamGen.get_outlet()
       |> Kernel./(10)
       |> round()
-      |> Kernel.+(1)
+      |> Kernel.+(1 + excess)
       |> limit_power_level(div(capacity, 10), boost_mode, steam_gen.vessel)
     end
   end
@@ -146,7 +161,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     Smoother.extrapolate(history, @pressure_lookahead)
   end
 
-  def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine, flow_controlled) do
+  def tick(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
     steam = SteamGen.get_outlet(steam_gen)
     pressure = SteamGen.get_pressure(steam_gen)
 
@@ -162,10 +177,14 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
       step_axis(
         turbine.pressure_axis,
         pressure,
-        if(flow_controlled, do: @max_fc_pressure, else: @max_pressure)
+        @max_pressure
       )
 
     old = turbine.bypass
+
+    max_bypass = (@bypass_mscv_max_combined - turbine.power_level) |> max(0)
+    pressure_bypass = min(pressure_bypass, max_bypass)
+    steam_bypass = min(steam_bypass, max_bypass)
 
     {new, reason} =
       cond do

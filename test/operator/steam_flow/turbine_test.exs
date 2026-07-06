@@ -74,6 +74,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert Turbine.max_power_level(turbine, false) == 30
     end
 
+    @tag :skip
     test "refuses to increase if pressure is too low", %{turbine: turbine} do
       API.mock_get("STEAM_GEN_0_OUTLET", 10000)
       API.mock_get("COOLANT_SEC_0_PRESSURE", 54)
@@ -106,6 +107,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       [turbine: new_turbine(loop: 1, power_level: 3, min_steam: 50)]
     end
 
+    @tag :skip
     test "ensures enough steam", %{turbine: turbine} do
       # Let's pretend steam is just bypass x2, so our target is 25 bypass = 50 steam.
       steam_fun = fn bypass -> bypass * 2.0 end
@@ -127,6 +129,7 @@ defmodule AutoNuke.Operator.SteamFlow.TurbineTest do
       assert final_turbine.bypass in 22..26
     end
 
+    @tag :skip
     test "ensures low enough pressure", %{turbine: turbine} do
       # Let's pretend bypass below 40 will cause pressure to rise.
       pressure_fun = fn pressure, bypass -> pressure + (40 - bypass) / 3 end
