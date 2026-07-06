@@ -110,6 +110,8 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   def current_ratio(%DT{demand_kwh: demand}, supply), do: supply / demand
 
+  def set_supplied_kwh(%DT{} = dt, kwh), do: %DT{dt | supplied_kwh: kwh}
+
   def tick(%DT{} = dt, current_supply) do
     old_ts = dt.timestamp
     new_ts = API.Misc.get_time_stamp()

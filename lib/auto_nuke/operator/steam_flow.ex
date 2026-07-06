@@ -132,6 +132,10 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :get_power_levels)
   end
 
+  def set_generated_mwh(mwh, pid \\ __MODULE__) do
+    GenServer.call(pid, {:set_generated_mwh, mwh})
+  end
+
   @impl true
   def init(nil) do
     connected = get_closed_breakers()
@@ -238,6 +242,13 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     Logger.notice(@log_prefix <> "Boost mode #{desc}.")
     {:reply, :ok, %State{state | boost_mode: expiry}}
+  end
+
+  @impl true
+  def handle_call({:set_generated_mwh, mwh}, _from, %State{demand_tracker: tracker} = state) do
+    tracker = tracker |> DemandTracker.set_supplied_kwh(mwh * 1000)
+    result = tracker |> DemandTracker.target_and_deadzone()
+    {:reply, result, %State{state | demand_tracker: tracker}}
   end
 
   @impl true
