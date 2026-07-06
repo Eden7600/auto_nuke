@@ -35,10 +35,6 @@ defmodule AutoNuke.Operator.ControlRods do
 
   def get_target(pid \\ __MODULE__), do: GenServer.call(pid, :get_target)
 
-  def set_target(target, pid \\ __MODULE__) when is_number(target) do
-    GenServer.call(pid, {:set_target, target + 0.0})
-  end
-
   def set_mode(mode, pid \\ __MODULE__) when mode in @modes do
     GenServer.call(pid, {:set_mode, mode})
   end
@@ -93,12 +89,6 @@ defmodule AutoNuke.Operator.ControlRods do
   @impl true
   def handle_call(:get_target, _from, %State{} = state) do
     {:reply, state.target, state}
-  end
-
-  @impl true
-  def handle_call({:set_target, t}, _from, %State{} = state) do
-    Logger.info(@log_prefix <> "Target changed from #{state.target}°C to #{t}°C.")
-    {:reply, :ok, %State{state | target: t}}
   end
 
   @impl true

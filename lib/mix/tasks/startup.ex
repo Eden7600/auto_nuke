@@ -6,8 +6,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   require Logger
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
-  alias AutoNuke.ControlAxis
-  alias AutoNuke.Smoother
+  alias AutoNuke.Operator, as: Op
 
   # Target PPM for boron injection:
   @boron_target 3300
@@ -18,17 +17,17 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  # Slowly increase reactor to target temperature:
-  @startup_core_temp 320
+  core_temp_min = AutoNuke.Operator.CoreTemp.temp_range().first
+
+  # Slowly increase target temperature to this:
+  @startup_core_temp core_temp_min + 5
   # Wait for this temperature before starting turbines:
-  @turbine_temp 300
-  # Control MSCV to maintain this much pressure:
-  @target_pressure 60
-  # Allow this range of MSCV settings:
-  @mscv_range 5..20
+  @turbine_temp core_temp_min
+  # Set MSCV to this value (and let CoreTemp handle pressure):
+  @startup_mscv 10
 
   # Start primary pumps at this speed:
-  @startup_primary_speed AutoNuke.Operator.PrimaryPumps.speed_range().first
+  @startup_primary_speed Op.PrimaryPumps.speed_range().first
   # Start cooling pumps at this speed:
   @startup_cooling_speed 50
   # Need at least this % in the retention tank before we start the vacuum pump:
@@ -63,7 +62,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     check_power_source()
     test_control_rods()
 
-    {:ok, _} = AutoNuke.Operator.CoreFill.start_link()
+    {:ok, _} = Op.CoreFill.start_link()
+    {:ok, _} = Op.PCSTFill.start_link()
     if using_boron?(), do: begin_injecting_boron()
     start_pressurizer()
     start_primary_circulation(loops, @startup_primary_speed)
@@ -72,31 +72,34 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     enable_resistor_bank()
 
     wait_before_load_fuel(loops)
-    {:ok, _} = AutoNuke.Operator.CondenserCooling.start_link()
+    {:ok, _} = Op.CondenserCooling.start_link()
     load_fuel()
 
     start_secondary_circulation(loops)
 
     loops
     |> Enum.each(fn loop ->
-      {:ok, _} = AutoNuke.Operator.SecondaryFill.start_link(loop: loop)
+      {:ok, _} = Op.SecondaryFill.start_link(loop: loop)
     end)
 
-    {:ok, _} = AutoNuke.Operator.CondenserFill.start_link()
-    {:ok, _} = AutoNuke.Operator.ControlRods.start_link(mode: :direct)
+    {:ok, _} = Op.CondenserFill.start_link()
+    {:ok, _} = Op.CoreTemp.start_link()
+    {:ok, _} = Op.PrimaryPumps.start_link()
+    {:ok, _} = Op.ControlRods.start_link(mode: :direct)
     achieve_criticality()
-    {:ok, _} = AutoNuke.Operator.PrimaryPumps.start_link()
 
     wait_for_min_steam()
     start_vacuum_pump()
-    {:ok, _} = AutoNuke.Operator.VacuumTank.start_link()
+    {:ok, _} = Op.VacuumTank.start_link()
 
     wait_for_temperature(@turbine_temp)
+    Op.ControlRods.set_mode(:predictive)
+    Op.CoreTemp.clear_override()
+
     request_connection()
     start_turbine(loops)
     connect_to_grid(loops)
-    {:ok, _} = AutoNuke.Operator.SteamFlow.start_link()
-    {:ok, _} = AutoNuke.Operator.CoreTemp.start_link()
+    {:ok, _} = Op.SteamFlow.start_link()
 
     UI.console("ALL")
     UI.wait("Operator", "TAKE OVER", fn -> false end)
@@ -386,7 +389,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
           (old + @core_temp_increase)
           |> min(get_core_temp() + @core_temp_max_delta)
 
-        AutoNuke.Operator.ControlRods.set_target(new)
+        Op.CoreTemp.set_override(new)
         increase_temp_target_loop(new, max)
     end
   end
@@ -489,70 +492,14 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.console("Steam Generator")
 
     loops
-    |> Enum.each(fn loop ->
-      steam_gen = API.SteamGen.for_loop(loop)
-      name = :"mscv_#{loop}"
-
-      UI.set_wait(
-        steam_gen.mscv.name,
-        "SET FOR #{@target_pressure} bar",
-        fn -> Process.whereis(name) |> is_pid() end,
-        fn -> monitor_pressure(name, steam_gen) end
-      )
-    end)
+    |> Enum.map(&API.Valves.mscv/1)
+    |> Enum.each(&UI.Valves.set(&1, @startup_mscv, wait: false))
 
     UI.console("Generation & Distribution")
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
     |> Enum.each(&UI.Valves.set(&1, 0, wait: false))
-  end
-
-  defp monitor_pressure(name, steam_gen) do
-    me = self()
-
-    spawn_link(fn ->
-      Process.register(self(), name)
-      PubSub.subscribe(self(), :ticker)
-      send(me, {:started, name})
-
-      smoother = Smoother.new(10)
-
-      ControlAxis.new(
-        kp: -0.01,
-        ki: -0.0005,
-        kd: -0.001,
-        deadzone: 0.5,
-        to_value_fn: &axis_to_mscv/1,
-        offset: -1.0,
-        initial_value: API.Valves.get_open_percent(steam_gen.mscv) |> round()
-      )
-      |> pressure_loop(smoother, steam_gen)
-    end)
-
-    receive do
-      {:started, ^name} -> :ok
-    after
-      5000 -> raise "No word from monitor_pressure process"
-    end
-  end
-
-  defp pressure_loop(axis, smoother, steam_gen) do
-    receive do
-      {:tick, _} ->
-        smoother = Smoother.add(smoother, API.SteamGen.get_pressure(steam_gen))
-
-        case ControlAxis.step(axis, @target_pressure, Smoother.extrapolate(smoother, 5)) do
-          {:changed, axis, new, old} ->
-            Logger.debug("Changing MSCV from #{old} to #{new}.")
-            API.Valves.set_open_percent(steam_gen.mscv, new)
-            axis
-
-          {:unchanged, axis, _old} ->
-            axis
-        end
-        |> pressure_loop(smoother, steam_gen)
-    end
   end
 
   def connect_to_grid(loops, permission \\ true) do
@@ -647,7 +594,4 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
   defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
-
-  @mscv_span (@mscv_range.last - @mscv_range.first) / 2
-  defp axis_to_mscv(output), do: round((output + 1.0) * @mscv_span + @mscv_range.first)
 end
