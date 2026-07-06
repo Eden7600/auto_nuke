@@ -61,7 +61,6 @@ defmodule AutoNuke.Operator.PrimaryPumps do
 
   @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
-    Logger.debug("ct #{t}")
     {:noreply, %State{state | target_temp: t}}
   end
 
@@ -73,7 +72,6 @@ defmodule AutoNuke.Operator.PrimaryPumps do
     temp = state.target_temp
     old = state.pump_speed
     new = temp_to_speed(temp, old)
-    Logger.debug("t #{temp} old #{old} new #{new}")
 
     if new != old do
       Logger.info(@log_prefix <> "Changing pump speeds from #{old} to #{new}.")
