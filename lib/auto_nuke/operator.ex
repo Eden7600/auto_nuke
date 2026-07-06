@@ -10,11 +10,13 @@ defmodule AutoNuke.Operator do
 
   # Auxiliary concerns:
   def assigned_tick(Op.CoreFill), do: 0
+  def assigned_tick(Op.PCSTFill), do: 0
   def assigned_tick(Op.SecondaryFill), do: 1
   def assigned_tick(Op.VacuumTank), do: 2
   def assigned_tick(Op.CondenserFill), do: 3
   def assigned_tick(Op.CondenserCooling), do: 4
 
+  def assigned_tick_modulo(Op.PCSTFill), do: 25
   def assigned_tick_modulo(_), do: 5
 
   defmacro __using__(_) do

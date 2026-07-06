@@ -1,4 +1,4 @@
-defmodule AutoNuke.Operator.CoreFill do
+defmodule AutoNuke.Operator.PCSTFill do
   use GenServer
   use AutoNuke.Operator
   require Logger
@@ -12,14 +12,14 @@ defmodule AutoNuke.Operator.CoreFill do
   alias __MODULE__.{FreightPump, DrainValve}
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
-  @core API.Vessels.core_vessel()
+  @pcst API.Vessels.primary_cst()
 
-  # Below 2450, run the pump to bring water up to 2470.
-  @min_fill 2450
-  @min_fill_stop 2470
-  # Above 2495, open the drain valve to get water down to 2480.
-  @max_fill 2495
-  @max_fill_stop 2480
+  # Below 50%, run the pump to bring water up to 60%.
+  @min_fill 50
+  @min_fill_stop 60
+  # Above 90%, open the drain valve to get water down to 80%.
+  @max_fill 90
+  @max_fill_stop 80
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -30,17 +30,17 @@ defmodule AutoNuke.Operator.CoreFill do
 
   @impl true
   def init(_) do
-    fill_level = @core |> API.Vessels.get_fill_gauge()
+    fill_percent = @pcst |> API.Vessels.get_fill_percent()
 
     state = %State{
-      last_fill: fill_level,
+      last_fill: fill_percent,
       last_status: nil,
       freight_pump: FreightPump.new(),
       drain_valve: DrainValve.new()
     }
 
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Started with fill level #{fill_level} m³.")
+    Logger.info(@log_prefix <> "Started with fill level #{Float.round(fill_percent, 2)}%.")
     {:ok, state}
   end
 
@@ -49,7 +49,7 @@ defmodule AutoNuke.Operator.CoreFill do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
-    fill = @core |> API.Vessels.get_fill_gauge()
+    fill = @pcst |> API.Vessels.get_fill_percent()
     last = state.last_status
 
     status =

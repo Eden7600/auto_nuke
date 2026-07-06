@@ -26,4 +26,7 @@ defmodule AutoNuke.Operator.CoreFill.FreightPump do
     Pumps.set_switch(@freight_pump, false)
     %FP{started: false}
   end
+
+  def shutdown(%FP{started: false}), do: :noop
+  def shutdown(%FP{started: true}), do: Pumps.set_switch(@freight_pump, false)
 end

@@ -1,4 +1,4 @@
-defmodule AutoNuke.Operator.CoreFill.DrainValve do
+defmodule AutoNuke.Operator.PCSTFill.DrainValve do
   @enforce_keys [:open, :actuator]
   defstruct(@enforce_keys)
 
@@ -7,7 +7,7 @@ defmodule AutoNuke.Operator.CoreFill.DrainValve do
   alias AutoNuke.API.Valves
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
-  @drain_valve Valves.rcv()
+  @drain_valve Valves.cst_drain()
 
   def new,
     do: %DV{
@@ -22,7 +22,7 @@ defmodule AutoNuke.Operator.CoreFill.DrainValve do
   def open(%DV{actuator: :open} = dv, _), do: dv
 
   def open(%DV{}, fill) do
-    Logger.info(@log_prefix <> "Fill at #{ceil(fill)} m³ and rising, opening drain.")
+    Logger.info(@log_prefix <> "Fill at #{Float.round(fill, 2)}% and rising, opening drain.")
     Valves.set_actuator(@drain_valve, "OPEN")
     %DV{open: true, actuator: :open}
   end
@@ -33,7 +33,8 @@ defmodule AutoNuke.Operator.CoreFill.DrainValve do
     open = Valves.get_open_percent(@drain_valve)
 
     Logger.info(
-      @log_prefix <> "Fill at #{ceil(fill)} m³ and dropping, holding drain at #{round(open)}%."
+      @log_prefix <>
+        "Fill at #{Float.round(fill, 2)}% and dropping, holding drain at #{round(open)}%."
     )
 
     Valves.set_actuator(@drain_valve, "OFF")
@@ -53,7 +54,7 @@ defmodule AutoNuke.Operator.CoreFill.DrainValve do
   end
 
   def close(%DV{open: true}, fill) do
-    Logger.info(@log_prefix <> "Fill at #{ceil(fill)} m³, closing drain.")
+    Logger.info(@log_prefix <> "Fill at #{Float.round(fill, 2)}%, closing drain.")
     Valves.set_actuator(@drain_valve, "CLOSE")
     %DV{open: true, actuator: :close}
   end
