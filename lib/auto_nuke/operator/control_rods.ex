@@ -4,7 +4,7 @@ defmodule AutoNuke.Operator.ControlRods do
   require Logger
 
   defmodule State do
-    @enforce_keys [:banks, :target, :axis, :mode, :last_temp, :temp_history]
+    @enforce_keys [:banks, :target, :axis, :mode, :last_temp, :last_rods, :temp_history]
     defstruct(@enforce_keys)
   end
 
@@ -14,6 +14,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @core API.Vessels.core_vessel()
+  @all_banks 1..9
 
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
@@ -44,10 +45,15 @@ defmodule AutoNuke.Operator.ControlRods do
 
   def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
 
+  def add_bank(bank, pid \\ __MODULE__) when bank in @all_banks,
+    do: GenServer.call(pid, {:add_bank, bank})
+
+  def remove_bank(bank, pid \\ __MODULE__) when bank in @all_banks,
+    do: GenServer.call(pid, {:remove_bank, bank})
+
   @impl true
   def init({target, mode}) when (is_number(target) or is_nil(target)) and mode in @modes do
-    {banks, rods} = get_banks_and_rods()
-    bank_count = Enum.count(banks)
+    {banks, rods} = get_installed_banks_and_rods()
 
     temp = get_verified_core_temp([])
     target = target || temp
@@ -57,9 +63,9 @@ defmodule AutoNuke.Operator.ControlRods do
         kp: 0.05,
         ki: 0.005,
         deadzone: 0.1,
-        to_value_fn: fn out -> axis_to_rods(out, bank_count) end,
+        to_value_fn: &Function.identity/1,
         offset: rods |> rods_to_axis(),
-        initial_value: rods
+        initial_value: rods |> rods_to_axis()
       )
 
     state =
@@ -69,6 +75,7 @@ defmodule AutoNuke.Operator.ControlRods do
         axis: axis,
         mode: mode,
         last_temp: temp,
+        last_rods: rods,
         temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp)
       }
 
@@ -102,11 +109,54 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @impl true
   def handle_call(:get_rods, _from, %State{} = state) do
-    banks_and_rods =
-      state.banks
-      |> Enum.zip(state.banks |> get_bank_rods())
-
+    banks_and_rods = Enum.zip(state.banks, state.last_rods)
     {:reply, banks_and_rods, state}
+  end
+
+  @impl true
+  def handle_call({:add_bank, bank}, _from, %State{} = state) do
+    bank_rods = maybe_get_bank_rods(bank)
+
+    cond do
+      bank in state.banks ->
+        {:reply, {:error, :already_managed}, state}
+
+      is_nil(bank_rods) ->
+        {:reply, {:error, :not_installed}, state}
+
+      true ->
+        {banks, rods} =
+          Enum.zip(
+            [bank | state.banks],
+            [bank_rods | state.last_rods]
+          )
+          |> Enum.sort()
+          |> Enum.unzip()
+
+        axis = state.axis |> ControlAxis.clamp(rods_to_axis(rods))
+
+        {:reply, :ok, %State{state | banks: banks, last_rods: rods, axis: axis}}
+    end
+  end
+
+  @impl true
+  def handle_call({:remove_bank, bank}, _from, %State{} = state) do
+    if bank in state.banks do
+      {banks, rods} =
+        Enum.zip(state.banks, state.last_rods)
+        |> Enum.reject(fn {b, _} -> b == bank end)
+        |> Enum.unzip()
+
+      {:reply, :ok, %State{state | banks: banks, last_rods: rods}}
+    else
+      {:reply, {:error, :not_managed}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:set_mode, mode}, _from, %State{} = state) when mode in @modes do
+    Logger.info(@log_prefix <> "Mode changed from '#{state.mode}' to '#{mode}'.")
+    {:reply, :ok, %State{state | mode: mode}}
   end
 
   @impl true
@@ -129,19 +179,22 @@ defmodule AutoNuke.Operator.ControlRods do
       end
 
     case ControlAxis.step(state.axis, state.target, measurement) do
-      {:changed, axis, new, old} ->
-        set_bank_rods(state.banks, old, new, current_temp, state.target)
-        maybe_clamp(state.banks, axis, new)
-
-      {:unchanged, axis, _old_value} ->
-        axis
+      {:changed, axis, new, _old} -> {new, axis}
+      {:unchanged, axis, old} -> {old, axis}
     end
-    |> then(fn %ControlAxis{} = axis ->
+    |> then(fn {value, %ControlAxis{} = axis} ->
+      new_rods = axis_to_rods(value, Enum.count(state.banks))
+
+      calculate_rod_changes(state.banks, state.last_rods, new_rods)
+      |> log_rod_changes(current_temp, state.target)
+      |> set_bank_rods()
+
       {:noreply,
        %State{
          state
-         | axis: axis,
+         | axis: maybe_clamp(axis, state.banks, new_rods),
            last_temp: current_temp,
+           last_rods: new_rods,
            temp_history: history
        }}
     end)
@@ -161,36 +214,37 @@ defmodule AutoNuke.Operator.ControlRods do
     end
   end
 
-  defp get_banks_and_rods do
-    1..9
-    |> Enum.map(fn n -> {n, API.get_float_or_nil("ROD_BANK_POS_#{n - 1}_ACTUAL")} end)
+  defp get_installed_banks_and_rods do
+    @all_banks
+    |> Enum.map(fn b ->
+      {b, maybe_get_bank_rods(b)}
+    end)
     |> Enum.reject(fn {_, v} -> is_nil(v) end)
     |> Enum.unzip()
   end
 
-  defp get_bank_rods(banks) do
-    banks
-    |> Enum.map(fn n -> API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL") end)
+  defp get_bank_rods(n), do: API.get_float("ROD_BANK_POS_#{n - 1}_ACTUAL")
+  defp maybe_get_bank_rods(n), do: API.get_float_or_nil("ROD_BANK_POS_#{n - 1}_ACTUAL")
+
+  defp calculate_rod_changes(banks, old_rods, new_rods) do
+    Enum.zip([banks, old_rods, new_rods])
+    |> Enum.filter(fn
+      {_bank, same, same} -> false
+      {_bank, _old, _new} -> true
+    end)
   end
 
-  defp set_bank_rods(banks, old_rods, new_rods, current_temp, target_temp) do
-    Enum.zip_with([banks, old_rods, new_rods], fn
-      [_bank, same, same] ->
-        nil
+  defp log_rod_changes([], _, _), do: []
 
-      [bank, _old, new] ->
-        API.put("ROD_BANK_POS_#{bank - 1}_ORDERED", new)
-        {bank, new}
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.group_by(fn {_bank, rods} -> rods end)
-    |> Enum.map(fn {rods, pairs} ->
-      {rods,
+  defp log_rod_changes(rod_changes, current_temp, target_temp) do
+    rod_changes
+    |> Enum.group_by(fn {_bank, _old, new} -> new end)
+    |> Enum.map(fn {value, pairs} ->
+      {value,
        pairs
-       |> Enum.map(fn {bank, _rods} -> bank end)
-       |> Enum.sort()}
+       |> Enum.map(fn {bank, _old, _new} -> bank end)}
     end)
-    |> Enum.sort_by(fn {_key, [head | _rest]} -> head end)
+    |> Enum.sort_by(fn {_key, [first | _rest]} -> first end)
     |> Enum.map(fn {rods, banks} ->
       "#{rods}% (#{Enum.join(banks, "+")})"
     end)
@@ -203,6 +257,15 @@ defmodule AutoNuke.Operator.ControlRods do
         desc,
         "."
       ])
+    end)
+
+    rod_changes
+  end
+
+  defp set_bank_rods(rod_changes) do
+    rod_changes
+    |> Enum.each(fn {bank, _old, new} ->
+      API.put("ROD_BANK_POS_#{bank - 1}_ORDERED", new)
     end)
   end
 
@@ -225,12 +288,12 @@ defmodule AutoNuke.Operator.ControlRods do
     end)
   end
 
-  defp maybe_clamp(banks, axis, ordered) do
-    actual = get_bank_rods(banks) |> Statistex.average()
+  defp maybe_clamp(axis, banks, new_rods) do
+    ordered = new_rods |> Statistex.average()
+    actual = banks |> Enum.map(&get_bank_rods/1) |> Statistex.average()
+
     min_rods = actual - @rods_clamping
     max_rods = actual + @rods_clamping
-
-    ordered = ordered |> Statistex.average()
 
     cond do
       # We're asking for too much rods at once, clamp down.
@@ -243,8 +306,7 @@ defmodule AutoNuke.Operator.ControlRods do
       {direction, bounds} ->
         Logger.debug(@log_prefix <> "Clamping #{direction} to #{Float.round(bounds, 1)}%.")
         output = bounds |> rods_to_axis()
-        value = output |> axis_to_rods(Enum.count(banks))
-        axis |> ControlAxis.clamp(output, value)
+        axis |> ControlAxis.clamp(output)
 
       :as_is ->
         axis
