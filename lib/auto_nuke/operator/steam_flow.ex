@@ -142,7 +142,8 @@ defmodule AutoNuke.Operator.SteamFlow do
     count = Enum.count(connected)
 
     turbines = connected |> Enum.map(&Turbine.new/1)
-    initial = turbines |> Enum.sum_by(& &1.power_level) |> total_power_to_axis(count)
+    total_power = turbines |> Enum.sum_by(& &1.power_level)
+    initial = total_power |> total_power_to_axis(count)
 
     axis =
       ControlAxis.new(
@@ -162,7 +163,11 @@ defmodule AutoNuke.Operator.SteamFlow do
 
     PubSub.subscribe(self(), :ticker)
     PubSub.subscribe(self(), :steam_flow_control)
-    Logger.info(@log_prefix <> "Started with loops #{inspect(connected)}.")
+
+    Logger.info(
+      @log_prefix <> "Started with loops #{inspect(connected)} at total power #{total_power}."
+    )
+
     {:ok, state}
   end
 

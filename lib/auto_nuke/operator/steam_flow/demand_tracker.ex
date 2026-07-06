@@ -67,7 +67,17 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
         ideal
       else
         push_into_range(ideal, lower_ratio, upper_ratio, demand)
-        |> min(hard_cap)
+      end
+
+    target =
+      if target > hard_cap do
+        Logger.warning(
+          "Resistors enabled: Hard-capped from #{round(target * 100)}% to #{round(hard_cap * 100)}%."
+        )
+
+        hard_cap
+      else
+        target
       end
 
     upper_deadzone = (upper_ratio - target) |> min(@max_deadzone)
