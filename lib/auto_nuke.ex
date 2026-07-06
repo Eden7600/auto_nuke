@@ -10,7 +10,13 @@ defmodule AutoNuke do
         base_children() ++ automation_children()
       end
 
-    opts = [strategy: :one_for_one, name: AutoNuke.Supervisor]
+    opts = [
+      strategy: :one_for_one,
+      max_restarts: 100,
+      max_seconds: 1,
+      name: AutoNuke.Supervisor
+    ]
+
     Supervisor.start_link(children, opts)
   end
 
