@@ -40,7 +40,7 @@ defmodule AutoNuke.API.Pumps do
       valve_panel_key: "BC_#{loop - 1}_GENERADOR_CIRCULACION"
     }
 
-  def all_secondary, do: 1..3 |> Enum.map(&primary/1)
+  def all_secondary, do: 1..3 |> Enum.map(&secondary/1)
 
   def condenser_cooling,
     do: %Pump{
@@ -83,6 +83,12 @@ defmodule AutoNuke.API.Pumps do
       active_key: "FREIGHT_PUMP_FEEDWATER_ACTIVE",
       switch_key: "FREIGHT_PUMP_FEEDWATER_SWITCH",
       valve_panel_key: "BC_0_REFRIGERANTE_CARGA"
+    }
+
+  def core_pool,
+    do: %Pump{
+      name: "Core Pool Pump",
+      valve_panel_key: "BC_2_NUCLEO_CARGA"
     }
 
   def transfer,

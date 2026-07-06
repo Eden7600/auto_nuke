@@ -264,6 +264,7 @@ defmodule AutoNuke.API.Valves do
       valve_panel_key: "Core_Valve_02"
     }
 
+  # Rinse tank fill valve:
   def valve_m01,
     do: %ManualValve{
       name: "Valve M01",
@@ -272,6 +273,7 @@ defmodule AutoNuke.API.Valves do
       valve_panel_key: "Valve_Q_TANQUE_AGUA"
     }
 
+  # Core pool fill valve:
   def valve_m02,
     do: %ManualValve{
       name: "Valve M02",
@@ -280,6 +282,7 @@ defmodule AutoNuke.API.Valves do
       valve_panel_key: "Valve_Q_TANQUE_AGUA_CORE_EXTERNO"
     }
 
+  # Primary CST fill valve:
   def valve_m03,
     do: %ManualValve{
       name: "Valve M03",
