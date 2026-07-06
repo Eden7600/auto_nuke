@@ -34,11 +34,12 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
 
   defp fill_or_empty(target) when target >= 0.0 and target <= 100.0 do
     UI.init()
+    fill_percent = API.Vessels.get_fill_percent(@core_pool)
 
-    if target < API.Vessels.get_fill_percent(@core_pool) do
-      empty(target)
-    else
-      fill_loop(target)
+    cond do
+      target < fill_percent -> empty(target)
+      target > fill_percent -> fill_loop(target)
+      target == fill_percent -> UI.success("Target already reached.")
     end
   end
 
