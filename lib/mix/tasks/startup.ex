@@ -17,12 +17,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # and still safely stop at the target.
 
   # Slowly increase target temperature to this:
-  @core_temp_min AutoNuke.Operator.CoreTemp.temp_range().first
+  @core_temp_min 320
   # Wait for this temperature before starting turbines:
-  @turbine_temp @core_temp_min
-  # Prior to turbine startup, set bypass to this value:
-  @startup_bypass 15
-  # Set MSCV to this value (and let CoreTemp handle pressure):
+  @turbine_temp 300
+  # Prior to turbine startup, set bypass to max, to fill the retention tank quickly.
+  @startup_bypass 100
+  # To start turbines, set MSCV to this value while we close the bypass.
+  # Once that's done, SteamFlow will take over MSCV and bypass control.
   @startup_mscv 10
 
   # Start primary pumps at this speed:
@@ -68,7 +69,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     start_primary_circulation(loops, @startup_primary_speed)
     start_condenser()
     open_steam_valves(loops)
-    enable_resistor_bank()
+    capacity = enable_resistor_bank()
 
     wait_before_load_fuel(loops)
     {:ok, _} = Op.CondenserCooling.start_link()
@@ -95,8 +96,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     request_connection()
     start_turbine(loops)
+
+    {:ok, _} = Op.SteamFlow.start_link(loops: loops, override: {capacity / 3, :mw})
+    send(:core_temp_override, :exit)
+
     connect_to_grid(loops)
-    {:ok, _} = Op.SteamFlow.start_link()
+    Op.SteamFlow.set_target_override_percent(100)
 
     UI.console("ALL")
     UI.wait("Operator", "TAKE OVER", fn -> false end)
@@ -308,6 +313,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     if capacity > 0 do
       UI.success("Resistor Bank Capacity: #{capacity} MW")
+      capacity
     else
       raise "No resistor bank capacity, cannot proceed with startup."
     end
@@ -353,7 +359,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     spawn_link(fn ->
       # Ensure only one:
-      Process.register(self(), :temp_target)
+      Process.register(self(), :core_temp_override)
       PubSub.subscribe(self(), :ticker)
 
       start_temp =
@@ -382,17 +388,23 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       {:tick, _} ->
         temp = get_core_temp()
 
-        if temp > @core_temp_min do
-          Op.CoreTemp.clear_override()
+        if temp > @core_temp_min - 5 do
+          Op.CoreTemp.set_override(@core_temp_min, :never)
           Op.ControlRods.set_mode(:predictive)
+          PubSub.unsubscribe(self(), :ticker)
+          increase_temp_target_loop(@core_temp_min)
         else
           new =
             (old + @core_temp_increase)
             |> min(temp + @core_temp_max_delta)
 
-          Op.CoreTemp.set_override(new)
+          Op.CoreTemp.set_override(new, :never)
           increase_temp_target_loop(new)
         end
+
+      :exit ->
+        Op.CoreTemp.clear_override()
+        Op.ControlRods.set_mode(:predictive)
     end
   end
 
@@ -501,7 +513,11 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 0, wait: false))
+    |> Enum.each(&API.Valves.set_open_percent(&1, 0))
+
+    loops
+    |> Enum.map(&API.Valves.turbine_bypass/1)
+    |> Enum.each(&UI.Valves.set(&1, 0, wait: true))
   end
 
   def connect_to_grid(loops, permission \\ true) do
