@@ -24,11 +24,10 @@ defmodule AutoNuke.Operator.ControlRods do
   @temp_lookahead 5
 
   @modes [:predictive, :direct]
-  @default_mode :predictive
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
-    {mode, opts} = Keyword.pop(opts, :mode, @default_mode)
+    {mode, opts} = Keyword.pop(opts, :mode)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, {target, mode}, opts)
   end
@@ -48,8 +47,14 @@ defmodule AutoNuke.Operator.ControlRods do
     do: GenServer.call(pid, {:remove_bank, bank})
 
   @impl true
-  def operator_init({target, mode}) when (is_number(target) or is_nil(target)) and mode in @modes do
+  def operator_init({target, mode}) when is_number(target) or is_nil(target) do
     {banks, rods} = get_installed_banks_and_rods()
+
+    mode =
+      case mode do
+        nil -> if Enum.count(banks) >= 3, do: :predictive, else: :direct
+        m when m in @modes -> m
+      end
 
     temp = get_verified_core_temp([])
     target = target || temp
@@ -78,10 +83,13 @@ defmodule AutoNuke.Operator.ControlRods do
     PubSub.subscribe(self(), :ticker)
     PubSub.subscribe(self(), :core_temp)
 
-    Logger.info(
-      @log_prefix <>
-        "Started with core at #{temp}°C, target #{target}°C, rods at #{inspect(rods)}."
-    )
+    Logger.info([
+      @log_prefix,
+      "Started in #{mode} mode",
+      " with core at #{temp}°C,",
+      " target #{target}°C,",
+      " rods at #{inspect(rods)}."
+    ])
 
     {:ok, state}
   end
