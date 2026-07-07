@@ -4,7 +4,8 @@ Automation to run a simulated nuclear power plant in [Nucleares](https://store.s
 
 ## Installation & Usage
 
-- Run `mix deps.get`. 
+- Install [Elixir](https://elixir-lang.org/install.html).
+- Run `mix deps.get` to fetch dependencies.
 - Start your Nucleares game and enable the webserver.
 - Edit `config/dev.exs` to point to your Nucleares webserver.
   - You can run the game and the `AutoNuke` client on different computers, as long as the client can reach the game.
@@ -48,6 +49,12 @@ Once you run `./start.sh`, the `AutoNuke` operators will take over and begin aut
     - This typically happens when boron is being added.
   - Pumps in more coolant if the core is underfilled.
     - This most typically happens at initial startup, when the primary coolant pipes are empty and must be filled before any coolant can be returned to the core.
+- [`PCSTFill`](lib/auto_nuke/operators/pcst_fill.ex) - Maintains fill level in the Primary Coolant Storage Tank
+  - This is to ensure `CoreFill` always has somewhere to pump from / drain into.
+  - Opens the drain valve if the tank is overfilled.
+    - This typically happens when the core is being drained (into this tank).
+  - Pumps in more coolant if the core is underfilled.
+    - Not very common, but can happen if you underfilled it at the start of a non-ready game.
 - [`SecondaryFill`](lib/auto_nuke/operators/secondary_fill.ex) - Maintains fill level in each steam generator.
   - Primarily targets the "proper" pump speed, which is based on capacity + steam outlet.
     - At the start of the game, this is half the steam outlet, e.g. 50 kg/min = 25% pump speed.
