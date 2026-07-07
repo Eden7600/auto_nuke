@@ -28,6 +28,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     hard_cap: 1.02
   }
 
+  @min_deadzone 0.01
   @max_deadzone 0.5
 
   def new do
@@ -80,11 +81,15 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
         target
       end
 
-    upper_deadzone = (upper_ratio - target) |> min(@max_deadzone)
-    lower_deadzone = (target - lower_ratio) |> min(@max_deadzone)
+    upper_deadzone = (upper_ratio - target) |> clamp_deadzone()
+    lower_deadzone = (target - lower_ratio) |> clamp_deadzone()
 
     {target, {upper_deadzone, lower_deadzone}}
   end
+
+  defp clamp_deadzone(dz) when dz > @max_deadzone, do: @max_deadzone
+  defp clamp_deadzone(dz) when dz < @min_deadzone, do: @min_deadzone
+  defp clamp_deadzone(dz), do: dz
 
   defp push_into_range(ideal, lower, upper, demand) when ideal < lower do
     # Push 10% above lower, or halfway into the range, whichever is less.

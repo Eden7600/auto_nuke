@@ -88,7 +88,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   @power_levels Turbine.allowed_power_levels()
   @power_level_span (Range.size(@power_levels) - 1) / 2
   # Ensure that all turbines produce at least 50 kg/min of steam between them.
-  @min_steam 50
+  @min_steam 55
 
   def start_link(opts \\ []) do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
