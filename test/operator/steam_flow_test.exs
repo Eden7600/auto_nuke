@@ -278,7 +278,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert total_power(pid) == 12
 
       # Tick 3, we override the target to 130%:
-      SteamFlow.set_target_override(130, :never, pid)
+      SteamFlow.set_target_override_percent(130, :never, pid)
       mock_power.()
       send(pid, {:tick, Enum.random(@tick)})
       assert total_power(pid) > 12
@@ -614,20 +614,22 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     {turbine3, opts} = Keyword.pop(opts, :turbine3, [])
     unless Enum.empty?(opts), do: raise("Unknown options: #{inspect(opts)}")
 
-    [turbine1, turbine2, turbine3]
-    |> Enum.with_index(1)
-    |> Enum.each(fn
-      {false, loop} ->
-        API.mock_get("GENERATOR_#{loop - 1}_BREAKER", "True")
+    loops =
+      [turbine1, turbine2, turbine3]
+      |> Enum.with_index(1)
+      |> Enum.map(fn
+        {false, _loop} ->
+          nil
 
-      {t_opts, loop} when is_list(t_opts) ->
-        API.mock_get("GENERATOR_#{loop - 1}_BREAKER", "False")
+        {t_opts, loop} when is_list(t_opts) ->
+          t_opts
+          |> Keyword.put(:mock_only, true)
+          |> Keyword.put(:loop, loop)
+          |> TurbineFactory.create()
 
-        t_opts
-        |> Keyword.put(:mock_only, true)
-        |> Keyword.put(:loop, loop)
-        |> TurbineFactory.create()
-    end)
+          loop
+      end)
+      |> Enum.reject(&is_nil/1)
 
     # These are fake, only used for startup.
     # Actual time and demand will be set by `demand_tracker_mocks/1` later.
@@ -640,6 +642,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       start_link_supervised!(
         {MockGenServer,
          module: SteamFlow,
+         init_arg: {loops, nil},
          before_init: fn ->
            API.register_alias(self(), test_pid)
          end}

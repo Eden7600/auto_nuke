@@ -11,7 +11,7 @@ defmodule AutoNuke.Operator.SteamFlow do
     # Give us the average of the last 5 ticks of power generation:
     @supply_smoothing 5
 
-    @enforce_keys [:axis, :turbines, :demand_tracker]
+    @enforce_keys [:axis, :turbines, :demand_tracker, :target_override]
     defstruct(
       axis: nil,
       turbines: nil,
@@ -91,8 +91,10 @@ defmodule AutoNuke.Operator.SteamFlow do
   @min_steam 50
 
   def start_link(opts \\ []) do
+    {loops, opts} = Keyword.pop(opts, :loops, :detect)
+    {override, opts} = Keyword.pop(opts, :override)
     opts = Keyword.put_new(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, nil, opts)
+    GenServer.start_link(__MODULE__, {loops, override}, opts)
   end
 
   def add_loop(loop, pid \\ __MODULE__) when loop in @loops do
@@ -107,9 +109,14 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :get_loops)
   end
 
-  def set_target_override(target, expiry \\ :next_hour, pid \\ __MODULE__)
-      when is_number(target) do
-    GenServer.call(pid, {:override, target / 100.0, ANTime.parse_expiry(expiry)})
+  def set_target_override_percent(p, expiry \\ :next_hour, pid \\ __MODULE__)
+      when is_number(p) do
+    GenServer.call(pid, {:override, {p / 100.0, :ratio}, ANTime.parse_expiry(expiry)})
+  end
+
+  def set_target_override_mw(mw, expiry \\ :next_hour, pid \\ __MODULE__)
+      when is_number(mw) do
+    GenServer.call(pid, {:override, {mw, :mw}, ANTime.parse_expiry(expiry)})
   end
 
   def clear_target_override(pid \\ __MODULE__) do
@@ -137,11 +144,16 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def operator_init(nil) do
-    connected = get_closed_breakers()
-    count = Enum.count(connected)
+  def operator_init({loops, override}) do
+    loops =
+      case loops do
+        :detect -> get_closed_breakers()
+        l when is_list(l) -> Enum.sort(l)
+      end
 
-    turbines = connected |> Enum.map(&Turbine.new/1)
+    count = Enum.count(loops)
+
+    turbines = loops |> Enum.map(&Turbine.new/1)
     total_power = turbines |> Enum.sum_by(& &1.power_level)
     initial = total_power |> total_power_to_axis(count)
 
@@ -158,15 +170,28 @@ defmodule AutoNuke.Operator.SteamFlow do
     state = %State{
       turbines: turbines,
       axis: axis,
-      demand_tracker: DemandTracker.new()
+      demand_tracker: DemandTracker.new(),
+      target_override:
+        case override do
+          nil -> nil
+          {_, _} = o -> {o, :never}
+        end
     }
 
     PubSub.subscribe(self(), :ticker)
     PubSub.subscribe(self(), :steam_flow_control)
 
-    Logger.info(
-      @log_prefix <> "Started with loops #{inspect(connected)} at total power #{total_power}."
-    )
+    Logger.info([
+      @log_prefix,
+      "Started with loops ",
+      inspect(loops),
+      ", total power #{total_power}",
+      case override do
+        nil -> ""
+        {_, _} -> ", overriding to #{describe_override(override)}"
+      end,
+      "."
+    ])
 
     {:ok, state}
   end
@@ -209,15 +234,17 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def handle_call({:override, ratio, expiry}, _from, %State{} = state) do
-    expires_desc =
-      case expiry do
-        :never -> "does not expire"
-        ts -> "expires at #{ANTime.timestamp_to_string(ts)}"
-      end
+  def handle_call({:override, override, expiry}, _from, %State{} = state) do
+    Logger.notice([
+      @log_prefix,
+      "Target set to ",
+      describe_override(override),
+      ", ",
+      describe_expiry(expiry),
+      "."
+    ])
 
-    Logger.notice(@log_prefix <> "Target set to #{percent(ratio)}, #{expires_desc}.")
-    {:reply, :ok, %State{state | target_override: {ratio, expiry}}}
+    {:reply, :ok, %State{state | target_override: {override, expiry}}}
   end
 
   @impl true
@@ -347,8 +374,15 @@ defmodule AutoNuke.Operator.SteamFlow do
   defp get_target_ratio_and_deadzone(%State{target_override: nil, demand_tracker: dt}),
     do: DemandTracker.target_and_deadzone(dt)
 
-  defp get_target_ratio_and_deadzone(%State{target_override: {override, _}}),
-    do: {override, @override_deadzone}
+  defp get_target_ratio_and_deadzone(%State{target_override: {{ratio, :ratio}, _}}),
+    do: {ratio, @override_deadzone}
+
+  defp get_target_ratio_and_deadzone(%State{
+         target_override: {{target_mw, :mw}, _},
+         demand_tracker: %DemandTracker{demand_kwh: demand_kw}
+       }) do
+    {target_mw * 1000 / demand_kw, @override_deadzone}
+  end
 
   defp get_current_supply(turbines) do
     turbines
@@ -361,7 +395,11 @@ defmodule AutoNuke.Operator.SteamFlow do
     @loops |> Enum.filter(&API.Generator.get_is_connected/1)
   end
 
-  defp percent(float), do: "#{float * 100}%"
+  defp describe_override({r, :ratio}), do: "#{r * 100}%"
+  defp describe_override({mw, :mw}), do: "#{mw} MW"
+
+  defp describe_expiry(:never), do: "does not expire"
+  defp describe_expiry(ts), do: "expires at #{ANTime.timestamp_to_string(ts)}"
 
   def total_power_to_axis(_, 0), do: -1.0
 

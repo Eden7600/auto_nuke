@@ -76,7 +76,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         Op.SteamFlow.get_target_override() |> IO.inspect() == {0, :never}
       end),
       remote_fn(node, fn ->
-        Op.SteamFlow.set_target_override(0, :never)
+        Op.SteamFlow.set_target_override_percent(0, :never)
         |> IO.inspect()
       end)
     )
