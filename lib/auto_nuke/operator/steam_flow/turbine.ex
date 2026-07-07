@@ -50,7 +50,7 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # I'm told that as long as MSCV and bypass add up to 11 or higher,
   # we shouldn't have any risk of pressure excursions on the steam gens.
   # Let's put that to the test.
-  @bypass_mscv_max_combined 11
+  @pressure_bypass_combined 11
 
   require Logger
   alias __MODULE__
@@ -179,12 +179,17 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
         pressure,
         @max_pressure
       )
+      |> then(fn {bypass, axis} ->
+        max = (@pressure_bypass_combined - turbine.power_level) |> max(0)
+
+        if bypass > max do
+          {max, ControlAxis.clamp(axis, bypass_to_axis(max), max)}
+        else
+          {bypass, axis}
+        end
+      end)
 
     old = turbine.bypass
-
-    max_bypass = (@bypass_mscv_max_combined - turbine.power_level) |> max(0)
-    pressure_bypass = min(pressure_bypass, max_bypass)
-    steam_bypass = min(steam_bypass, max_bypass)
 
     {new, reason} =
       cond do
