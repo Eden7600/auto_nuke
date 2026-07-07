@@ -38,7 +38,7 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   end
 
   @impl true
-  def init(_) do
+  def operator_init(_) do
     speed = get_average_pump_speed()
     temp = get_temperature()
 

@@ -137,7 +137,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def init(nil) do
+  def operator_init(nil) do
     connected = get_closed_breakers()
     count = Enum.count(connected)
 

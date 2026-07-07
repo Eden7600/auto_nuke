@@ -3,7 +3,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @shortdoc "Start the reactor"
 
   use Mix.Task
-  require Logger
   alias AutoNuke.API
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator, as: Op
@@ -17,12 +16,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # This should allow us to miss some data ticks (which shouldn't happen anyway)
   # and still safely stop at the target.
 
-  core_temp_min = AutoNuke.Operator.CoreTemp.temp_range().first
-
   # Slowly increase target temperature to this:
-  @startup_core_temp core_temp_min + 5
+  @core_temp_min AutoNuke.Operator.CoreTemp.temp_range().first
   # Wait for this temperature before starting turbines:
-  @turbine_temp core_temp_min
+  @turbine_temp @core_temp_min
+  # Prior to turbine startup, set bypass to this value:
+  @startup_bypass 15
   # Set MSCV to this value (and let CoreTemp handle pressure):
   @startup_mscv 10
 
@@ -83,7 +82,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
 
     {:ok, _} = Op.CondenserFill.start_link()
-    {:ok, _} = Op.CoreTemp.start_link()
+    {:ok, _} = Op.CoreTemp.start_link(loops: loops)
     {:ok, _} = Op.PrimaryPumps.start_link()
     {:ok, _} = Op.ControlRods.start_link(mode: :direct)
     achieve_criticality()
@@ -93,8 +92,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     {:ok, _} = Op.VacuumTank.start_link()
 
     wait_for_temperature(@turbine_temp)
-    Op.ControlRods.set_mode(:predictive)
-    Op.CoreTemp.clear_override()
 
     request_connection()
     start_turbine(loops)
@@ -221,7 +218,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 20, wait: false))
+    |> Enum.each(&UI.Valves.set(&1, @startup_bypass, wait: false))
 
     UI.console("Condenser")
     API.Valves.smsi() |> UI.Valves.set(0, wait: false)
@@ -277,7 +274,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, 20, wait: true))
+    |> Enum.each(&UI.Valves.set(&1, @startup_bypass, wait: true))
   end
 
   def enable_resistor_bank do
@@ -364,7 +361,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         |> API.Vessels.get_temperature()
         |> ceil()
 
-      increase_temp_target_loop(start_temp, @startup_core_temp)
+      increase_temp_target_loop(start_temp)
     end)
 
     UI.wait(
@@ -380,17 +377,22 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     wait_for_temperature(100, false)
   end
 
-  defp increase_temp_target_loop(target, max) when target >= max, do: :break
-
-  defp increase_temp_target_loop(old, max) do
+  defp increase_temp_target_loop(old) do
     receive do
       {:tick, _} ->
-        new =
-          (old + @core_temp_increase)
-          |> min(get_core_temp() + @core_temp_max_delta)
+        temp = get_core_temp()
 
-        Op.CoreTemp.set_override(new)
-        increase_temp_target_loop(new, max)
+        if temp > @core_temp_min do
+          Op.CoreTemp.clear_override()
+          Op.ControlRods.set_mode(:predictive)
+        else
+          new =
+            (old + @core_temp_increase)
+            |> min(temp + @core_temp_max_delta)
+
+          Op.CoreTemp.set_override(new)
+          increase_temp_target_loop(new)
+        end
     end
   end
 

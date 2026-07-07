@@ -42,7 +42,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
   end
 
   @impl true
-  def init(_) do
+  def operator_init(_) do
     temp = get_temperature()
     speed = get_pump_speed()
 

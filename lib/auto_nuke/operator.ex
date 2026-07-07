@@ -19,11 +19,27 @@ defmodule AutoNuke.Operator do
   def assigned_tick_modulo(Op.PCSTFill), do: 25
   def assigned_tick_modulo(_), do: 5
 
+  @callback operator_init(arg :: any) ::
+              {:ok, GenServer.state()}
+              | {:ok, GenServer.state(),
+                 timeout() | :hibernate | {:continue, continue_arg :: term()}}
+              | :ignore
+              | {:stop, reason :: term()}
+
   defmacro __using__(_) do
     quote do
+      @behaviour AutoNuke.Operator
       @my_tick AutoNuke.Operator.assigned_tick(__MODULE__)
       @my_tick_modulo AutoNuke.Operator.assigned_tick_modulo(__MODULE__)
       defguard is_my_tick(t) when rem(t, @my_tick_modulo) == @my_tick
+
+      @impl true
+      def init(args) do
+        AutoNuke.API.Web.set_api_config(:init)
+        rval = operator_init(args)
+        AutoNuke.API.Web.set_api_config(:fast)
+        rval
+      end
     end
   end
 end

@@ -48,7 +48,7 @@ defmodule AutoNuke.Operator.ControlRods do
     do: GenServer.call(pid, {:remove_bank, bank})
 
   @impl true
-  def init({target, mode}) when (is_number(target) or is_nil(target)) and mode in @modes do
+  def operator_init({target, mode}) when (is_number(target) or is_nil(target)) and mode in @modes do
     {banks, rods} = get_installed_banks_and_rods()
 
     temp = get_verified_core_temp([])

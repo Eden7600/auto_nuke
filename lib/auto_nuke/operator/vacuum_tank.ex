@@ -43,7 +43,7 @@ defmodule AutoNuke.Operator.VacuumTank do
   end
 
   @impl true
-  def init(nil) do
+  def operator_init(nil) do
     msi = get_msi()
 
     pump_axis =

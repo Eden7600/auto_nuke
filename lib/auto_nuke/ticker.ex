@@ -8,8 +8,6 @@ defmodule AutoNuke.Ticker do
   @loop_ms 200
   # If paused, wait 50ms to check if unpaused:
   @pause_wait 50
-  # Initial pause of 1 second to throttle restarts:
-  @initial_wait 1000
 
   # Net result:
   #  - Five ticks per in-game second.
@@ -23,7 +21,9 @@ defmodule AutoNuke.Ticker do
 
   @impl true
   def init(nil) do
-    Process.send_after(self(), :tick, @initial_wait)
+    AutoNuke.API.Web.set_api_config(:init)
+    schedule_next()
+    AutoNuke.API.Web.set_api_config(:fast)
     Logger.info(@log_prefix <> "Started ticking.")
     {:ok, 0}
   end
