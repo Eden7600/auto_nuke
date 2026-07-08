@@ -5,7 +5,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   use Mix.Task
   require Logger
   alias AutoNuke.TaskUI, as: UI
-  alias AutoNuke.Operator.SteamFlow
+  alias AutoNuke.Operator.{SteamFlow, CoreTemp}
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -19,10 +19,12 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   def startup(loop) do
     remote_node = ping_remote()
     steam_flow_pid = {SteamFlow, remote_node}
+    core_temp_pid = {CoreTemp, remote_node}
 
-    loops = SteamFlow.get_loops(steam_flow_pid)
+    steam_loops = SteamFlow.get_loops(steam_flow_pid)
+    temp_loops = CoreTemp.get_loops(core_temp_pid)
 
-    if loop in loops do
+    if loop in steam_loops or loop in temp_loops do
       Mix.raise("Loop #{loop} is already active.")
     end
 
@@ -30,13 +32,27 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     IO.puts("#{@loop_emoji} Starting loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
 
-    Startup.enable_resistor_bank()
+    capacity = Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
     Startup.start_primary_circulation([loop], nil)
     Startup.start_turbine([loop])
+
+    # Start our own local SteamFlow:
+    {:ok, _} = SteamFlow.start_link(loops: [loop], override: {capacity / 3, :mw})
+
     Startup.connect_to_grid([loop], false)
 
+    # Put our SteamFlow to sleep:
+    PubSub.unsubscribe(SteamFlow, :ticker)
+
     UI.tablet("AutoNuke Remote Control")
+
+    UI.set_wait(
+      "Core Temperature Operator",
+      "ADD LOOP #{loop}",
+      fn -> loop in CoreTemp.get_loops(core_temp_pid) end,
+      fn -> CoreTemp.add_loop(loop, core_temp_pid) end
+    )
 
     UI.set_wait(
       "Steam Flow Operator",

@@ -49,6 +49,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   alias AutoNuke.ControlAxis
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
+  @loops 1..3
 
   # Target 60 bar of pressure, plus or minus half a bar.
   @target_pressure 60
@@ -70,6 +71,18 @@ defmodule AutoNuke.Operator.CoreTemp do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, loops, opts)
+  end
+
+  def add_loop(loop, pid \\ __MODULE__) when loop in @loops do
+    GenServer.call(pid, {:add_loop, loop})
+  end
+
+  def remove_loop(loop, pid \\ __MODULE__) when loop in @loops do
+    GenServer.call(pid, {:remove_loop, loop})
+  end
+
+  def get_loops(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_loops)
   end
 
   def set_override(temp, expiry \\ :next_hour, pid \\ __MODULE__) do
@@ -123,6 +136,43 @@ defmodule AutoNuke.Operator.CoreTemp do
     ])
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call({:add_loop, loop}, _from, %State{monitored: old_monitored} = state) do
+    case old_monitored |> Enum.any?(&(&1.loop == loop)) do
+      true ->
+        {:reply, {:error, :already_active}, state}
+
+      false ->
+        new_monitored =
+          [MonitoredVessel.new(loop) | old_monitored]
+          |> Enum.sort_by(& &1.loop)
+
+        {:reply, :ok, %State{state | monitored: new_monitored}}
+    end
+  end
+
+  @impl true
+  def handle_call({:remove_loop, loop}, _from, %State{monitored: old_monitored} = state) do
+    {found, rest} = old_monitored |> Enum.split_with(&(&1.loop == loop))
+
+    case found do
+      [] ->
+        {:reply, {:error, :not_active}, state}
+
+      [%MonitoredVessel{loop: ^loop}] ->
+        {:reply, :ok, %State{state | monitored: rest}}
+    end
+  end
+
+  @impl true
+  def handle_call(:get_loops, _from, %State{monitored: monitored} = state) do
+    monitored
+    |> Enum.map(& &1.loop)
+    |> then(fn loops ->
+      {:reply, loops, state}
+    end)
   end
 
   @impl true

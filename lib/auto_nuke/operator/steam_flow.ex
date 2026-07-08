@@ -219,14 +219,14 @@ defmodule AutoNuke.Operator.SteamFlow do
       [] ->
         {:reply, {:error, :not_active}, state}
 
-      [%Turbine{}] ->
+      [%Turbine{loop: ^loop}] ->
         {:reply, :ok, %State{state | turbines: rest}}
     end
   end
 
   @impl true
-  def handle_call(:get_loops, _from, %State{turbines: old_turbines} = state) do
-    old_turbines
+  def handle_call(:get_loops, _from, %State{turbines: turbines} = state) do
+    turbines
     |> Enum.map(& &1.loop)
     |> then(fn loops ->
       {:reply, loops, state}
