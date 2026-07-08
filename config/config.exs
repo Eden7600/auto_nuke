@@ -1,5 +1,5 @@
 import Config
 
-config :logger, :console, format: "$time $metadata[$level] $message\n"
+config :logger, :console, format: {AutoNuke.LogFormatter, :format}
 
 import_config "#{Mix.env()}.exs"

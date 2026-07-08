@@ -23,6 +23,7 @@ defmodule AutoNuke do
   defp base_children do
     [
       PubSub,
+      AutoNuke.TimeTracker,
       AutoNuke.Ticker
     ]
   end
