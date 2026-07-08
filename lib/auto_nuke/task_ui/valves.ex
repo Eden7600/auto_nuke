@@ -86,4 +86,14 @@ defmodule AutoNuke.TaskUI.Valves do
       )
     end
   end
+
+  def bulk_open(valves) do
+    valves |> Enum.each(&set_actuator(&1, "OPEN"))
+    valves |> Enum.each(&open/1)
+  end
+
+  def bulk_close(valves) do
+    valves |> Enum.each(&set_actuator(&1, "CLOSE"))
+    valves |> Enum.each(&close/1)
+  end
 end

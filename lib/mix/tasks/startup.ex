@@ -178,9 +178,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.console("Pressurizer")
 
     [API.Valves.pzr_vent(), API.Valves.pzr_cooling()]
-    |> Enum.each(fn v ->
-      if API.Valves.get_opened?(v), do: UI.Valves.close(v)
-    end)
+    |> UI.Valves.bulk_close()
 
     UI.set("Thermostat", "ON")
     UI.set("Heating Power", "ON")
@@ -501,7 +499,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_vent/1)
-    |> Enum.each(&UI.Valves.close/1)
+    |> UI.Valves.bulk_close()
 
     UI.console("Steam Generator")
 
