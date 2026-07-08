@@ -52,7 +52,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
     mode =
       case mode do
-        nil -> if Enum.count(banks) >= 3, do: :predictive, else: :direct
+        nil -> if using_boron?(), do: :predictive, else: :direct
         m when m in @modes -> m
       end
 
@@ -328,4 +328,6 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   defp format_temp(temp), do: :erlang.float_to_binary(temp, decimals: 2)
+
+  defp using_boron?, do: API.get_float("CHEM_BORON_PPM") > 0.0
 end
