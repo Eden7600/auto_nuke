@@ -7,7 +7,6 @@ defmodule AutoNuke.Smoother do
   )
 
   alias __MODULE__
-  require Integer
   alias Scholar.Linear.LinearRegression
 
   def new(max_size) when is_integer(max_size) and max_size > 1, do: %Smoother{max: max_size}

@@ -149,12 +149,6 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   @impl true
-  def handle_call({:set_mode, mode}, _from, %State{} = state) when mode in @modes do
-    Logger.info(@log_prefix <> "Mode changed from '#{state.mode}' to '#{mode}'.")
-    {:reply, :ok, %State{state | mode: mode}}
-  end
-
-  @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
     {:noreply, %State{state | target: t}}
   end

@@ -3,7 +3,6 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   @shortdoc "Stop the reactor"
 
   use Mix.Task
-  require Logger
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI

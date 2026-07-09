@@ -3,7 +3,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   @shortdoc "Stop a loop"
 
   use Mix.Task
-  require Logger
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI

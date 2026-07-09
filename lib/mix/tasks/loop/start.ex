@@ -3,7 +3,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   @shortdoc "Start a loop"
 
   use Mix.Task
-  require Logger
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator.{SteamFlow, CoreTemp}
   alias Mix.Tasks.AutoNuke.Startup
