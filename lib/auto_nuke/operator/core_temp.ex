@@ -117,8 +117,8 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     axis =
       ControlAxis.new(
-        kp: 0.01,
-        ki: 0.0005,
+        kp: 0.02,
+        ki: 0.001,
         deadzone: @deadzone,
         to_value_fn: &axis_to_temp/1,
         offset: temp |> temp_to_axis(),
@@ -216,18 +216,33 @@ defmodule AutoNuke.Operator.CoreTemp do
       |> maybe_expire_override()
 
     monitored = state.monitored |> Enum.map(&MonitoredVessel.tick/1)
-    future_pressure = get_future_pressure(monitored)
+
+    %State{state | monitored: monitored}
+    |> do_tick()
+  end
+
+  defp do_tick(%State{override: nil} = state) do
+    future_pressure = get_future_pressure(state.monitored)
 
     case ControlAxis.step(state.axis, @target_pressure, future_pressure) do
-      {:changed, axis, new, _old} ->
-        publish_core_temp(axis, new, state.override)
+      {:changed, axis, new, old} ->
+        {new, axis} = maybe_clamp_movement(axis, old, new)
+        publish_core_temp(new)
+        axis
 
       {:unchanged, axis, old} ->
-        publish_core_temp(axis, old, state.override)
+        publish_core_temp(old)
+        axis
     end
     |> then(fn axis ->
-      {:noreply, %State{state | axis: axis, monitored: monitored}}
+      {:noreply, %State{state | axis: axis}}
     end)
+  end
+
+  defp do_tick(%State{override: {temp, _expires}} = state) do
+    publish_core_temp(temp)
+    axis = ControlAxis.clamp(state.axis, temp_to_axis(temp), temp)
+    {:noreply, %State{state | axis: axis}}
   end
 
   defp apply_drift(%State{drift: nil} = state), do: state
@@ -270,30 +285,27 @@ defmodule AutoNuke.Operator.CoreTemp do
     end
   end
 
-  defp publish_core_temp(axis, _wanted, {override, _expires}) do
-    PubSub.publish(:core_temp, {:core_temp, override})
-    ControlAxis.clamp(axis, temp_to_axis(override), override)
-  end
-
-  defp publish_core_temp(axis, wanted, nil) do
+  defp maybe_clamp_movement(axis, old, new) do
     current = get_core_temp()
-    min_temp = min_relative(current) |> clamp_to_range(@temp_range)
-    max_temp = max_relative(current) |> clamp_to_range(@temp_range)
+    upper = max_relative(current)
+    lower = min_relative(current)
 
-    {action, new_temp} =
-      cond do
-        wanted < min_temp -> {:clamp, min_temp}
-        wanted > max_temp -> {:clamp, max_temp}
-        true -> {:allow, wanted}
-      end
-
-    PubSub.publish(:core_temp, {:core_temp, new_temp})
-
-    case action do
-      :allow -> axis
-      :clamp -> ControlAxis.clamp(axis, temp_to_axis(new_temp), new_temp)
+    cond do
+      new > old && new > upper -> {:clamp, max(old, upper)}
+      new < old && new < lower -> {:clamp, min(old, lower)}
+      true -> {:ok, new}
     end
+    |> then(fn
+      {:clamp, temp} ->
+        axis = ControlAxis.clamp(axis, temp_to_axis(temp), temp)
+        {temp, axis}
+
+      {:ok, temp} ->
+        {temp, axis}
+    end)
   end
+
+  defp publish_core_temp(temp), do: PubSub.publish(:core_temp, {:core_temp, temp})
 
   @relative_low @temp_range.first + @clamp_near_boundary
   @relative_high @temp_range.last - @clamp_near_boundary
@@ -311,13 +323,6 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   defp max_relative(temp), do: temp + @clamp_upwards
-
-  defp clamp_to_range(value, low..high//_) when is_float(value) do
-    value
-    |> max(low)
-    |> min(high)
-    |> Kernel.+(0.0)
-  end
 
   defp get_future_pressure([]) do
     # No active loops, reactor idle.  Pretend current pressure is a bit too
