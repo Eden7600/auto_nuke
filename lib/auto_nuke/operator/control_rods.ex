@@ -24,10 +24,11 @@ defmodule AutoNuke.Operator.ControlRods do
   @temp_lookahead 5
 
   @modes [:predictive, :direct]
+  @default_mode Enum.at(@modes, 0)
 
   def start_link(opts \\ []) do
     {target, opts} = Keyword.pop(opts, :target)
-    {mode, opts} = Keyword.pop(opts, :mode)
+    {mode, opts} = Keyword.pop(opts, :mode, @default_mode)
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, {target, mode}, opts)
   end
@@ -47,22 +48,18 @@ defmodule AutoNuke.Operator.ControlRods do
     do: GenServer.call(pid, {:remove_bank, bank})
 
   @impl true
-  def operator_init({target, mode}) when is_number(target) or is_nil(target) do
+  def operator_init({target, mode})
+      when (mode in @modes and is_number(target)) or is_nil(target) do
     {banks, rods} = get_installed_banks_and_rods()
-
-    mode =
-      case mode do
-        nil -> if using_boron?(), do: :predictive, else: :direct
-        m when m in @modes -> m
-      end
 
     temp = get_verified_core_temp([])
     target = target || temp
+    boron? = using_boron?()
 
     axis =
       ControlAxis.new(
-        kp: 0.05,
-        ki: 0.005,
+        kp: if(boron?, do: 0.05, else: 0.0005),
+        ki: if(boron?, do: 0.005, else: 0.00005),
         deadzone: 0.1,
         to_value_fn: &Function.identity/1,
         offset: rods |> rods_to_axis(),
