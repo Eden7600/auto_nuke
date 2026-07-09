@@ -29,10 +29,10 @@ defmodule AutoNuke.MixProject do
     [
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
-      {:req, "~> 0.5.0"},
-      {:pid_control, "~> 0.1.0"},
+      {:req, "~> 0.6"},
+      {:pid_control, "~> 0.1"},
       {:pubsub, "~> 1.0"},
-      {:ex_git_test, "~> 0.1.2", only: [:dev, :test], runtime: false},
+      {:ex_git_test, "~> 0.1", only: [:dev, :test], runtime: false},
       {:mix_test_watch, "~> 1.4", only: [:dev, :test], runtime: false},
       {:statistex, "~> 1.1"},
       {:memoize, "~> 1.4"},
