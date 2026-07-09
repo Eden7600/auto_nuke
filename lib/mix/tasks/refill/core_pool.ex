@@ -131,6 +131,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.CorePool do
       true
     else
       API.put("CORE_POOL_PUMP", mode)
+      Process.sleep(1000)
       false
     end
   end
