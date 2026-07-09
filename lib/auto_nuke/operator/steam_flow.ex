@@ -341,6 +341,15 @@ defmodule AutoNuke.Operator.SteamFlow do
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
     boost_mode = !is_nil(state.boost_mode)
 
+    # Limit the new target to within +20% of our current ratio.  If we just
+    # can't produce enough, period, then our target will get exponentially
+    # further and further out of reach.  Then, the next hour comes around, and
+    # BAM our target suddenly drops to reasonable numbers, and the P term in
+    # our PID controller will drop our power to basically nothing.  Then we
+    # waste precious time clawing back power -- potentially putting ourselves
+    # right back in the same "can't produce enough" cycle.
+    target = min(target, ratio + 0.2)
+
     case ControlAxis.step(old_axis, target, ratio) do
       {:changed, axis, new, _old} -> {axis, new}
       {:unchanged, axis, old} -> {axis, old}
