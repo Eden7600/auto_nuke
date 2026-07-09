@@ -127,7 +127,9 @@ defmodule AutoNuke.TaskUI.ProgressBar do
   end
 
   defp percent_of_range(value, left, right) do
-    (value - left) / (right - left)
+    ((value - left) / (right - left))
+    |> max(0.0)
+    |> min(100.0)
   end
 
   defp format_number(n, _) when is_integer(n), do: Integer.to_string(n)
