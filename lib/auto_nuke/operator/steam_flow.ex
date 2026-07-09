@@ -3,20 +3,15 @@ defmodule AutoNuke.Operator.SteamFlow do
   use AutoNuke.Operator
   require Logger
 
-  alias AutoNuke.Smoother
   alias AutoNuke.Operator.SteamFlow.{Turbine, DemandTracker}
   alias AutoNuke.Time, as: ANTime
 
   defmodule State do
-    # Give us the average of the last 5 ticks of power generation:
-    @supply_smoothing 5
-
     @enforce_keys [:axis, :turbines, :demand_tracker, :target_override]
     defstruct(
       axis: nil,
       turbines: nil,
       demand_tracker: nil,
-      smoothed_supply: Smoother.new(@supply_smoothing),
       target_override: nil,
       boost_mode: nil,
       flow_control: nil
@@ -318,24 +313,32 @@ defmodule AutoNuke.Operator.SteamFlow do
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info(
-        {:tick, _},
-        %State{
-          axis: %ControlAxis{} = old_axis,
-          turbines: old_turbines
-        } = state
-      ) do
-    supply_kw = get_current_supply(state.turbines)
+  def handle_info({:tick, _}, %State{turbines: turbines} = state) do
+    supply_kw = get_current_supply(turbines)
 
     state =
       %State{
         state
-        | demand_tracker: state.demand_tracker |> DemandTracker.tick(supply_kw),
-          smoothed_supply: state.smoothed_supply |> Smoother.add(supply_kw)
+        | demand_tracker: state.demand_tracker |> DemandTracker.tick(supply_kw)
       }
       |> maybe_expire_override()
       |> maybe_expire_boost_mode()
 
+    if turbines |> Enum.all?(&Turbine.sanity_check/1) do
+      tick_power(state, supply_kw)
+    else
+      state
+    end
+    |> then(fn %State{} = s -> {:noreply, s} end)
+  end
+
+  defp tick_power(
+         %State{
+           axis: %ControlAxis{} = old_axis,
+           turbines: old_turbines
+         } = state,
+         supply_kw
+       ) do
     ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
     {target, deadzone} = get_target_ratio_and_deadzone(state)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
@@ -368,15 +371,14 @@ defmodule AutoNuke.Operator.SteamFlow do
       end
     end)
     |> then(fn {%ControlAxis{} = axis, turbines} ->
-      {:noreply,
-       %State{
-         state
-         | axis: axis,
-           turbines:
-             turbines
-             |> distribute_min_steam()
-             |> Enum.map(&Turbine.tick/1)
-       }}
+      %State{
+        state
+        | axis: axis,
+          turbines:
+            turbines
+            |> distribute_min_steam()
+            |> Enum.map(&Turbine.tick/1)
+      }
     end)
   end
 

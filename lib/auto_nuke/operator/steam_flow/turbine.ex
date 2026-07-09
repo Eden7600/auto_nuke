@@ -101,6 +101,22 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
     }
   end
 
+  def sanity_check(%Turbine{loop: loop, steam_gen: steam_gen} = turbine) do
+    steam = SteamGen.get_outlet(steam_gen)
+    power = get_generated_power(turbine)
+
+    if steam < 0.1 && power > 0.1 do
+      Logger.warning([
+        log_prefix(loop),
+        "Sanity check failed: Power is #{power} kW but steam is #{steam} kg/min."
+      ])
+
+      false
+    else
+      true
+    end
+  end
+
   def set_min_steam(%Turbine{} = turbine, new) do
     %Turbine{turbine | min_steam: new}
   end
