@@ -39,12 +39,16 @@ defmodule AutoNuke.API.Web do
     |> then(fn %{status: 200} -> :ok end)
   end
 
+  alias Req.TransportError, as: RTE
+
   def ping do
     req_new(:ping)
     |> Req.get(url: "/", params: [variable: "CORE_TEMP"])
     |> then(fn
-      {:ok, %Req.Response{status: 200}} -> true
-      {:error, _} -> false
+      {:ok, %Req.Response{status: 200}} -> :ok
+      {:error, %RTE{reason: :timeout}} -> {:error, "Timeout."}
+      {:error, %RTE{reason: :ehostunreach}} -> {:error, "Host is unreachable."}
+      {:error, %RTE{reason: :ehostdown}} -> {:error, "Host is down."}
     end)
   end
 end

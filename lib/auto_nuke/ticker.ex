@@ -47,11 +47,11 @@ defmodule AutoNuke.Ticker do
 
   defp ping_wait do
     case API.Web.ping() do
-      true ->
+      :ok ->
         :ok
 
-      false ->
-        Logger.error(@log_prefix <> "API unreachable, retrying in #{@ping_wait} ms.")
+      {:error, reason} ->
+        Logger.error(@log_prefix <> "API not ready: #{reason}")
         Process.sleep(@ping_wait)
         ping_wait()
     end
