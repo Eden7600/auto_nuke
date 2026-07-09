@@ -105,13 +105,13 @@ defmodule AutoNuke.Operator.CoreTemp do
   end
 
   @impl true
-  def operator_init(:detect) do
+  def init(:detect) do
     AutoNuke.Operator.SteamFlow.get_closed_breakers()
     |> init()
   end
 
   @impl true
-  def operator_init(loops) when is_list(loops) do
+  def init(loops) when is_list(loops) do
     temp = get_core_temp()
     monitored = loops |> Enum.map(&MonitoredVessel.new/1)
 

@@ -38,7 +38,7 @@ defmodule AutoNuke.Operator.CondenserFill do
   end
 
   @impl true
-  def operator_init(_) do
+  def init(_) do
     fill_level = @condenser |> API.Vessels.get_fill_percent()
 
     state = %State{

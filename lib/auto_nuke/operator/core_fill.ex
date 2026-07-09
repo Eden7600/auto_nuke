@@ -29,7 +29,7 @@ defmodule AutoNuke.Operator.CoreFill do
   def stop(pid \\ __MODULE__), do: GenServer.stop(pid, :normal)
 
   @impl true
-  def operator_init(_) do
+  def init(_) do
     fill_level = @core |> API.Vessels.get_fill_gauge()
 
     state = %State{

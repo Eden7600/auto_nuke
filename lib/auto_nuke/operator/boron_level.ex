@@ -40,7 +40,7 @@ defmodule AutoNuke.Operator.BoronLevel do
   def get_filter_rate, do: GenServer.call(__MODULE__, :get_filter_rate)
 
   @impl true
-  def operator_init(nil) do
+  def init(nil) do
     using_chemicals?()
     |> maybe_init()
   end

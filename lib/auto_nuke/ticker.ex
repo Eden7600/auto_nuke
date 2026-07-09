@@ -2,12 +2,16 @@ defmodule AutoNuke.Ticker do
   use GenServer
   require Logger
 
+  alias AutoNuke.API
+
   @log_prefix "[#{inspect(__MODULE__)}] "
 
   # Track time in 200ms increments:
   @loop_ms 200
   # If paused, wait 50ms to check if unpaused:
   @pause_wait 50
+  # If ping fails, wait this long before retrying.
+  @ping_wait 5000
 
   # Net result:
   #  - Five ticks per in-game second.
@@ -21,16 +25,15 @@ defmodule AutoNuke.Ticker do
 
   @impl true
   def init(nil) do
-    AutoNuke.API.Web.set_api_config(:init)
+    ping_wait()
     schedule_next()
-    AutoNuke.API.Web.set_api_config(:fast)
     Logger.info(@log_prefix <> "Started ticking.")
     {:ok, 0}
   end
 
   @impl true
   def handle_info(:tick, counter) do
-    Memoize.invalidate(AutoNuke.API)
+    Memoize.invalidate(API)
     PubSub.publish(:ticker, {:tick, counter})
     schedule_next()
     {:noreply, counter + 1}
@@ -42,9 +45,21 @@ defmodule AutoNuke.Ticker do
     {:noreply, state}
   end
 
+  defp ping_wait do
+    case API.Web.ping() do
+      true ->
+        :ok
+
+      false ->
+        Logger.error(@log_prefix <> "API unreachable, retrying in #{@ping_wait} ms.")
+        Process.sleep(@ping_wait)
+        ping_wait()
+    end
+  end
+
   defp get_sim_speed do
-    Memoize.invalidate(AutoNuke.API, :get_integer, ["GAME_SIM_SPEED"])
-    AutoNuke.API.get_integer("GAME_SIM_SPEED")
+    Memoize.invalidate(API, :get_integer, ["GAME_SIM_SPEED"])
+    API.get_integer("GAME_SIM_SPEED")
   end
 
   defp schedule_next do

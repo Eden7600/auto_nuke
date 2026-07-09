@@ -144,7 +144,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
-  def operator_init({loops, override}) do
+  def init({loops, override}) do
     loops =
       case loops do
         :detect -> get_closed_breakers()

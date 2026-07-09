@@ -35,9 +35,18 @@ defmodule AutoNuke.TimeTracker do
     new_ts = AutoNuke.API.Misc.get_time_stamp()
 
     cond do
-      new_ts != old_ts -> {:noreply, set(new_ts, tick, tick)}
-      is_integer(start_tick) -> {:noreply, set(old_ts, tick, start_tick)}
-      start_tick == :sync -> {:noreply, {old_ts, :sync}}
+      new_ts > old_ts ->
+        {:noreply, set(new_ts, tick, tick)}
+
+      new_ts < old_ts ->
+        Logger.error(@log_prefix <> "Time has gone backwards!  Restarting ...")
+        {:stop, :normal, nil}
+
+      is_integer(start_tick) ->
+        {:noreply, set(old_ts, tick, start_tick)}
+
+      start_tick == :sync ->
+        {:noreply, {old_ts, :sync}}
     end
   end
 
@@ -47,12 +56,17 @@ defmodule AutoNuke.TimeTracker do
   end
 
   def get do
-    case :ets.lookup(@ets, :time) do
-      [{:time, timestamp, ticks}] ->
-        {timestamp, ticks}
+    try do
+      case :ets.lookup(@ets, :time) do
+        [{:time, timestamp, ticks}] ->
+          {timestamp, ticks}
 
-      [] ->
-        nil
+        [] ->
+          nil
+      end
+    rescue
+      # Happens when the ETS doesn't exist yet.
+      ArgumentError -> nil
     end
   end
 end

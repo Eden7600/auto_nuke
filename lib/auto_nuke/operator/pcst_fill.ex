@@ -29,7 +29,7 @@ defmodule AutoNuke.Operator.PCSTFill do
   def stop(pid \\ __MODULE__), do: GenServer.stop(pid, :normal)
 
   @impl true
-  def operator_init(_) do
+  def init(_) do
     fill_percent = @pcst |> API.Vessels.get_fill_percent()
 
     state = %State{

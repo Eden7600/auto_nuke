@@ -69,7 +69,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
   end
 
   @impl true
-  def operator_init(loop) when loop in 1..3 do
+  def init(loop) when loop in 1..3 do
     if is_installed?(loop) do
       do_init(loop)
     else
