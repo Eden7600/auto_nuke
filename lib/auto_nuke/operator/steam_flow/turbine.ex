@@ -27,14 +27,15 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   # Allowed power levels:
   @power_levels 2..100
   def allowed_power_levels, do: @power_levels
-  # Keep pressure under 65 bar.
+  # Keep pressure under 65 bar when at low power.
   @max_pressure 65
+  # Every 2 bar above 65 bar = +1 max steam we can pull immediately.
+  @excess_per_bar 0.5
   # If pressure is below 55 bar, we're starved for steam and shouldn't try to
   # push power level any higher.
   @min_pressure 55
-  # Target 60 bar — every 1 bar above that = +1 max steam we can pull immediately.
-  @ideal_pressure 60
-  @max_steam_per_bar 1.0
+  # If pressure is below 50 bar, start backing off power.
+  @critical_pressure 50
   # To avoid excessive flapping, if we're within 3 kg/min 
   # of min steam flow, disallow bypass decreases.
   @steam_lock_zone 3
@@ -114,30 +115,38 @@ defmodule AutoNuke.Operator.SteamFlow.Turbine do
   def max_power_level(
         %Turbine{
           steam_gen: steam_gen,
-          power_level: current_power_level,
           secondary_capacity: capacity
         },
         boost_mode
       )
       when is_boolean(boost_mode) do
-    pressure = SteamGen.get_pressure(steam_gen)
-
-    if pressure < @min_pressure do
-      current_power_level - 1
-    else
-      excess =
-        (pressure - @ideal_pressure)
-        |> Kernel.*(@max_steam_per_bar)
-        |> round()
-        |> max(0)
-
+    steam_level =
       steam_gen
       |> SteamGen.get_outlet()
       |> Kernel./(10)
       |> round()
-      |> Kernel.+(1 + excess)
-      |> limit_power_level(div(capacity, 10), boost_mode, steam_gen.vessel)
+
+    pressure = SteamGen.get_pressure(steam_gen)
+
+    cond do
+      pressure < @critical_pressure ->
+        steam_level - 1
+
+      pressure < @min_pressure ->
+        steam_level
+
+      pressure <= @max_pressure ->
+        steam_level + 1
+
+      pressure > @max_pressure ->
+        excess =
+          ((pressure - @max_pressure) * @excess_per_bar)
+          |> round()
+          |> Kernel.+(2)
+
+        steam_level + excess
     end
+    |> limit_power_level(div(capacity, 10), boost_mode, steam_gen.vessel)
   end
 
   defp limit_power_level(power_level, pump_capacity, _, _)
