@@ -9,7 +9,8 @@ defmodule AutoNuke.Operator.CondenserCooling do
       last_temp: nil,
       probe_timer: nil,
       last_direction: :stable,
-      boost_mode: nil
+      boost_mode: nil,
+      fast_probe: false
     )
   end
 
@@ -26,7 +27,9 @@ defmodule AutoNuke.Operator.CondenserCooling do
   # Wait 30 in-game minutes after a violation to begin probing lower speeds:
   @wait_after_violation 30 * AutoNuke.Ticker.seconds_per_minute()
   # While probing, wait 10 in-game minutes per 1% speed drop:
-  @wait_while_probing 10 * AutoNuke.Ticker.seconds_per_minute()
+  @wait_while_slow_probing 10 * AutoNuke.Ticker.seconds_per_minute()
+  # While fast-probing, wait 1 in-game minute per 1% speed drop:
+  @wait_while_fast_probing 1 * AutoNuke.Ticker.seconds_per_minute()
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -48,7 +51,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
     state = %State{
       last_temp: temp,
-      probe_timer: @wait_while_probing
+      probe_timer: @wait_while_slow_probing
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -57,16 +60,25 @@ defmodule AutoNuke.Operator.CondenserCooling do
   end
 
   @impl true
+  def handle_call({:boost_mode, nil}, _from, %State{} = state) do
+    if state.boost_mode do
+      Logger.notice(@log_prefix <> "Boost mode disabled.")
+      {:reply, :ok, %State{state | boost_mode: nil, fast_probe: true}}
+    else
+      {:reply, :ok, state}
+    end
+  end
+
+  @impl true
   def handle_call({:boost_mode, expiry}, _from, %State{} = state) do
     desc =
       case expiry do
-        nil -> "disabled"
         :never -> "enabled, no expiry"
         ts -> "enabled until #{ANTime.timestamp_to_string(ts)}"
       end
 
     Logger.notice(@log_prefix <> "Boost mode #{desc}.")
-    unless is_nil(expiry), do: set_pump_speed(@speeds.last)
+    set_pump_speed(@speeds.last)
     {:reply, :ok, %State{state | boost_mode: expiry}}
   end
 
@@ -75,6 +87,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
+    state = state |> maybe_expire_boost_mode()
     new_temp = get_temperature()
     old_temp = state.last_temp
     threshold = get_violation_threshold()
@@ -100,14 +113,14 @@ defmodule AutoNuke.Operator.CondenserCooling do
       # - Steadily increasing: Backoff by 3%.
       {:above, :increasing, :increasing} -> backoff(state, 3, new_temp)
       # - Decreasing: Good, but hold off on probing until we're safe.
-      {:above, :decreasing, _} -> probe_wait(state, @wait_after_violation)
-      {:above, _, :decreasing} -> probe_wait(state, @wait_after_violation)
+      {:above, :decreasing, _} -> probe_wait(state, :violation)
+      {:above, _, :decreasing} -> probe_wait(state, :violation)
       # - Any other situation: Let's back off to get it below the threshold.
       {:above, _, _} -> backoff(state, 1, new_temp)
       # 
       # === Below threshold: ===
       # - Steadily increasing: Hold off on probing.
-      {:below, :increasing, :increasing} -> probe_wait(state, @wait_while_probing)
+      {:below, :increasing, :increasing} -> probe_wait(state, :normal)
       # - Recent increase: Skip the timer for this tick.
       {:below, :increasing, _} -> probe_skip(state)
       {:below, _, :increasing} -> probe_skip(state)
@@ -119,19 +132,17 @@ defmodule AutoNuke.Operator.CondenserCooling do
     end)
   end
 
-  @impl true
-  def handle_info({:tick, _} = tick, %State{boost_mode: expiry} = state) do
-    if boost_mode_expired?(expiry) do
+  defp maybe_expire_boost_mode(%State{boost_mode: nil} = state), do: state
+  defp maybe_expire_boost_mode(%State{boost_mode: :never} = state), do: state
+
+  defp maybe_expire_boost_mode(%State{boost_mode: ts} = state) when is_integer(ts) do
+    if ANTime.get_current_time() >= ts do
       Logger.notice(@log_prefix <> "Boost mode has expired.")
-      handle_info(tick, %State{state | boost_mode: nil})
+      %State{state | boost_mode: nil, fast_probe: true}
     else
-      set_pump_speed(@speeds.last)
-      {:noreply, state}
+      state
     end
   end
-
-  defp boost_mode_expired?(:never), do: false
-  defp boost_mode_expired?(ts) when is_integer(ts), do: ANTime.get_current_time() >= ts
 
   defp backoff(%State{} = state, amount, temp) do
     old = get_pump_speed()
@@ -147,13 +158,22 @@ defmodule AutoNuke.Operator.CondenserCooling do
     end
 
     set_pump_speed(new)
-    %State{state | probe_timer: @wait_after_violation}
+    %State{state | probe_timer: @wait_after_violation, fast_probe: false}
   end
 
-  defp probe_wait(%State{} = state, wait) do
+  defp probe_wait(%State{fast_probe: fast} = state, type) do
+    wait =
+      case type do
+        :violation -> @wait_after_violation
+        :normal -> probe_wait_ticks(fast)
+      end
+
     steam_flow_control(:hold)
     %State{state | probe_timer: max(state.probe_timer, wait)}
   end
+
+  defp probe_wait_ticks(true), do: @wait_while_fast_probing
+  defp probe_wait_ticks(false), do: @wait_while_slow_probing
 
   defp maybe_probe(%State{boost_mode: boost} = state, _) when not is_nil(boost) do
     steam_flow_control(:resume)
@@ -172,7 +192,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
     if new in @speeds do
       Logger.info(@log_prefix <> "Steady at #{Float.round(temp, 1)}°C, trying #{new}%.")
       set_pump_speed(new)
-      %State{state | probe_timer: @wait_while_probing}
+      %State{state | probe_timer: probe_wait_ticks(state.fast_probe)}
     else
       # We're at the lowest allowed setting.
       # No point in ever probing any lower!
