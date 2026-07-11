@@ -63,7 +63,7 @@ defmodule AutoNuke.Operator.CondenserCooling do
   def handle_call({:boost_mode, nil}, _from, %State{} = state) do
     if state.boost_mode do
       Logger.notice(@log_prefix <> "Boost mode disabled.")
-      {:reply, :ok, %State{state | boost_mode: nil, fast_probe: true}}
+      {:reply, :ok, %State{state | boost_mode: nil} |> enable_fast_probe()}
     else
       {:reply, :ok, state}
     end
@@ -138,10 +138,16 @@ defmodule AutoNuke.Operator.CondenserCooling do
   defp maybe_expire_boost_mode(%State{boost_mode: ts} = state) when is_integer(ts) do
     if ANTime.get_current_time() >= ts do
       Logger.notice(@log_prefix <> "Boost mode has expired.")
-      %State{state | boost_mode: nil, fast_probe: true}
+      %State{state | boost_mode: nil} |> enable_fast_probe()
     else
       state
     end
+  end
+
+  defp enable_fast_probe(%State{fast_probe: true} = state), do: state
+
+  defp enable_fast_probe(%State{fast_probe: false, probe_timer: timer} = state) do
+    %State{state | fast_probe: true, probe_timer: min(timer, @wait_while_fast_probing)}
   end
 
   defp backoff(%State{} = state, amount, temp) do
