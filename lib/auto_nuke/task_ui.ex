@@ -97,7 +97,6 @@ defmodule AutoNuke.TaskUI do
   def log_to_file(file) do
     file = Path.expand(file)
 
-    {:ok, default} = :logger.get_handler_config(:default)
     :logger.remove_handler(:default)
 
     :logger.add_handler(
@@ -105,8 +104,8 @@ defmodule AutoNuke.TaskUI do
       :logger_std_h,
       %{
         config: %{file: String.to_charlist(file)},
-        formatter: Map.fetch!(default, :formatter),
-        level: Map.fetch!(default, :level)
+        formatter: {AutoNuke.LogFormatter, nil},
+        level: :debug
       }
     )
   end
