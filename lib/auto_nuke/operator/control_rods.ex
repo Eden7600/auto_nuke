@@ -59,7 +59,7 @@ defmodule AutoNuke.Operator.ControlRods do
       ControlAxis.new(
         kp: if(boron?, do: 0.05, else: 0.0005),
         ki: if(boron?, do: 0.005, else: 0.00005),
-        deadzone: 0.1,
+        deadzone: 1.0,
         to_value_fn: &Function.identity/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods |> rods_to_axis()
