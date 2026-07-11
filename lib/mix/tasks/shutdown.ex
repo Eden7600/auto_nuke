@@ -282,17 +282,32 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   defp stop_pressurizer do
     UI.console("Pressurizer")
+
+    UI.wait(
+      "Heating Power",
+      "OFF",
+      fn -> !API.get_boolean("PRESSURIZER_HEATERS_ON") end
+    )
+
     API.Valves.pzr_cooling() |> UI.Valves.open()
+    API.Valves.pzr_vent() |> UI.Valves.open()
 
-    UI.set("Heating Power", "OFF")
-    UI.set("Thermostat", "OFF")
+    pzr = API.Vessels.pressurizer()
+    start_temp = API.Vessels.get_temperature(pzr)
 
-    start_pressure = API.Vessels.get_pressure(@core) |> ceil()
+    UI.ProgressBar.wait(
+      config: UI.ProgressBar.Config.target(max(start_temp, 101), 100, "°C"),
+      label: "PZR Temp",
+      current_fn: fn -> API.Vessels.get_temperature(pzr) end,
+      done_fn: &(&1 >= 100)
+    )
+
+    start_pressure = API.Vessels.get_pressure(pzr)
 
     UI.ProgressBar.wait(
       config: UI.ProgressBar.Config.target(max(start_pressure, 160), 1, "bar", 1),
-      label: "Core Pressure",
-      current_fn: fn -> API.Vessels.get_pressure(@core) end,
+      label: "PZR Pressure",
+      current_fn: fn -> API.Vessels.get_pressure(pzr) end,
       done_fn: &(&1 <= 1.1)
     )
   end

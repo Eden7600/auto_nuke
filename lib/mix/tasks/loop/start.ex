@@ -39,7 +39,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     # Start our own local SteamFlow:
     {:ok, _} = SteamFlow.start_link(loops: [loop], override: {capacity / 3, :mw})
 
-    Startup.connect_to_grid([loop], false)
+    Startup.connect_to_grid([loop])
 
     # Put our SteamFlow to sleep:
     PubSub.unsubscribe(SteamFlow, :ticker)

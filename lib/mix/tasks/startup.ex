@@ -38,8 +38,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # To get reactor up to temperature, increase 
   # the core temperature target by 1°C per second.
   @core_temp_increase 1 / AutoNuke.Ticker.ticks_per_second()
-  # Clamp this at 5°C above the current actual temperature.
-  @core_temp_max_delta 5
+  # Clamp this at 10°C above the current actual temperature.
+  @core_temp_max_delta 10
 
   def run([]) do
     startup(&get_installed_secondary_loops/0)
@@ -181,8 +181,13 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> UI.Valves.bulk_close()
 
     UI.set("Thermostat", "ON")
-    UI.set("Heating Power", "ON")
     UI.set("Heating Power Level", "set to HIGH")
+
+    UI.wait(
+      "Heating Power",
+      "ON",
+      fn -> API.get_boolean("PRESSURIZER_HEATERS_ON") end
+    )
 
     pzr = API.Vessels.pressurizer()
 
@@ -232,7 +237,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp request_connection do
     UI.tablet("Communications Center")
     UI.set("Start Operations", "REQUEST")
-    IO.gets("Press enter when permission requested ...")
+    UI.set("Response", "WAIT FOR PERMISSION")
+    IO.gets("Press enter when ready to start ...")
   end
 
   defp wait_before_load_fuel(loops) do
@@ -518,12 +524,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> Enum.each(&UI.Valves.set(&1, 0, wait: true))
   end
 
-  def connect_to_grid(loops, permission \\ true) do
-    if permission do
-      UI.tablet("Communications Center")
-      UI.set("Response", "WAIT FOR PERMISSION")
-    end
-
+  def connect_to_grid(loops) do
     UI.console("Generation & Distribution")
 
     loops
