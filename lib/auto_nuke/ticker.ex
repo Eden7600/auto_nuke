@@ -25,6 +25,7 @@ defmodule AutoNuke.Ticker do
 
   @impl true
   def init(nil) do
+    API.Web.set_config(:fast)
     ping_wait()
     schedule_next()
     Logger.info(@log_prefix <> "Started ticking.")

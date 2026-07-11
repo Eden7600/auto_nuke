@@ -1,6 +1,11 @@
 defmodule AutoNuke.API.Web do
   use Memoize
 
+  @config_key :api_web_config
+
+  def set_config(config), do: Process.put(@config_key, config)
+  defp get_config, do: Process.get(@config_key, :default)
+
   defp api_url do
     case System.fetch_env("NUKE_URL") do
       {:ok, url} -> url
@@ -8,10 +13,21 @@ defmodule AutoNuke.API.Web do
     end
   end
 
-  defp req_new() do
+  defp req_new, do: get_config() |> req_new()
+
+  defp req_new(:default) do
     Req.new(
       base_url: api_url(),
-      max_retries: 1,
+      max_retries: 2,
+      retry_delay: fn _ -> 500 end,
+      connect_options: [timeout: 500]
+    )
+  end
+
+  defp req_new(:fast) do
+    Req.new(
+      base_url: api_url(),
+      max_retries: 2,
       retry_delay: fn _ -> 100 end,
       connect_options: [timeout: 100]
     )
