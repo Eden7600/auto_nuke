@@ -12,7 +12,9 @@ defmodule AutoNuke.Operator.VacuumTank do
       mode: :pump,
       switching: true,
       pump_axis: nil,
-      crv_axis: nil
+      crv_axis: nil,
+      last_vacuum: nil,
+      distress_count: 0
     )
   end
 
@@ -22,6 +24,9 @@ defmodule AutoNuke.Operator.VacuumTank do
   @omsi API.Valves.omsi()
   @smsi API.Valves.smsi()
   @crv API.Valves.crv()
+
+  # Apparently it doesn't take much, and this speeds things up.
+  @crv_open_percent 10
 
   # In pump mode, we try to keep the retention tank half full:
   @target_fill_ratio 0.5
@@ -36,6 +41,11 @@ defmodule AutoNuke.Operator.VacuumTank do
   @steam_high_mark 130
   # If running in CRV mode and steam drops below this (kg/min), switch to pump mode.
   @steam_low_mark 110
+
+  # If we're in CRV mode, below 95% vacuum, and we still can't improve vacuum
+  # for 10 ticks in a row, then we go permanently to pump mode.
+  @distress_vacuum 0.95
+  @max_distress_count 10
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -85,6 +95,7 @@ defmodule AutoNuke.Operator.VacuumTank do
     state =
       state
       |> maybe_change_mode()
+      |> check_distress()
       |> wait_for_switch()
 
     {axis, target, current} = get_control_metrics(state)
@@ -105,12 +116,16 @@ defmodule AutoNuke.Operator.VacuumTank do
     end)
   end
 
+  defp maybe_change_mode(%State{distress_count: n} = state) when n > @max_distress_count do
+    case state.mode do
+      :crv -> %State{state | mode: :pump, switching: true}
+      :pump -> state
+    end
+  end
+
   defp maybe_change_mode(%State{mode: :pump} = state) do
     if API.SteamGen.get_total_outlet() > @steam_high_mark do
-      old = state.pump_axis |> ControlAxis.peek()
-      new = state.crv_axis |> ControlAxis.peek()
-      change_msi(old, new)
-
+      get_msi() |> change_msi(state.crv_axis.last_value)
       %State{state | mode: :crv, switching: true}
     else
       state
@@ -119,22 +134,43 @@ defmodule AutoNuke.Operator.VacuumTank do
 
   defp maybe_change_mode(%State{mode: :crv} = state) do
     if API.SteamGen.get_total_outlet() < @steam_low_mark do
-      old = state.crv_axis |> ControlAxis.peek()
-      new = state.pump_axis |> ControlAxis.peek()
-      change_msi(old, new)
-
+      get_msi() |> change_msi(state.pump_axis.last_value)
       %State{state | mode: :pump, switching: true}
     else
       state
     end
   end
 
+  defp check_distress(%State{mode: :crv, switching: false} = state) do
+    vacuum = API.VacuumPump.get_vacuum_level()
+    ticks = state.distress_count
+
+    ticks =
+      cond do
+        vacuum > @distress_vacuum -> 0
+        vacuum > state.last_vacuum -> max(ticks - 1, 0)
+        vacuum == state.last_vacuum -> ticks
+        true -> ticks + 1
+      end
+
+    %State{state | last_vacuum: vacuum, distress_count: ticks}
+  end
+
+  defp check_distress(%State{} = state), do: state
+
   defp wait_for_switch(%State{switching: false} = state), do: state
 
   defp wait_for_switch(%State{mode: :pump, switching: true} = state) do
     cond do
       get_crv_ordered() > 0 ->
-        Logger.notice(@log_prefix <> "Steam is low: Closing CRV to run vacuum pump ...")
+        if state.distress_count > @max_distress_count do
+          Logger.error(@log_prefix <> "Unable to maintain vacuum using CRV!")
+          Logger.warning(@log_prefix <> "Closing CRV to run vacuum pump ...")
+          API.VacuumPump.set_mode(:startup)
+        else
+          Logger.notice(@log_prefix <> "Steam is low: Closing CRV to run vacuum pump ...")
+        end
+
         set_crv(0)
         state
 
@@ -146,11 +182,12 @@ defmodule AutoNuke.Operator.VacuumTank do
         API.VacuumPump.start()
         state
 
-      API.VacuumPump.get_vacuum_level() < 0.999 ->
+      API.VacuumPump.get_vacuum_level() < 0.99 ->
         state
 
       true ->
         Logger.notice(@log_prefix <> "Vacuum established, now in pump mode.")
+        API.VacuumPump.set_mode(:operational)
         %State{state | switching: false}
     end
   end
@@ -162,12 +199,12 @@ defmodule AutoNuke.Operator.VacuumTank do
         API.VacuumPump.stop()
         state
 
-      get_crv_ordered() < 100 ->
+      get_crv_ordered() < @crv_open_percent ->
         Logger.notice(@log_prefix <> "Vacuum pump offline, opening CRV ...")
-        set_crv(100)
+        set_crv(@crv_open_percent)
         state
 
-      get_crv_actual() < 100 ->
+      get_crv_actual() < @crv_open_percent ->
         state
 
       true ->

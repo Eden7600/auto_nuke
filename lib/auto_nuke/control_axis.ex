@@ -63,7 +63,7 @@ defmodule AutoNuke.ControlAxis do
   end
 
   def clamp(%ControlAxis{pidc: %PIDControl{} = pidc} = axis, new_output, new_value \\ nil) do
-    p = pidc.config.kp * pidc.e0
+    p = pidc.config.kp * (pidc.e0 || 0.0)
     i = new_output - p
 
     %ControlAxis{
