@@ -7,7 +7,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Internal do
   alias AutoNuke.TaskUI, as: UI
 
   @pump API.Pumps.internal_freight()
-  @target_percent 99.0
+  @target_percent 95.0
 
   @all_tanks [
     {API.Valves.valve_m01(), API.Vessels.rinse_tank()},
@@ -74,7 +74,7 @@ defmodule Mix.Tasks.AutoNuke.Refill.Internal do
 
     unless Enum.empty?(active_tanks) do
       UI.ProgressBar.wait(
-        config: UI.ProgressBar.Config.percent(),
+        config: UI.ProgressBar.Config.percent(2, ceil(@target_percent)),
         label: label,
         current_fn: fn ->
           active_tanks
