@@ -136,7 +136,7 @@ defmodule AutoNuke.Operator.SecondaryFill do
     adjust = determine_adjustment(state.adjustment, fill_level)
     new_speed = calculate_speed(steam_gen, state.pump_capacity, fill_level, adjust)
 
-    if new_speed != old_speed do
+    if new_speed != old_speed && sanity_check(new_speed, loop) do
       Logger.info(log_prefix(loop) <> "Changing speed from #{old_speed} to #{new_speed}.")
       Pumps.set_speed(steam_gen.pump, new_speed)
     end
@@ -194,6 +194,23 @@ defmodule AutoNuke.Operator.SecondaryFill do
       state
     end
   end
+
+  defp sanity_check(0, loop) do
+    power = API.Generator.get_power_kw(loop)
+
+    if power > 0.1 do
+      Logger.warning([
+        log_prefix(loop),
+        "Sanity check failed: Power is #{power} kW, refusing to zero pump speed."
+      ])
+
+      false
+    else
+      true
+    end
+  end
+
+  defp sanity_check(_speed, _loop), do: true
 
   defp is_installed?(loop) do
     API.get_json("INSTALLED_LOOPS_JSON")
