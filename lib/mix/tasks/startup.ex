@@ -83,6 +83,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
 
     {:ok, _} = Op.CondenserFill.start_link()
+
+    start_reaction()
     {:ok, _} = Op.CoreTemp.start_link(loops: loops)
     {:ok, _} = Op.PrimaryPumps.start_link()
     {:ok, _} = Op.ControlRods.start_link(mode: :direct)
@@ -358,9 +360,27 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end)
   end
 
-  defp achieve_criticality do
+  defp start_reaction do
     UI.console("Reactor Core")
 
+    UI.set_wait(
+      "Control Rod Height",
+      "BEGIN REDUCING",
+      fn -> API.get_float("RODS_POS_ACTUAL") <= 99.9 end,
+      fn -> API.put("RODS_ALL_POS_ORDERED", 0.0) end
+    )
+
+    UI.wait(
+      "Core Factor",
+      "WAIT FOR REACTION",
+      fn -> API.get_float("CORE_FACTOR") > 0.0 end
+    )
+
+    # Freeze rods where they are:
+    API.put("RODS_ALL_POS_ORDERED", API.get_float("RODS_POS_ACTUAL"))
+  end
+
+  defp achieve_criticality do
     spawn_link(fn ->
       # Ensure only one:
       Process.register(self(), :core_temp_override)
@@ -373,12 +393,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
       increase_temp_target_loop(start_temp)
     end)
-
-    UI.wait(
-      "Control Rod Height",
-      "BEGIN REDUCING",
-      fn -> API.get_float("RODS_POS_ACTUAL") <= 99.9 end
-    )
 
     UI.wait("Status", "WAIT FOR CRITICAL MASS", fn ->
       API.get_boolean("CORE_CRITICAL_MASS_REACHED")
