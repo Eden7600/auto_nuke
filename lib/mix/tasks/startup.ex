@@ -3,7 +3,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @shortdoc "Start the reactor"
 
   use Mix.Task
+  require Logger
   alias AutoNuke.API
+  alias AutoNuke.Smoother
+  alias AutoNuke.ControlAxis
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator, as: Op
 
@@ -20,8 +23,8 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @core_temp_min 320
   # Wait for this temperature before starting turbines:
   @turbine_temp 300
-  # Prior to turbine startup, set bypass to max, to fill the retention tank quickly.
-  @startup_bypass 100
+  # Prior to turbine startup, set bypass to achieve 60 bar:
+  @bypass_target_pressure 60
   # To start turbines, set MSCV to this value while we close the bypass.
   # Once that's done, SteamFlow will take over MSCV and bypass control.
   @startup_mscv 10
@@ -94,6 +97,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     start_vacuum_pump()
     {:ok, _} = Op.VacuumTank.start_link()
 
+    reduce_bypass(loops)
     wait_for_temperature(@turbine_temp)
 
     request_connection()
@@ -228,7 +232,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, @startup_bypass, wait: false))
+    |> Enum.each(&UI.Valves.set(&1, 100, wait: false))
 
     UI.console("Condenser")
     API.Valves.smsi() |> UI.Valves.set(0, wait: false)
@@ -285,7 +289,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
-    |> Enum.each(&UI.Valves.set(&1, @startup_bypass, wait: true))
+    |> Enum.each(&UI.Valves.set(&1, 100, wait: true))
   end
 
   def enable_resistor_bank do
@@ -426,6 +430,79 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end
   end
 
+  defp reduce_bypass(loops) do
+    UI.console("Generation & Distribution")
+
+    loops
+    |> Enum.each(fn loop ->
+      steam_gen = API.SteamGen.for_loop(loop)
+      name = bypass_task_name(loop)
+
+      UI.set_wait(
+        steam_gen.bypass.name,
+        "SET FOR #{@bypass_target_pressure} bar",
+        fn -> Process.whereis(name) |> is_pid() end,
+        fn -> bypass_for_pressure(name, steam_gen) end
+      )
+    end)
+  end
+
+  defp bypass_task_name(loop), do: :"bypass_#{loop}"
+
+  defp bypass_for_pressure(name, steam_gen) do
+    me = self()
+
+    spawn_link(fn ->
+      Process.register(self(), name)
+      PubSub.subscribe(self(), :ticker)
+      send(me, {:started, name})
+
+      smoother = Smoother.new(10)
+
+      ControlAxis.new(
+        kp: -0.01,
+        ki: -0.0005,
+        kd: -0.001,
+        deadzone: 0.5,
+        to_value_fn: &axis_to_bypass/1,
+        offset: 1.0,
+        initial_value: API.Valves.get_open_percent(steam_gen.mscv) |> round()
+      )
+      |> bypass_pressure_loop(smoother, steam_gen)
+    end)
+
+    receive do
+      {:started, ^name} -> :ok
+    after
+      5000 -> raise "No word from bypass_for_pressure process"
+    end
+  end
+
+  defp bypass_pressure_loop(axis, smoother, steam_gen) do
+    receive do
+      {:tick, _} ->
+        smoother = Smoother.add(smoother, API.SteamGen.get_pressure(steam_gen))
+
+        case ControlAxis.step(
+               axis,
+               @bypass_target_pressure,
+               Smoother.extrapolate(smoother, 5)
+             ) do
+          {:changed, axis, new, old} ->
+            Logger.debug("Changing bypass from #{old} to #{new}.")
+            API.Valves.set_open_percent(steam_gen.bypass, new)
+            axis
+
+          {:unchanged, axis, _old} ->
+            axis
+        end
+        |> bypass_pressure_loop(smoother, steam_gen)
+
+      :exit ->
+        :done
+    end
+  end
+
   defp wait_for_temperature(temp, with_header \\ true) do
     if with_header, do: UI.console("Reactor Core")
 
@@ -530,6 +607,12 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     UI.console("Generation & Distribution")
 
     loops
+    |> Enum.each(fn loop ->
+      bypass_task_name(loop)
+      |> send(:exit)
+    end)
+
+    loops
     |> Enum.map(&API.Valves.turbine_bypass/1)
     |> Enum.each(&API.Valves.set_open_percent(&1, 0))
 
@@ -625,4 +708,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp get_vent_open?(l), do: API.SteamGen.for_loop(l) |> API.SteamGen.get_vent_open?()
   defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
+
+  defp axis_to_bypass(output), do: round(output * 50) + 50
 end
