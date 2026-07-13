@@ -31,9 +31,6 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # This will scale pumps up to 100% at 20% fill or lower,
   # and down to 0% at 80% fill or higher.
   @fill_limit_span 0.10
-  # Boost mode will treat any level below 80% as if the tank is completely empty.
-  # This will force max pumps immediately.
-  @boost_threshold 0.8
 
   defp process_name(loop), do: __MODULE__ |> Module.concat("L#{loop}")
 
@@ -128,13 +125,13 @@ defmodule AutoNuke.Operator.SecondaryFill do
     state = maybe_expire_boost_mode(state)
 
     steam_gen = state.steam_gen
-
-    fill_level =
-      Vessels.get_fill_ratio(steam_gen.vessel)
-      |> maybe_boost(state.boost_mode)
-
+    fill_level = Vessels.get_fill_ratio(steam_gen.vessel)
     adjust = determine_adjustment(state.adjustment, fill_level)
-    new_speed = calculate_speed(steam_gen, state.pump_capacity, fill_level, adjust)
+
+    new_speed =
+      SteamGen.get_outlet(steam_gen)
+      |> maybe_boost(state.boost_mode)
+      |> calculate_speed(state.pump_capacity, fill_level, adjust)
 
     if new_speed != old_speed && sanity_check(new_speed, loop) do
       Logger.info(log_prefix(loop) <> "Changing speed from #{old_speed} to #{new_speed}.")
@@ -144,8 +141,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
     {:noreply, %State{state | speed: new_speed, adjustment: adjust}}
   end
 
-  defp maybe_boost(level, boost) when level < @boost_threshold and not is_nil(boost), do: 0.0
-  defp maybe_boost(level, _), do: level
+  defp maybe_boost(steam_out, nil), do: steam_out
+  defp maybe_boost(_, _), do: 999_999
 
   defp determine_adjustment(nil, f) when f < @fill_target_min, do: :fill
   defp determine_adjustment(nil, f) when f > @fill_target_max, do: :empty
@@ -153,8 +150,8 @@ defmodule AutoNuke.Operator.SecondaryFill do
   defp determine_adjustment(:empty, f) when f <= 0.5, do: nil
   defp determine_adjustment(current, _), do: current
 
-  defp calculate_speed(%SteamGen{} = steam_gen, pump_capacity, fill_level, adjust) do
-    ideal = SteamGen.get_outlet(steam_gen) / pump_capacity * 100
+  defp calculate_speed(steam_outlet, pump_capacity, fill_level, adjust) do
+    ideal = steam_outlet / pump_capacity * 100
 
     cond do
       fill_level < @fill_limit_min ->
