@@ -202,11 +202,20 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   end
 
   defp dump_steam_generator_pressure(node) do
-    UI.console("Steam Generator")
+    UI.tablet("AutoNuke Remote Control")
 
-    remote_fn(node, fn ->
-      @loops |> Enum.each(&Op.SecondaryFill.set_boost_mode(&1, :never))
+    @loops
+    |> Enum.filter(&Op.SecondaryFill.is_active?({&1, node}))
+    |> Enum.each(fn loop ->
+      UI.set_wait(
+        "Secondary Fill Operator L#{loop}",
+        "SET BOOST MODE",
+        fn -> Op.SecondaryFill.boost_mode_active?({loop, node}) end,
+        fn -> Op.SecondaryFill.set_boost_mode({loop, node}, :never) end
+      )
     end)
+
+    UI.console("Steam Generator")
 
     @steam_gens
     |> Enum.map(& &1.drain_valve)

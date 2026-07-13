@@ -32,7 +32,14 @@ defmodule AutoNuke.Operator.SecondaryFill do
   # and down to 0% at 80% fill or higher.
   @fill_limit_span 0.10
 
-  defp process_name(loop), do: __MODULE__ |> Module.concat("L#{loop}")
+  defp process_name(loop_id) when is_integer(loop_id),
+    do: __MODULE__ |> Module.concat("L#{loop_id}")
+
+  defp process_name(loop_id) when is_pid(loop_id) or is_atom(loop_id), do: loop_id
+
+  defp process_name({loop_id, node})
+       when (is_integer(loop_id) or is_atom(loop_id)) and is_atom(node),
+       do: {process_name(loop_id), node}
 
   def child_spec(opts) do
     loop = Keyword.fetch!(opts, :loop)
@@ -49,20 +56,29 @@ defmodule AutoNuke.Operator.SecondaryFill do
     GenServer.start_link(__MODULE__, loop, opts)
   end
 
-  def set_boost_mode(loop_or_pid, expiry \\ :next_hour)
-
-  def set_boost_mode(loop, expiry) when is_integer(loop),
-    do: process_name(loop) |> set_boost_mode(expiry)
-
-  def set_boost_mode(pid, expiry) when is_pid(pid) or is_atom(pid) do
-    GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
+  def stop(loop_id) do
+    process_name(loop_id)
+    |> GenServer.stop()
   end
 
-  def clear_boost_mode(loop) when is_integer(loop),
-    do: process_name(loop) |> clear_boost_mode()
+  def is_active?(loop_id) do
+    process_name(loop_id)
+    |> GenServer.call(:is_active?)
+  end
 
-  def clear_boost_mode(pid) when is_pid(pid) or is_atom(pid) do
-    GenServer.call(pid, {:boost_mode, nil})
+  def set_boost_mode(loop_id, expiry \\ :next_hour) do
+    process_name(loop_id)
+    |> GenServer.call({:boost_mode, ANTime.parse_expiry(expiry)})
+  end
+
+  def clear_boost_mode(loop_id) do
+    process_name(loop_id)
+    |> GenServer.call({:boost_mode, nil})
+  end
+
+  def boost_mode_active?(loop_id) do
+    process_name(loop_id)
+    |> GenServer.call(:boost_mode_active?)
   end
 
   @impl true
@@ -103,6 +119,13 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     {:ok, state}
   end
+
+  @impl true
+  def handle_call(:is_active?, _from, nil), do: {:reply, false, nil}
+  def handle_call(:is_active?, _from, %State{} = state), do: {:reply, true, state}
+
+  def handle_call(:boost_mode_active?, _from, %State{boost_mode: boost} = state),
+    do: {:reply, !is_nil(boost), state}
 
   @impl true
   def handle_call({:boost_mode, expiry}, _from, %State{loop: loop} = state) do
