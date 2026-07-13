@@ -150,6 +150,7 @@ defmodule AutoNuke.Operator.VacuumTank do
         vacuum > @distress_vacuum -> 0
         vacuum > state.last_vacuum -> max(ticks - 1, 0)
         vacuum == state.last_vacuum -> ticks
+        state.crv_axis.last_value < 100 -> ticks
         true -> ticks + 1
       end
 
