@@ -65,6 +65,7 @@ defmodule AutoNuke.API.Web do
       {:error, %RTE{reason: :timeout}} -> {:error, "Timeout."}
       {:error, %RTE{reason: :ehostunreach}} -> {:error, "Host is unreachable."}
       {:error, %RTE{reason: :ehostdown}} -> {:error, "Host is down."}
+      {:error, %RTE{reason: :econnrefused}} -> {:error, "Connection refused."}
     end)
   end
 end
