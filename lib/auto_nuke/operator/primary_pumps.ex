@@ -102,6 +102,9 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   @temp_span @temp_max - @temp_min
   @pump_span @pump_speeds.last - @pump_speeds.first
 
+  defp temp_to_speed(temp, _) when temp <= @temp_min, do: @pump_speeds.first
+  defp temp_to_speed(temp, _) when temp >= @temp_max, do: @pump_speeds.last
+
   defp temp_to_speed(temp, old_speed) do
     percent_in_range = (temp - @temp_min) / @temp_span
     new_speed = @pump_speeds.first + @pump_span * percent_in_range
