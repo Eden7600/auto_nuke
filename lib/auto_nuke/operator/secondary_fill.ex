@@ -117,6 +117,10 @@ defmodule AutoNuke.Operator.SecondaryFill do
     {:reply, :ok, %State{state | boost_mode: expiry}}
   end
 
+  def handle_call({:boost_mode, _expiry}, _from, nil) do
+    {:reply, {:error, :not_running}, nil}
+  end
+
   @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
