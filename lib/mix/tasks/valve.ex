@@ -73,7 +73,10 @@ defmodule Mix.Tasks.AutoNuke.Valve do
     names
     |> Enum.flat_map(&find_valves/1)
     |> Enum.uniq()
-    |> actuate(action)
+    |> then(fn v ->
+      UI.init()
+      actuate(v, action)
+    end)
   end
 
   defp find_valves(name) do
@@ -89,46 +92,6 @@ defmodule Mix.Tasks.AutoNuke.Valve do
     end
   end
 
-  defp actuate(valves, "open") do
-    do_actuate(
-      valves,
-      "OPEN",
-      UI.ProgressBar.Config.percent(),
-      fn v -> v >= 100 end
-    )
-  end
-
-  defp actuate(valves, "close") do
-    do_actuate(
-      valves,
-      "CLOSE",
-      UI.ProgressBar.Config.reverse_percent(),
-      fn v -> v <= 0 end
-    )
-  end
-
-  defp do_actuate(valves, action, pb_config, done_fn) do
-    UI.init()
-
-    label =
-      case valves do
-        [v] -> v.short_name
-        list -> "#{Enum.count(list)} valves"
-      end
-
-    valves |> Enum.each(&UI.Valves.set_actuator(&1, action))
-
-    UI.ProgressBar.wait(
-      config: pb_config,
-      label: label,
-      current_fn: fn ->
-        valves
-        |> Enum.map(&API.Valves.get_open_percent/1)
-        |> Statistex.average()
-      end,
-      done_fn: done_fn
-    )
-
-    valves |> Enum.each(&UI.Valves.set_actuator(&1, "OFF"))
-  end
+  defp actuate(valves, "open"), do: UI.Valves.bulk_open(valves)
+  defp actuate(valves, "close"), do: UI.Valves.bulk_close(valves)
 end

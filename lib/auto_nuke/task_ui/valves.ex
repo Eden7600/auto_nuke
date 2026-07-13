@@ -18,14 +18,6 @@ defmodule AutoNuke.TaskUI.Valves do
     )
   end
 
-  def wait_until_open(%ActuatedValve{} = valve) do
-    UI.ProgressBar.wait(
-      config: PBConfig.percent(),
-      label: valve.short_name,
-      current_fn: fn -> ValveAPI.get_open_percent(valve) end
-    )
-  end
-
   def close(%ActuatedValve{} = v) do
     set_actuator(v, "CLOSE")
     wait_until_closed(v)
@@ -40,13 +32,36 @@ defmodule AutoNuke.TaskUI.Valves do
     )
   end
 
-  def wait_until_closed(%ActuatedValve{} = valve) do
+  def wait_until_open(%ActuatedValve{} = valve), do: wait_until_open([valve])
+
+  def wait_until_open(valves) when is_list(valves) do
     UI.ProgressBar.wait(
-      config: PBConfig.reverse_percent(),
-      label: valve.short_name,
-      current_fn: fn -> ValveAPI.get_open_percent(valve) end
+      config: PBConfig.percent(),
+      label: label_many(valves),
+      current_fn: fn ->
+        valves
+        |> Enum.map(&ValveAPI.get_open_percent/1)
+        |> Statistex.average()
+      end
     )
   end
+
+  def wait_until_closed(%ActuatedValve{} = valve), do: wait_until_closed([valve])
+
+  def wait_until_closed(valves) when is_list(valves) do
+    UI.ProgressBar.wait(
+      config: PBConfig.reverse_percent(),
+      label: label_many(valves),
+      current_fn: fn ->
+        valves
+        |> Enum.map(&ValveAPI.get_open_percent/1)
+        |> Statistex.average()
+      end
+    )
+  end
+
+  defp label_many([valve]), do: valve.short_name
+  defp label_many(list), do: "#{Enum.count(list)} valves"
 
   @actions ["OPEN", "CLOSE", "OFF"]
   def set_actuator(%ActuatedValve{} = valve, action) when action in @actions do
@@ -89,11 +104,13 @@ defmodule AutoNuke.TaskUI.Valves do
 
   def bulk_open(valves) do
     valves |> Enum.each(&set_actuator(&1, "OPEN"))
-    valves |> Enum.each(&open/1)
+    wait_until_open(valves)
+    valves |> Enum.each(&set_actuator(&1, "OFF"))
   end
 
   def bulk_close(valves) do
     valves |> Enum.each(&set_actuator(&1, "CLOSE"))
-    valves |> Enum.each(&close/1)
+    wait_until_closed(valves)
+    valves |> Enum.each(&set_actuator(&1, "OFF"))
   end
 end
