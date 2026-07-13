@@ -53,7 +53,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     wait_for_low_steam()
     disable_remotes(node, [:vacuum_tank])
     stop_vacuum_pump()
-    dump_steam_generator_pressure()
+    dump_steam_generator_pressure(node)
 
     wait_core_cooldown()
     stop_pressurizer()
@@ -183,7 +183,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     @primary_pumps
     |> Enum.each(fn pump ->
       if API.Pumps.get_active?(pump) do
-        UI.Pumps.set_speed(pump, 49, wait: false)
+        UI.Pumps.set_speed(pump, 100, wait: false)
       end
     end)
   end
@@ -201,8 +201,16 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     )
   end
 
-  defp dump_steam_generator_pressure do
+  defp dump_steam_generator_pressure(node) do
     UI.console("Steam Generator")
+
+    remote_fn(node, fn ->
+      @loops |> Enum.each(&Op.SecondaryFill.set_boost_mode(&1, :never))
+    end)
+
+    @steam_gens
+    |> Enum.map(& &1.drain_valve)
+    |> UI.Valves.bulk_open()
 
     @steam_gens
     |> Enum.each(fn steam_gen ->
@@ -245,6 +253,10 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         fn -> SteamGen.set_vent_open(steam_gen, false) end
       )
     end)
+
+    @steam_gens
+    |> Enum.map(& &1.drain_valve)
+    |> UI.Valves.bulk_close()
   end
 
   defp stop_vacuum_pump do
@@ -299,7 +311,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       config: UI.ProgressBar.Config.target(max(start_temp, 101), 100, "°C"),
       label: "PZR Temp",
       current_fn: fn -> API.Vessels.get_temperature(pzr) end,
-      done_fn: &(&1 >= 100)
+      done_fn: &(&1 < 100)
     )
 
     start_pressure = API.Vessels.get_pressure(pzr)
