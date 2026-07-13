@@ -68,15 +68,13 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   defp reduce_throttle(node) do
     UI.tablet("AutoNuke Remote Control")
 
+    steam_flow = {Op.SteamFlow, node}
+
     UI.set_wait(
       "Steam Flow Target Override",
       "SET TO 0%",
-      remote_fn(node, fn ->
-        Op.SteamFlow.get_target_override() == {{0.0, :ratio}, :never}
-      end),
-      remote_fn(node, fn ->
-        Op.SteamFlow.set_target_override_percent(0, :never)
-      end)
+      fn -> Op.SteamFlow.get_target_override(steam_flow) == {{0.0, :ratio}, :never} end,
+      fn -> Op.SteamFlow.set_target_override_percent(0, :never, steam_flow) end
     )
 
     mscvs = @steam_gens |> Enum.map(& &1.mscv)
@@ -84,11 +82,11 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     UI.wait(
       "Main Steam Control Valves",
       "#{@min_power_level}% OR LOWER",
-      remote_fn(node, fn ->
+      fn ->
         mscvs
         |> Enum.map(&API.Valves.get_open_percent/1)
         |> Enum.all?(&(&1 <= @min_power_level))
-      end)
+      end
     )
   end
 
@@ -310,8 +308,11 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       fn -> !API.get_boolean("PRESSURIZER_HEATERS_ON") end
     )
 
-    API.Valves.pzr_cooling() |> UI.Valves.open()
-    API.Valves.pzr_vent() |> UI.Valves.open()
+    [
+      API.Valves.pzr_cooling(),
+      API.Valves.pzr_vent()
+    ]
+    |> UI.Valves.bulk_open()
 
     pzr = API.Vessels.pressurizer()
     start_temp = API.Vessels.get_temperature(pzr)
