@@ -182,16 +182,16 @@ defmodule AutoNuke.Operator.SecondaryFill do
 
     cond do
       fill_level < @fill_limit_min ->
+        base = ideal + @fill_target_pump_adjust
         error = @fill_limit_min - fill_level
-        percent = (error / @fill_limit_span) |> min(1.0)
-        adjust = (100 - ideal) * percent
-        ideal + max(adjust, @fill_target_pump_adjust)
+        ratio = error / @fill_limit_span
+        base + (100 - base) * ratio
 
       fill_level > @fill_limit_max ->
+        base = ideal - @fill_target_pump_adjust
         error = fill_level - @fill_limit_max
-        percent = (error / @fill_limit_span) |> min(1.0)
-        adjust = ideal * percent
-        ideal - max(adjust, @fill_target_pump_adjust)
+        ratio = error / @fill_limit_span
+        base - base * ratio
 
       adjust == :fill ->
         ideal + @fill_target_pump_adjust
