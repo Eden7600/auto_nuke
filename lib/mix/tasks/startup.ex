@@ -732,29 +732,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   defp axis_to_bypass(output), do: round(output * 50) + 50
 
-  defp parse_loops(l), do: parse_arg(l, "[1-3A-Ca-c]", &UI.parse_loop/1) |> wrap_arg()
-  defp parse_cores(c), do: parse_arg(c, "[1-9]", &String.to_integer/1) |> wrap_arg()
-
-  defp parse_arg(arg, rx, fun) do
-    cond do
-      arg == "all" ->
-        1..3
-
-      arg =~ ~r/^#{rx}$/ ->
-        [fun.(arg)]
-
-      match = Regex.run(~r/^(#{rx})\.\.(#{rx})$/, arg) ->
-        [_, first, last] = match
-        fun.(first)..fun.(last)
-
-      String.contains?(arg, ",") ->
-        arg
-        |> String.split(",")
-        |> Enum.flat_map(&parse_arg(&1, rx, fun))
-    end
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
+  defp parse_loops(loops), do: UI.parse_many_loops(loops) |> wrap_arg()
+  defp parse_cores(cores), do: UI.parse_many_core_bays(cores) |> wrap_arg()
   defp wrap_arg(value), do: fn -> value end
 end

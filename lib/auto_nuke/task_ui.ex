@@ -121,4 +121,28 @@ defmodule AutoNuke.TaskUI do
   def parse_loop("3"), do: 3
   def parse_loop("C"), do: 3
   def parse_loop("c"), do: 3
+
+  def parse_many_loops(l), do: parse_many(l, "[1-3A-Ca-c]", &parse_loop/1)
+  def parse_many_core_bays(c), do: parse_many(c, "[1-9]", &String.to_integer/1)
+
+  defp parse_many(arg, rx, fun) do
+    cond do
+      arg == "all" ->
+        1..3
+
+      arg =~ ~r/^#{rx}$/ ->
+        [fun.(arg)]
+
+      match = Regex.run(~r/^(#{rx})\.\.(#{rx})$/, arg) ->
+        [_, first, last] = match
+        fun.(first)..fun.(last)
+
+      String.contains?(arg, ",") ->
+        arg
+        |> String.split(",")
+        |> Enum.flat_map(&parse_many(&1, rx, fun))
+    end
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
 end
