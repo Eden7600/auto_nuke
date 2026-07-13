@@ -215,6 +215,13 @@ defmodule AutoNuke.API.Valves do
       valve_panel_key: "VALVULA_SALIDA_CONDENSADOR_03"
     }
 
+  def steam_gen_drain(loop) when loop in 1..3,
+    do: %ActuatedValve{
+      name: "Valve DV0#{loop}",
+      short_name: "DV0#{loop}",
+      valve_panel_key: "VALVULA_DRAIN_EVA0#{loop}"
+    }
+
   def pzr_cooling,
     do: %ActuatedValve{
       name: "Pressurizer Cooling Valve",

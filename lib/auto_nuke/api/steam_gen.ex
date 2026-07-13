@@ -1,7 +1,7 @@
 defmodule AutoNuke.API.SteamGen do
   alias AutoNuke.API
 
-  @enforce_keys [:loop, :vessel, :pump, :mscv, :bypass]
+  @enforce_keys [:loop, :vessel, :pump, :mscv, :bypass, :drain_valve]
   defstruct(@enforce_keys)
   alias __MODULE__
 
@@ -12,7 +12,8 @@ defmodule AutoNuke.API.SteamGen do
       vessel: API.Vessels.steam_generator(loop),
       pump: API.Pumps.secondary(loop),
       mscv: API.Valves.mscv(loop),
-      bypass: API.Valves.turbine_bypass(loop)
+      bypass: API.Valves.turbine_bypass(loop),
+      drain_valve: API.Valves.steam_gen_drain(loop)
     }
   end
 

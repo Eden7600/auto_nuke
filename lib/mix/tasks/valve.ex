@@ -29,7 +29,11 @@ defmodule Mix.Tasks.AutoNuke.Valve do
     # Condenser to secondary pump
     "A6" => API.Valves.valve_a6(),
     "B6" => API.Valves.valve_b6(),
-    "C6" => API.Valves.valve_c6()
+    "C6" => API.Valves.valve_c6(),
+    # Steam generator drain
+    "DV01" => API.Valves.steam_gen_drain(1),
+    "DV02" => API.Valves.steam_gen_drain(2),
+    "DV03" => API.Valves.steam_gen_drain(3)
   }
 
   @other_valves %{
@@ -49,7 +53,7 @@ defmodule Mix.Tasks.AutoNuke.Valve do
     "A*" => 1..6 |> Enum.map(&"A#{&1}"),
     "B*" => 1..6 |> Enum.map(&"B#{&1}"),
     "C*" => 1..6 |> Enum.map(&"C#{&1}"),
-    "OTHER" => ["PZR COOLING", "PZR VENT", "RCV", "CST DRAIN"]
+    "DV*" => 1..3 |> Enum.map(&"DV0#{&1}")
   }
 
   @moduledoc """
@@ -59,9 +63,10 @@ defmodule Mix.Tasks.AutoNuke.Valve do
 
   Possible valves:
 
-  - A1 .. A6
-  - B1 .. B6
-  - C1 .. C6
+  - **Loop 1 valves:** A1 .. A6
+  - **Loop 2 valves:** B1 .. B6
+  - **Loop 3 valves:** C1 .. C6
+  - **Steam gen drain valves:** DV01 .. DV03
   #{@other_valves |> Map.keys() |> Enum.map(&"- #{&1}") |> Enum.join("\n")}
 
   Possible valve groups:
