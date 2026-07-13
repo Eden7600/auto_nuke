@@ -618,8 +618,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     loops
     |> Enum.each(fn loop ->
-      bypass_task_name(loop)
-      |> send(:exit)
+      case bypass_task_name(loop) |> Process.whereis() do
+        pid when is_pid(pid) -> send(pid, :exit)
+        nil -> :noop
+      end
     end)
 
     loops
