@@ -45,22 +45,37 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @core_temp_max_delta 10
 
   def run([]) do
-    startup(&get_installed_secondary_loops/0)
+    startup(
+      &get_installed_secondary_loops/0,
+      &get_loaded_core_bays/0
+    )
   end
 
-  def run(args) do
-    loops = args |> Enum.map(&UI.parse_loop/1)
-    startup(fn -> loops end)
+  def run([loops]) do
+    startup(
+      parse_loops(loops),
+      &get_loaded_core_bays/0
+    )
+  end
+
+  def run([loops, cores]) do
+    startup(
+      parse_loops(loops),
+      parse_cores(cores)
+    )
   end
 
   @loop_emoji "\u{1F501}"
+  @core_emoji "\u{2622}\u{FE0F}"
 
-  def startup(loops_fun) do
+  def startup(loops_fun, cores_fun) do
     UI.init()
     UI.log_to_file("startup.log")
 
     loops = loops_fun.()
+    cores = cores_fun.()
     IO.puts("#{@loop_emoji} Starting using loops: #{inspect(loops)} #{@loop_emoji}")
+    IO.puts("#{@core_emoji} Starting using cores: #{inspect(cores)} #{@core_emoji}")
 
     check_power_source()
     test_control_rods()
@@ -76,7 +91,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     wait_before_load_fuel(loops)
     {:ok, _} = Op.CondenserCooling.start_link()
-    load_fuel()
+    load_fuel(cores)
 
     start_secondary_circulation(loops)
 
@@ -329,7 +344,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     end
   end
 
-  defp load_fuel do
+  defp load_fuel(cores) do
     UI.console("Fuel")
 
     UI.set_wait(
@@ -339,24 +354,19 @@ defmodule Mix.Tasks.AutoNuke.Startup do
       fn -> API.put("CORE_OPERATION_MODE", "NOMINAL") end
     )
 
-    lowered =
-      1..9
-      |> Enum.filter(fn core ->
-        if API.get_string("CORE_BAY_#{core}_STATE") == "EXTERIOR" do
-          UI.set_wait(
-            "BAY #{core}: Lower Piston",
-            "PRESS",
-            fn -> API.get_float("CORE_FUEL_#{core}_FISSIONABLE") > 0 end,
-            fn -> API.put("CORE_BAY_#{core}_FUEL_LOADING", "LOAD") end
-          )
+    cores
+    |> Enum.each(fn core ->
+      if API.get_string("CORE_BAY_#{core}_STATE") == "EXTERIOR" do
+        UI.set_wait(
+          "BAY #{core}: Lower Piston",
+          "PRESS",
+          fn -> API.get_float("CORE_FUEL_#{core}_FISSIONABLE") > 0 end,
+          fn -> API.put("CORE_BAY_#{core}_FUEL_LOADING", "LOAD") end
+        )
+      end
+    end)
 
-          true
-        else
-          false
-        end
-      end)
-
-    lowered
+    cores
     |> Enum.each(fn core ->
       UI.wait("BAY #{core}: Fuel Temperature Gauge", "CONFIRM ACTIVE", fn ->
         API.get_float("CORE_FUEL_#{core}_TEMPERATURE") > 20
@@ -701,6 +711,17 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp get_loaded_core_bays do
+    1..9
+    |> Enum.filter(fn core ->
+      case API.get_string("CORE_BAY_#{core}_STATE") do
+        "EXTERIOR" -> true
+        "INTERIOR" -> true
+        "VACIO" -> false
+      end
+    end)
+  end
+
   defp using_boron? do
     API.Pumps.boron_dosing()
     |> API.Pumps.installed?()
@@ -710,4 +731,30 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   defp set_vent_open(l, v), do: API.SteamGen.for_loop(l) |> API.SteamGen.set_vent_open(v)
 
   defp axis_to_bypass(output), do: round(output * 50) + 50
+
+  defp parse_loops(l), do: parse_arg(l, "[1-3A-Ca-c]", &UI.parse_loop/1) |> wrap_arg()
+  defp parse_cores(c), do: parse_arg(c, "[1-9]", &String.to_integer/1) |> wrap_arg()
+
+  defp parse_arg(arg, rx, fun) do
+    cond do
+      arg == "all" ->
+        1..3
+
+      arg =~ ~r/^#{rx}$/ ->
+        [fun.(arg)]
+
+      match = Regex.run(~r/^(#{rx})\.\.(#{rx})$/, arg) ->
+        [_, first, last] = match
+        fun.(first)..fun.(last)
+
+      String.contains?(arg, ",") ->
+        arg
+        |> String.split(",")
+        |> Enum.flat_map(&parse_arg(&1, rx, fun))
+    end
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp wrap_arg(value), do: fn -> value end
 end
