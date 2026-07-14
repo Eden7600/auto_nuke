@@ -29,6 +29,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   }
 
   @min_deadzone 0.01
+  @min_deadzone_kw 10000
   @max_deadzone 0.5
 
   def new do
@@ -59,6 +60,13 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     remaining = hour_remaining_percent(ts)
     lower_kw = (demand * min_supply - supply) / remaining
     upper_kw = (demand * max_supply - supply) / remaining
+
+    upper_kw =
+      if upper_kw - lower_kw < @min_deadzone_kw do
+        lower_kw + @min_deadzone_kw
+      else
+        upper_kw
+      end
 
     lower_ratio = lower_kw / demand
     upper_ratio = upper_kw / demand
