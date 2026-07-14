@@ -59,6 +59,9 @@ defmodule AutoNuke.API.Vessels do
       name: "Pressurizer",
       short_name: "Pressurizer",
       capacity: 1200,
+      fill_level_key: "PRESSURIZER_FILL_LEVEL",
+      temperature_key: "PRESSURIZER_TEMPERATURE",
+      pressure_key: "PRESSURIZER_PRESSURE",
       valve_panel_key: "PRESSURIZER"
     }
 

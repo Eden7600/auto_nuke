@@ -201,21 +201,14 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     [API.Valves.pzr_vent(), API.Valves.pzr_cooling()]
     |> UI.Valves.bulk_close()
 
-    UI.set("Thermostat", "ON")
+    UI.wait("Thermostat", "ON", &API.Pzr.get_thermostat_enabled?/0)
     UI.set("Heating Power Level", "set to HIGH")
-
-    UI.wait(
-      "Heating Power",
-      "ON",
-      fn -> API.get_boolean("PRESSURIZER_HEATERS_ON") end
-    )
-
-    pzr = API.Vessels.pressurizer()
+    UI.wait("Heating Power", "ON", &API.Pzr.get_heat_enabled?/0)
 
     UI.ProgressBar.wait(
       config: UI.ProgressBar.Config.target(0, 100, "°C"),
       label: "PZR Temp",
-      current_fn: fn -> API.Vessels.get_temperature(pzr) end,
+      current_fn: &API.Pzr.get_temperature/0,
       done_fn: &(&1 >= 100)
     )
   end
