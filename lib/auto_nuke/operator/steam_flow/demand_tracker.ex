@@ -12,9 +12,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
   @seconds_per_minute AutoNuke.Ticker.seconds_per_minute()
 
-  # Standard mode: 100% to 110%, ideal 105%, no cap.
+  # Standard mode: 95% to 110%, ideal 105%, no cap.
   @standard_targets %{
-    min: 1.00,
+    min: 0.95,
     max: 1.10,
     ideal: 1.05,
     hard_cap: 99999.0
