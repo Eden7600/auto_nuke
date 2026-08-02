@@ -44,33 +44,42 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Clamp this at 10°C above the current actual temperature.
   @core_temp_max_delta 10
 
-  def run([]) do
+  def run(args), do: run(args, [])
+
+  def run([], opts) do
     startup(
       &get_installed_secondary_loops/0,
-      &get_loaded_core_bays/0
+      &get_loaded_core_bays/0,
+      opts
     )
   end
 
-  def run([loops]) do
+  def run([loops], opts) do
     startup(
       parse_loops(loops),
-      &get_loaded_core_bays/0
+      &get_loaded_core_bays/0,
+      opts
     )
   end
 
-  def run([loops, cores]) do
+  def run([loops, cores], opts) do
     startup(
       parse_loops(loops),
-      parse_cores(cores)
+      parse_cores(cores),
+      opts
     )
   end
 
   @loop_emoji "\u{1F501}"
   @core_emoji "\u{2622}\u{FE0F}"
 
-  def startup(loops_fun, cores_fun) do
+  def startup(loops_fun, cores_fun, opts \\ []) do
     UI.init()
     UI.log_to_file("startup.log")
+
+    if AutoNuke.Operator.Handoff.any_running?() do
+      Mix.raise("Operators are already running — the plant appears to be started.")
+    end
 
     loops = loops_fun.()
     cores = cores_fun.()
@@ -125,7 +134,19 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     Op.SteamFlow.set_target_override_percent(100)
 
     UI.console("ALL")
-    UI.wait("Operator", "TAKE OVER", fn -> false end)
+
+    case Keyword.get(opts, :handoff, :wait) do
+      # Standalone `mix auto_nuke.startup`: hold the VM (and the operators
+      # linked to this task) until the human Ctrl-C's and runs ./start.sh.
+      :wait ->
+        UI.wait("Operator", "TAKE OVER", fn -> false end)
+
+      # In the TUI there is no second VM: swap to supervised operators here.
+      :adopt ->
+        UI.set("Operator", "TAKE OVER")
+        AutoNuke.Operator.Handoff.adopt()
+        UI.success("Supervised operators are running the plant.")
+    end
   end
 
   defp check_power_source do

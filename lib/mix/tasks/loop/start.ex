@@ -16,7 +16,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
   @loop_emoji "\u{1F501}"
 
   def startup(loop) do
-    remote_node = ping_remote()
+    remote_node = AutoNuke.PlantNode.find("auto_nuke.loop.start <loop>")
     steam_flow_pid = {Op.SteamFlow, remote_node}
     core_temp_pid = {Op.CoreTemp, remote_node}
 
@@ -38,13 +38,20 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     Startup.start_primary_circulation([loop], nil)
     Startup.start_turbine([loop])
 
-    # Start our own local SteamFlow:
-    {:ok, _} = Op.SteamFlow.start_link(loops: [loop], override: {capacity / 3, :mw})
+    # Start our own temporary SteamFlow for just this loop. It gets a
+    # distinct name because the plant's SteamFlow may live in this very VM
+    # (TUI mode) rather than on a remote node.
+    {:ok, temp_steam_flow} =
+      Op.SteamFlow.start_link(
+        loops: [loop],
+        override: {capacity / 3, :mw},
+        name: __MODULE__.TempSteamFlow
+      )
 
     Startup.connect_to_grid([loop])
 
-    # Put our SteamFlow to sleep:
-    PubSub.unsubscribe(Op.SteamFlow, :ticker)
+    # Put our temporary SteamFlow to sleep:
+    PubSub.unsubscribe(temp_steam_flow, :ticker)
 
     UI.tablet("AutoNuke Remote Control")
 
@@ -61,23 +68,10 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
       fn -> loop in Op.SteamFlow.get_loops(steam_flow_pid) end,
       fn -> Op.SteamFlow.add_loop(loop, steam_flow_pid) end
     )
+
+    # The plant's SteamFlow has taken over; retire the temporary one.
+    # (In task.sh mode it died with the VM; in the TUI it must be stopped.)
+    GenServer.stop(temp_steam_flow)
   end
 
-  defp ping_remote do
-    Node.self()
-    |> Atom.to_string()
-    |> String.split("@", parts: 2)
-    |> then(fn
-      ["nonode", "nohost"] ->
-        Mix.raise("This task must be run via `./task.sh auto_nuke.loop.start <loop>`.")
-
-      ["auto_nuke_loop_start_" <> _, host] ->
-        remote = :"nuke@#{host}"
-
-        case Node.ping(remote) do
-          :pong -> remote
-          :pang -> Mix.raise("Cannot contact #{inspect(remote)}.  Is `./start.sh` running?")
-        end
-    end)
-  end
 end

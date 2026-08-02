@@ -18,7 +18,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   @loop_emoji "\u{1F501}"
 
   def stop(loop) do
-    remote_node = ping_remote()
+    remote_node = AutoNuke.PlantNode.find("auto_nuke.loop.stop <loop>")
     steam_flow_pid = {SteamFlow, remote_node}
     steam_gen = SteamGen.for_loop(loop)
 
@@ -85,21 +85,4 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     )
   end
 
-  defp ping_remote do
-    Node.self()
-    |> Atom.to_string()
-    |> String.split("@", parts: 2)
-    |> then(fn
-      ["nonode", "nohost"] ->
-        Mix.raise("This task must be run via `./task.sh auto_nuke.loop.stop <loop>`.")
-
-      ["auto_nuke_loop_stop_" <> _, host] ->
-        remote = :"nuke@#{host}"
-
-        case Node.ping(remote) do
-          :pong -> remote
-          :pang -> Mix.raise("Cannot contact #{inspect(remote)}.  Is `./start.sh` running?")
-        end
-    end)
-  end
 end

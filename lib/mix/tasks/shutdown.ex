@@ -27,7 +27,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
   }
 
   def run([]) do
-    node = ping_remote()
+    node = AutoNuke.PlantNode.find("auto_nuke.shutdown")
 
     UI.init()
     UI.log_to_file("startup.log")
@@ -366,24 +366,6 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     end)
 
     UI.notice("Reminder: Transformers may need to be disabled for maintenance.")
-  end
-
-  defp ping_remote do
-    Node.self()
-    |> Atom.to_string()
-    |> String.split("@", parts: 2)
-    |> then(fn
-      ["nonode", "nohost"] ->
-        Mix.raise("This task must be run via `./task.sh auto_nuke.loop.stop <loop>`.")
-
-      ["auto_nuke_shutdown_" <> _, host] ->
-        remote = :"nuke@#{host}"
-
-        case Node.ping(remote) do
-          :pong -> remote
-          :pang -> Mix.raise("Cannot contact #{inspect(remote)}.  Is `./start.sh` running?")
-        end
-    end)
   end
 
   defp remote_fn(node, fun), do: fn -> remote(node, fun) end

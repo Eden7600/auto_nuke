@@ -25,7 +25,9 @@ defmodule AutoNuke do
       ]
 
     if start_operators?() do
-      children ++ [AutoNuke.OperatorSupervisor]
+      # The gate keeps operators from booting against an unreachable game
+      # (the Ticker itself no longer blocks on connection).
+      children ++ [AutoNuke.WaitForGame, AutoNuke.OperatorSupervisor]
     else
       children
     end
