@@ -18,6 +18,14 @@ defmodule AutoNuke.Operator.ControlRods do
 
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
+
+  # Anti-hunting: ignore published target changes smaller than this (the
+  # pressure PID upstream jitters at 0.01°C granularity)...
+  @target_hysteresis 0.1
+  # ...and while within this range of target, don't issue rod commands
+  # smaller than @min_move — let the intent accumulate into one real move.
+  @calm_zone 0.8
+  @min_move 0.5
   # Keep the last 10 temperature readings:
   @temp_history_size 10
   # Look ahead 5 more readings during control loop:
@@ -158,7 +166,11 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
-    {:noreply, %State{state | target: t}}
+    if abs(t - state.target) >= @target_hysteresis do
+      {:noreply, %State{state | target: t}}
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -181,20 +193,39 @@ defmodule AutoNuke.Operator.ControlRods do
     end
     |> then(fn {value, %ControlAxis{} = axis} ->
       new_rods = axis_to_rods(value, Enum.count(state.banks))
+      {applied_rods, changes} = gate_rod_command(state, measurement, new_rods)
 
-      calculate_rod_changes(state.banks, state.last_rods, new_rods)
+      changes
       |> log_rod_changes(current_temp, state.target)
       |> set_bank_rods()
 
       {:noreply,
        %State{
          state
-         | axis: maybe_clamp(axis, state.banks, new_rods),
+         | axis: maybe_clamp(axis, state.banks, applied_rods),
            last_temp: current_temp,
-           last_rods: new_rods,
+           last_rods: applied_rods,
            temp_history: history
        }}
     end)
+  end
+
+  # Anti-hunting gate: near the target, sub-@min_move commands are held —
+  # the axis keeps its intent (bounded by @rods_clamping), and only a move
+  # worth making is issued. Real deviations behave exactly as before.
+  defp gate_rod_command(%State{} = state, measurement, new_rods) do
+    calm? = abs(state.target - measurement) <= @calm_zone
+
+    small? =
+      state.last_rods != [] and new_rods != [] and
+        abs(Statistex.average(new_rods) - Statistex.average(state.last_rods)) < @min_move
+
+    if calm? and small? and new_rods != state.last_rods do
+      Logger.debug(@log_prefix <> "Holding rods (calm zone, move under #{@min_move}%).")
+      {state.last_rods, []}
+    else
+      {new_rods, calculate_rod_changes(state.banks, state.last_rods, new_rods)}
+    end
   end
 
   def get_core_temp, do: API.Vessels.get_temperature(@core)
