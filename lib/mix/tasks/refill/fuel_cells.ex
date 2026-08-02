@@ -32,7 +32,9 @@ defmodule Mix.Tasks.AutoNuke.Refill.FuelCells do
     end)
   end
 
-  defp refill_bay(core) do
+  # Also used by `mix auto_nuke.refuel`, which wraps this per-bay flow in
+  # the full refueling choreography.
+  def refill_bay(core) do
     unload_bay(core, get_bay_state(core))
     load_bay(core)
   end

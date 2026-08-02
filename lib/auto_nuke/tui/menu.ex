@@ -50,6 +50,17 @@ defmodule AutoNuke.Tui.Menu do
         confirm: "Begin a controlled shutdown of the whole plant?"
       },
       %{
+        id: :refuel,
+        group: "Plant",
+        label: "Refuel — replace spent fuel cells (guided)",
+        params: [
+          %{label: "Bays", hint: "blank = spent; all; or 1, 3..5", optional: true},
+          %{label: "Pool level", hint: "% for hatch work; blank = 50", optional: true}
+        ],
+        task: T.Refuel,
+        confirm: "Refuel the reactor? (Reactor must be shut down and cool.)"
+      },
+      %{
         id: :refill_condenser,
         group: "Refill",
         label: "Condenser",
@@ -118,8 +129,8 @@ defmodule AutoNuke.Tui.Menu do
       %{
         id: :refill_fuel_cells,
         group: "Refill",
-        label: "Emergency generator fuel cells",
-        params: [%{label: "Generators", hint: "e.g. all, 1, 1..2", optional: false, split: true}],
+        label: "Fuel cells — per-bay piston/hatch assist",
+        params: [%{label: "Core bays", hint: "e.g. all, 1, 3..5", optional: false, split: true}],
         task: T.Refill.FuelCells
       },
       %{
