@@ -95,16 +95,17 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
       create_demand_tracker(minute: 0, demand_times: 1)
     end
 
-    test "re-reads demand every minute", %{dt: dt, ts: ts} do
+    test "re-reads demand every tick", %{dt: dt, ts: ts} do
       API.mock_get("TIME_STAMP", ts + 1)
       API.mock_get("POWER_DEMAND_MW", 123.4)
       assert dt = DT.tick(dt, 1_000)
       assert dt.demand_kwh == 123_400
 
-      # Doesn't read because minute hasn't changed:
+      # Re-read even within the same minute (feeds feedforward):
       API.mock_get("TIME_STAMP", ts + 1)
+      API.mock_get("POWER_DEMAND_MW", 200.0)
       assert dt = DT.tick(dt, 1_000)
-      assert dt.demand_kwh == 123_400
+      assert dt.demand_kwh == 200_000
 
       API.mock_get("TIME_STAMP", ts + 2)
       API.mock_get("POWER_DEMAND_MW", 456.7)

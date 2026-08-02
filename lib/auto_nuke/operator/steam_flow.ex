@@ -134,6 +134,10 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :get_power_levels)
   end
 
+  def get_demand_status(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_demand_status)
+  end
+
   def set_generated_mwh(mwh, pid \\ __MODULE__) do
     GenServer.call(pid, {:set_generated_mwh, mwh})
   end
@@ -259,6 +263,23 @@ defmodule AutoNuke.Operator.SteamFlow do
   end
 
   @impl true
+  def handle_call(:get_demand_status, _from, %State{} = state) do
+    {target, _deadzone} = get_target_ratio_and_deadzone(state)
+
+    status =
+      state.demand_tracker
+      |> DemandTracker.status()
+      |> Map.merge(%{
+        target: target,
+        override?: state.target_override != nil,
+        boost?: state.boost_mode != nil,
+        power_levels: state.turbines |> Enum.map(& &1.power_level)
+      })
+
+    {:reply, status, state}
+  end
+
+  @impl true
   def handle_call({:boost_mode, expiry}, _from, %State{} = state) do
     desc =
       case expiry do
@@ -315,6 +336,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   @impl true
   def handle_info({:tick, _}, %State{turbines: turbines} = state) do
     supply_kw = get_current_supply(turbines)
+    old_demand = state.demand_tracker.demand_kwh
 
     state =
       %State{
@@ -325,7 +347,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       |> maybe_expire_boost_mode()
 
     if turbines |> Enum.all?(&Turbine.sanity_check/1) do
-      tick_power(state, supply_kw)
+      tick_power(state, supply_kw, old_demand)
     else
       state
     end
@@ -337,11 +359,13 @@ defmodule AutoNuke.Operator.SteamFlow do
            axis: %ControlAxis{} = old_axis,
            turbines: old_turbines
          } = state,
-         supply_kw
+         supply_kw,
+         old_demand
        ) do
     ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
     {target, deadzone} = get_target_ratio_and_deadzone(state)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
+    old_axis = maybe_feedforward(old_axis, state, old_demand, target, supply_kw)
     boost_mode = !is_nil(state.boost_mode)
 
     # Limit the new target to within +20% of our current ratio.  If we just
@@ -380,6 +404,48 @@ defmodule AutoNuke.Operator.SteamFlow do
             |> Enum.map(&Turbine.tick/1)
       }
     end)
+  end
+
+  # Feedforward: when demand steps (new hour, new objective), jump the axis
+  # to the estimated steady-state power for the new demand instead of
+  # letting the PID discover it through accumulated error. The gain
+  # (kW per power level) is measured from the current operating point, so
+  # no plant model is needed; the PID trims from there.
+  @feedforward_threshold 0.005
+  # Below this supply the measured gain is meaningless (startup, trip):
+  @feedforward_min_supply_kw 1000
+
+  defp maybe_feedforward(axis, %State{} = state, old_demand, target, supply_kw) do
+    new_demand = state.demand_tracker.demand_kwh
+    turbine_count = Enum.count(state.turbines)
+    total_power = state.turbines |> Enum.sum_by(& &1.power_level)
+
+    significant? =
+      old_demand > 0 and
+        abs(new_demand - old_demand) / old_demand >= @feedforward_threshold
+
+    usable? =
+      turbine_count > 0 and total_power > 0 and supply_kw >= @feedforward_min_supply_kw
+
+    if significant? and usable? do
+      kw_per_level = supply_kw / total_power
+
+      ff_total =
+        (target * new_demand / kw_per_level)
+        |> round()
+        |> max(@power_levels.first * turbine_count)
+        |> min(@power_levels.last * turbine_count)
+
+      Logger.notice([
+        @log_prefix,
+        "Feedforward: demand #{round(old_demand)} -> #{round(new_demand)} kW, ",
+        "rebasing total power #{total_power} -> #{ff_total}."
+      ])
+
+      ControlAxis.clamp(axis, total_power_to_axis(ff_total, turbine_count))
+    else
+      axis
+    end
   end
 
   defp get_target_ratio_and_deadzone(%State{target_override: nil, demand_tracker: dt}),

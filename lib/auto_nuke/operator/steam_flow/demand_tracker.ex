@@ -141,7 +141,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     old_hour = div(old_ts, 60)
     new_hour = div(new_ts, 60)
 
-    dt
+    # Refresh demand every tick (memoized, so it's free): objectives and
+    # hour changes move it, and reacting a minute late costs energy budget.
+    %DT{dt | demand_kwh: API.Power.get_demand_kw()}
     |> add_supply(current_supply)
     |> tick_minute(new_ts)
     |> tick_hour(old_hour, new_hour)
@@ -155,12 +157,43 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
     %DT{
       dt
       | timestamp: new_ts,
-        # Demand sometimes changes due to "generate extra power" objectives.
-        demand_kwh: API.Power.get_demand_kw(),
         supplied_kwh: dt.supplied_kwh + average_supply / 60.0,
         supply_per_second: Smoother.new(@seconds_per_minute)
     }
   end
+
+  @doc """
+  Snapshot for display: this hour's budget, progress, and the projected
+  end-of-hour ratio at the current supply rate.
+  """
+  def status(%DT{} = dt) do
+    elapsed = hour_elapsed_percent(dt.timestamp)
+    remaining_min = 60 - rem(dt.timestamp, 60)
+
+    avg_supply_kw =
+      case dt.supply_per_second do
+        %Smoother{size: 0} -> nil
+        smoother -> Smoother.average(smoother)
+      end
+
+    projected_kwh =
+      case avg_supply_kw do
+        nil -> dt.supplied_kwh
+        kw -> dt.supplied_kwh + kw * remaining_min / 60.0
+      end
+
+    %{
+      demand_kw: dt.demand_kwh,
+      supplied_kwh: dt.supplied_kwh,
+      hour_elapsed: elapsed,
+      supply_kw: avg_supply_kw,
+      projected_ratio: safe_ratio(projected_kwh, dt.demand_kwh),
+      band: {@standard_targets.min, @standard_targets.max}
+    }
+  end
+
+  defp safe_ratio(_num, demand) when demand <= 0, do: nil
+  defp safe_ratio(num, demand), do: num / demand
 
   defp tick_hour(%DT{} = dt, same, same), do: dt
 
