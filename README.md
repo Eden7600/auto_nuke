@@ -10,13 +10,34 @@ Automation to run a simulated nuclear power plant in [Nucleares](https://store.s
 - Edit `config/dev.exs` to point to your Nucleares webserver.
   - You can run the game and the `AutoNuke` client on different computers, as long as the client can reach the game.
 
-Now you have one of two choices:
+Then start the TUI:
+
+```sh
+mix auto_nuke.tui
+```
+
+This works the same on Windows (PowerShell), macOS, and Linux — no shell scripts or Erlang distribution required.  It handles both a cold and an already-running reactor:
+
+- **Live dashboard** — core, loops, condenser, tanks, and operator status, updating in real time (and showing OFFLINE/PAUSED/STALLED when appropriate).
+- **`[t]` task menu** — run every task listed in the `Tasks` section below, with guided parameter prompts.  Task output streams into a pane; long tasks (like a full startup) can be sent to the background with `[b]` while you watch the dashboard.
+- **`[o]` operator menu** — all operators start **off** when the TUI launches.  Enable/disable them individually (with a description of what each one does), adjust their overrides and boost modes, or press `[s]` to start them all under supervision.
+- **Demand & health panels** — this hour's energy budget with a projected end-of-hour score, plus core integrity/wear and any active issues.  Sparklines track core temperature, net output, and steam generator pressure.
+- **`[l]` log view** — operator log lines, in a strip on tall terminals and a full-screen overlay on demand.
+- **`[d]` drill mode** — trigger the game's chaos events (pump jams, spills, breaker trips, weather...) to stress-test the operators.  Requires a one-time in-game confirmation the first time you enable it.
+- **`[S]` SCRAM** — emergency-drop all control rods (disabling the rod-commanding operators first so they can't fight it).
+- **Cold start, unified** — running `Startup` from the TUI ends with the supervised operators taking over automatically.  No more Ctrl-C-then-`./start.sh` two-step.
+
+The operators handle all the factors listed in the `Operators` section, below.  Your only concern is to handle the manual things, like deciding when to bring loops up and down, doing maintenance, buying upgrades, etc.
+
+If you see a bunch of `Req` errors about not being able to connect, check that you can reach the Nucleares webserver.
+
+### Classic CLI mode
+
+The pre-TUI workflow still works (and is what the TUI uses under the hood):
+
 - Run `mix auto_nuke.startup` to start up a cold reactor.
 - Run `./start.sh` to start the automation on an already-running reactor.
-
-In either case, if you see a bunch of `Req` errors about not being able to connect, check that you can reach the Nucleares webserver.
-
-Once you run `./start.sh`, the `AutoNuke` operators will take over and begin automation.  They'll handle all the factors listed in the `Operators` section, below.  Your only concern is to handle the manual things, like deciding when to bring loops up and down, doing maintenance, buying upgrades, etc.
+- Run individual tasks via `./task.sh <task>` against the `./start.sh` node.
 
 ## Operators
 
