@@ -803,31 +803,27 @@ defmodule AutoNuke.Tui.Dashboard do
   defp health_panel(canvas, {row, col, w, h} = rect, %{health: health}, diag) do
     canvas = Canvas.box(canvas, rect, title: "HEALTH  [h] details", style: [:green])
 
+    # Wear is a risk factor, not a failure — never alarm-coloured.
+    # Integrity is the real signal: ≥99% is healthy, <70% is where the
+    # game says continuous pressure bleed starts.
     integrity_style =
       case health.integrity do
-        i when is_number(i) and i < 50 -> [:red, :bright]
-        i when is_number(i) and i < 100 -> [:yellow]
-        _ -> []
-      end
-
-    wear_style =
-      case health.wear do
-        we when is_number(we) and we > 95 -> [:red, :bright]
-        we when is_number(we) and we > 80 -> [:yellow]
+        i when is_number(i) and i < 70 -> [:red, :bright]
+        i when is_number(i) and i < 99 -> [:yellow]
         _ -> []
       end
 
     canvas =
       canvas
       |> Canvas.put_text(row + 1, col + 2, "Integrity #{fmt(health.integrity, "%", 0)}", integrity_style)
-      |> Canvas.put_text(row + 2, col + 2, "Wear #{fmt(health.wear, "%", 1)}", wear_style)
+      |> Canvas.put_text(row + 2, col + 2, "Wear #{fmt(health.wear, "%", 1)}", [:faint])
 
     issue_rows = h - 4
 
-    # Fold the maintenance attention count in as an issue line, so the
-    # panel can't read "all clear" while elements need attention.
+    # Fold in maintenance items with real problems (integrity loss or
+    # failure flags) — wear-only "attention" entries are not alarms.
     issues =
-      case {health.issues, attention_count(diag)} do
+      case {health.issues, serious_attention_count(diag)} do
         {:err, _} -> :err
         {issues, count} when is_integer(count) and count > 0 -> issues ++ ["#{count} need attention"]
         {issues, _} -> issues
@@ -857,8 +853,16 @@ defmodule AutoNuke.Tui.Dashboard do
     end
   end
 
-  defp attention_count(%{data: %{maintenance: %{attention_count: count}}}), do: count
-  defp attention_count(_diag), do: nil
+  defp serious_attention_count(%{data: %{maintenance: %{items: items}}}) when is_list(items) do
+    Enum.count(items, &serious_item?/1)
+  end
+
+  defp serious_attention_count(_diag), do: nil
+
+  # Wear alone never makes an item serious.
+  defp serious_item?(item) do
+    (is_number(item.integrity) and item.integrity < 99.0) or item.flags != []
+  end
 
   defp log_strip(canvas, {_row, _col, _w, h}) when h < 3, do: canvas
 
@@ -1196,12 +1200,14 @@ defmodule AutoNuke.Tui.Dashboard do
   end
 
   defp item_lines(item) do
+    # Integrity loss and failure flags are alarming; wear alone is just
+    # elevated risk and renders unhighlighted.
     style =
       cond do
         is_number(item.integrity) and item.integrity < 70 -> [:red, :bright]
-        is_number(item.integrity) and item.integrity < 100 -> [:yellow]
+        is_number(item.integrity) and item.integrity < 99 -> [:yellow]
         item.flags != [] -> [:yellow]
-        true -> []
+        true -> [:faint]
       end
 
     flags = if item.flags == [], do: "", else: "  [#{Enum.join(item.flags, ", ")}]"

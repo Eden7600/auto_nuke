@@ -337,27 +337,70 @@ defmodule AutoNuke.Tui.TelemetryTest do
       assert rendered(state) =~ "Diagnostics unavailable"
     end
 
-    test "health panel folds in the attention count" do
-      diag = %{
-        alarms: [],
-        situations: [],
-        maintenance: %{
-          available: true,
-          timestamp: "x",
-          age_minutes: 1,
-          element_count: 131,
-          attention_count: 3,
-          items: []
+    test "health panel counts only serious attention items, not wear notices" do
+      item = fn label, integrity, flags ->
+        %{label: label, type: "X", integrity: integrity, wear: 50.0, radiation: 0, flags: flags, summary: nil}
+      end
+
+      diag = fn items ->
+        %{
+          alarms: [],
+          situations: [],
+          maintenance: %{
+            available: true,
+            timestamp: "x",
+            age_minutes: 1,
+            element_count: 131,
+            attention_count: length(items),
+            items: items
+          }
         }
-      }
+      end
 
       state = Dashboard.init([])
-      {:ok, state} = Dashboard.update({:tui_diag, diag}, state)
-      {:ok, state} = Dashboard.update({:tui_data, %{Data.empty() | health: %{integrity: 100.0, wear: 1.0, issues: []}}}, state)
+
+      {:ok, state} =
+        Dashboard.update(
+          {:tui_data, %{Data.empty() | health: %{integrity: 100.0, wear: 1.0, issues: []}}},
+          state
+        )
+
+      # Wear-only attention items are not alarming:
+      {:ok, state} = Dashboard.update({:tui_diag, diag.([item.("Worn pump", 100.0, [])])}, state)
+      frame = rendered(state)
+      refute frame =~ "need attention"
+      assert frame =~ "no active issues"
+
+      # Integrity loss and flags are:
+      {:ok, state} =
+        Dashboard.update(
+          {:tui_diag, diag.([item.("Cracked pipe", 87.0, []), item.("Stuck valve", 100.0, ["MAINTENANCE"]), item.("Worn pump", 100.0, [])])},
+          state
+        )
 
       frame = rendered(state)
-      assert frame =~ "3 need attention"
+      assert frame =~ "2 need attention"
       refute frame =~ "no active issues"
+    end
+
+    test "integrity above 99 is unstyled; wear is never alarm-coloured" do
+      state = Dashboard.init([])
+
+      {:ok, state} =
+        Dashboard.update(
+          {:tui_data, %{Data.empty() | health: %{integrity: 99.5, wear: 97.0, issues: []}}},
+          state
+        )
+
+      frame = rendered(state)
+      # Integrity at 99.5 and heavy wear render without alarm colours: the
+      # style run immediately preceding each label carries no red/yellow.
+      for label <- ["Integrity", "Wear"] do
+        [before, _] = String.split(frame, label, parts: 2)
+        run_style = String.slice(before, -12, 12)
+        refute run_style =~ IO.ANSI.red(), "#{label} styled red"
+        refute run_style =~ IO.ANSI.yellow(), "#{label} styled yellow"
+      end
     end
 
     test "l toggles the log overlay" do
