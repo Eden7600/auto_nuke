@@ -322,6 +322,70 @@ defmodule AutoNuke.Tui.Data do
     end
   end
 
+  @doc """
+  The game's own plant analysis, from the AO agent's diagnostics feed
+  (available whether or not the AO DLC is installed): named alarms, active
+  situations, and the maintenance summary's per-element attention list.
+
+  Fetched on its own (slower) cadence — the payload is large.
+  """
+  def diagnostics do
+    safe(fn ->
+      json = API.get_json("AO_AGENT_DIAGNOSTICS_JSON")
+
+      %{
+        alarms: json |> get_in(["active_alarms", "alarms"]) |> List.wrap() |> Enum.map(&describe/1),
+        situations:
+          json |> get_in(["situations", "situations"]) |> List.wrap() |> Enum.map(&describe/1),
+        maintenance: parse_maintenance(json["maintenance_summary"])
+      }
+    end)
+  end
+
+  defp parse_maintenance(nil), do: nil
+
+  defp parse_maintenance(ms) do
+    %{
+      available: ms["available"] == true,
+      timestamp: ms["analysis_timestamp"],
+      age_minutes: ms["age_minutes"],
+      element_count: ms["element_count"],
+      attention_count: ms["attention_count"],
+      items: ms["attention_items"] |> List.wrap() |> Enum.map(&parse_item/1)
+    }
+  end
+
+  defp parse_item(item) do
+    flags =
+      [
+        {"requires_maintenance", "MAINTENANCE"},
+        {"misaligned", "misaligned"},
+        {"contaminated", "contaminated"}
+      ]
+      |> Enum.filter(fn {key, _} -> item[key] == true end)
+      |> Enum.map(fn {_, label} -> label end)
+
+    %{
+      label: item["label"] || item["object_name"] || "?",
+      type: item["type"],
+      integrity: item["integrity_percent"],
+      wear: item["wear_percent"],
+      radiation: item["radiation"],
+      flags: flags,
+      summary: item["summary"]
+    }
+  end
+
+  # Alarm/situation entries: shape unknown until one fires — cope with
+  # strings or maps.
+  defp describe(entry) when is_binary(entry), do: entry
+
+  defp describe(entry) when is_map(entry) do
+    entry["name"] || entry["label"] || entry["description"] || inspect(entry)
+  end
+
+  defp describe(entry), do: inspect(entry)
+
   # -- Helpers ----------------------------------------------------------------
 
   defp safe(fun) do

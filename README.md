@@ -22,6 +22,7 @@ This works the same on Windows (PowerShell), macOS, and Linux — no shell scrip
 - **`[t]` task menu** — run every task listed in the `Tasks` section below, with guided parameter prompts.  Task output streams into a pane; long tasks (like a full startup) can be sent to the background with `[b]` while you watch the dashboard.
 - **`[o]` operator menu** — all operators start **off** when the TUI launches.  Enable/disable them individually (with a description of what each one does), adjust their overrides and boost modes, or press `[s]` to start them all under supervision.
 - **Demand & health panels** — this hour's energy budget with a projected end-of-hour score, plus core integrity/wear and any active issues.  Sparklines track core temperature, net output, and steam generator pressure.
+- **`[h]` plant health view** — the game's own diagnostics: named alarms, active situations, and a per-element maintenance breakdown (integrity, wear, radiation, misalignment/contamination flags) so you can see exactly *what* is degrading, not just an overall number.
 - **`[l]` log view** — operator log lines, in a strip on tall terminals and a full-screen overlay on demand.
 - **`[d]` drill mode** — trigger the game's chaos events (pump jams, spills, breaker trips, weather...) to stress-test the operators.  Requires a one-time in-game confirmation the first time you enable it.
 - **`[S]` SCRAM** — emergency-drop all control rods (disabling the rod-commanding operators first so they can't fight it).

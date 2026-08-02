@@ -110,6 +110,62 @@ defmodule AutoNuke.Tui.TelemetryTest do
     end
   end
 
+  describe "diagnostics parsing" do
+    test "parses the AO feed into alarms, situations and attention items" do
+      MockAPI.mock_get(
+        "AO_AGENT_DIAGNOSTICS_JSON",
+        Jason.encode!(%{
+          "active_alarms" => %{"alarms" => ["HIGH CORE TEMP"]},
+          "situations" => %{"situations" => [%{"name" => "Fire in turbine hall"}]},
+          "maintenance_summary" => %{
+            "available" => true,
+            "analysis_timestamp" => "D: 0 | 11:37",
+            "age_minutes" => 40,
+            "element_count" => 131,
+            "attention_count" => 2,
+            "attention_items" => [
+              %{
+                "label" => "CORE (NewCore)",
+                "type" => "NUCLEO",
+                "integrity_percent" => 100.0,
+                "wear_percent" => 0.4,
+                "radiation" => 0.0,
+                "requires_maintenance" => false,
+                "misaligned" => false,
+                "contaminated" => false,
+                "summary" => "desgaste 0.4%"
+              },
+              %{
+                "label" => "Pump 01",
+                "integrity_percent" => 55.0,
+                "wear_percent" => 88.0,
+                "requires_maintenance" => true,
+                "misaligned" => true,
+                "summary" => nil
+              }
+            ]
+          }
+        }),
+        times: :any
+      )
+
+      diag = Data.diagnostics()
+
+      assert diag.alarms == ["HIGH CORE TEMP"]
+      assert diag.situations == ["Fire in turbine hall"]
+      assert diag.maintenance.attention_count == 2
+
+      pump = Enum.find(diag.maintenance.items, &(&1.label == "Pump 01"))
+      assert pump.integrity == 55.0
+      assert "MAINTENANCE" in pump.flags
+      assert "misaligned" in pump.flags
+    end
+
+    test "degrades to :err when unreadable" do
+      assert Data.diagnostics() == :err
+    end
+  end
+
   describe "dashboard integration" do
     setup do
       start_supervised!(PubSub)
@@ -221,6 +277,87 @@ defmodule AutoNuke.Tui.TelemetryTest do
       assert state.view == :drills
       assert {:ok, _} = state.drills.flash
       assert MockAPI.mock_put_value("FUN_SHOW_MESSAGE") == "hi"
+    end
+
+    test "h opens the plant health view with per-element detail" do
+      diag = %{
+        alarms: ["HIGH CORE TEMP"],
+        situations: [],
+        maintenance: %{
+          available: true,
+          timestamp: "D: 0 | 11:37",
+          age_minutes: 40,
+          element_count: 131,
+          attention_count: 2,
+          items: [
+            %{
+              label: "Pump 01",
+              type: "PUMP",
+              integrity: 55.0,
+              wear: 88.0,
+              radiation: 0,
+              flags: ["MAINTENANCE"],
+              summary: "needs seals"
+            },
+            %{
+              label: "CORE (NewCore)",
+              type: "NUCLEO",
+              integrity: 100.0,
+              wear: 0.4,
+              radiation: 0,
+              flags: [],
+              summary: "desgaste 0.4%"
+            }
+          ]
+        }
+      }
+
+      state = Dashboard.init([]) |> press({:char, "h"})
+      assert state.view == :health
+      {:ok, state} = Dashboard.update({:tui_diag, diag}, state)
+
+      frame = rendered(state)
+      assert frame =~ "PLANT HEALTH"
+      assert frame =~ "✖ HIGH CORE TEMP"
+      assert frame =~ "131 elements, 2 need attention"
+      assert frame =~ "Pump 01"
+      assert frame =~ "[MAINTENANCE]"
+      assert frame =~ "└ needs seals"
+
+      # Scroll keys move and clamp.
+      state = press(state, [:pgdn, :up])
+      assert state.health_scroll == 9
+
+      state = press(state, :esc)
+      assert state.view == :dash
+    end
+
+    test "health view degrades when diagnostics are unreadable" do
+      state = Dashboard.init([]) |> press({:char, "h"})
+      assert rendered(state) =~ "Diagnostics unavailable"
+    end
+
+    test "health panel folds in the attention count" do
+      diag = %{
+        alarms: [],
+        situations: [],
+        maintenance: %{
+          available: true,
+          timestamp: "x",
+          age_minutes: 1,
+          element_count: 131,
+          attention_count: 3,
+          items: []
+        }
+      }
+
+      state = Dashboard.init([])
+      {:ok, state} = Dashboard.update({:tui_diag, diag}, state)
+      {:ok, state} = Dashboard.update({:tui_data, %{Data.empty() | health: %{integrity: 100.0, wear: 1.0, issues: []}}}, state)
+
+      frame = rendered(state)
+      assert frame =~ "3 need attention"
+      refute frame =~ "no active issues"
     end
 
     test "l toggles the log overlay" do

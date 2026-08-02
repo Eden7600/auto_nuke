@@ -47,9 +47,12 @@ defmodule AutoNuke.Tui.Dashboard do
       notice: nil,
       ops: %{cursor: 0, list: [], actions: nil, action_cursor: 0, input: nil, flash: nil},
       drills: %{cursor: 0, input: nil, flash: nil},
-      history: %{core_temp: [], net_mw: [], sg_pressure: []}
+      history: %{core_temp: [], net_mw: [], sg_pressure: []},
+      diag: %{data: :err, fetched_at: nil, fetching_since: nil},
+      health_scroll: 0
     }
     |> start_fetch()
+    |> start_diag_fetch()
   end
 
   @impl true
@@ -65,10 +68,14 @@ defmodule AutoNuke.Tui.Dashboard do
         state
       end
 
-    {:ok, maybe_fetch(state)}
+    {:ok, state |> maybe_fetch() |> maybe_fetch_diag()}
   end
 
-  def update(:poll, state), do: {:ok, maybe_fetch(state)}
+  def update(:poll, state), do: {:ok, state |> maybe_fetch() |> maybe_fetch_diag()}
+
+  def update({:tui_diag, diag}, state) do
+    {:ok, %{state | diag: %{data: diag, fetched_at: now_ms(), fetching_since: nil}}}
+  end
 
   # Keep this many history samples for sparklines (one per data refresh).
   @history_len 40
@@ -142,6 +149,28 @@ defmodule AutoNuke.Tui.Dashboard do
     %{state | fetching_since: now_ms()}
   end
 
+  # The diagnostics payload is large; refresh it on a slower cadence.
+  @diag_refresh_ms 5_000
+
+  defp maybe_fetch_diag(%{diag: diag} = state) do
+    fetching? =
+      diag.fetching_since != nil and now_ms() - diag.fetching_since < @fetch_stuck_ms
+
+    due? = diag.fetched_at == nil or now_ms() - diag.fetched_at >= @diag_refresh_ms
+
+    if not fetching? and due? do
+      start_diag_fetch(state)
+    else
+      state
+    end
+  end
+
+  defp start_diag_fetch(state) do
+    owner = self()
+    spawn(fn -> send(owner, {:tui_diag, Data.diagnostics()}) end)
+    put_in(state.diag.fetching_since, now_ms())
+  end
+
   # -- Key handling per view --------------------------------------------------
 
   # Ctrl-C is the hard quit; `q` asks first when quitting stops the plant
@@ -160,6 +189,31 @@ defmodule AutoNuke.Tui.Dashboard do
     do: {:ok, %{state | view: :scram_confirm}}
 
   defp handle_key(:dash, {:char, "l"}, state), do: {:ok, %{state | view: :log}}
+
+  defp handle_key(:dash, {:char, "h"}, state),
+    do: {:ok, %{state | view: :health, health_scroll: 0}}
+
+  defp handle_key(:health, key, state) do
+    case key do
+      k when k in [:esc, :enter, {:char, "h"}] ->
+        {:ok, %{state | view: :dash}}
+
+      :down ->
+        {:ok, %{state | health_scroll: state.health_scroll + 1}}
+
+      :up ->
+        {:ok, %{state | health_scroll: max(state.health_scroll - 1, 0)}}
+
+      :pgdn ->
+        {:ok, %{state | health_scroll: state.health_scroll + 10}}
+
+      :pgup ->
+        {:ok, %{state | health_scroll: max(state.health_scroll - 10, 0)}}
+
+      _ ->
+        {:ok, state}
+    end
+  end
 
   defp handle_key(:log, key, state) when key in [:esc, :enter, {:char, "l"}],
     do: {:ok, %{state | view: :dash}}
@@ -530,7 +584,7 @@ defmodule AutoNuke.Tui.Dashboard do
     |> demand_panel({15, left, left_w - 2, 6}, data, state.history)
     |> condenser_panel({21, left, left_w - 2, 5}, data)
     |> operators_panel({3, right, right_w - 1, 15}, data)
-    |> health_panel({18, right, right_w - 1, 6}, data)
+    |> health_panel({18, right, right_w - 1, 6}, data, state.diag)
     |> tanks_panel({24, right, right_w - 1, 9}, data)
     |> log_strip({26, left, left_w - 2, rows - 26})
     |> hint_bar(state, rows)
@@ -540,9 +594,9 @@ defmodule AutoNuke.Tui.Dashboard do
   defp hint_bar(canvas, state, rows) do
     hints =
       case state.task do
-        nil -> " [t]asks  [o]perators  [d]rills  [l]og  [S]CRAM  [q]uit "
-        %{result: nil} -> " [t] show task  [o]perators  [l]og  [S]CRAM  [q]uit "
-        %{result: _} -> " [t] task result  [o]perators  [l]og  [S]CRAM  [q]uit "
+        nil -> " [t]asks  [o]perators  [h]ealth  [d]rills  [l]og  [S]CRAM  [q]uit "
+        %{result: nil} -> " [t] show task  [o]perators  [h]ealth  [l]og  [S]CRAM  [q]uit "
+        %{result: _} -> " [t] task result  [o]perators  [h]ealth  [l]og  [S]CRAM  [q]uit "
       end
 
     canvas = Canvas.put_text(canvas, rows, 3, hints, [:cyan])
@@ -580,6 +634,8 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(row0 + 2, col0 + 2, "Quitting stops all automation. Quit anyway?")
     |> Canvas.put_text(row0 + h - 1, col0 + 2, " [y] quit · [n/esc] stay ", [:red])
   end
+
+  defp overlay(canvas, %{view: :health} = state, size), do: health_overlay(canvas, state, size)
 
   defp overlay(canvas, %{view: :log}, {cols, rows}) do
     w = cols - 4
@@ -744,8 +800,8 @@ defmodule AutoNuke.Tui.Dashboard do
     {"proj #{pct(ratio)}", style}
   end
 
-  defp health_panel(canvas, {row, col, w, h} = rect, %{health: health}) do
-    canvas = Canvas.box(canvas, rect, title: "HEALTH", style: [:green])
+  defp health_panel(canvas, {row, col, w, h} = rect, %{health: health}, diag) do
+    canvas = Canvas.box(canvas, rect, title: "HEALTH  [h] details", style: [:green])
 
     integrity_style =
       case health.integrity do
@@ -768,7 +824,16 @@ defmodule AutoNuke.Tui.Dashboard do
 
     issue_rows = h - 4
 
-    case health.issues do
+    # Fold the maintenance attention count in as an issue line, so the
+    # panel can't read "all clear" while elements need attention.
+    issues =
+      case {health.issues, attention_count(diag)} do
+        {:err, _} -> :err
+        {issues, count} when is_integer(count) and count > 0 -> issues ++ ["#{count} need attention"]
+        {issues, _} -> issues
+      end
+
+    case issues do
       :err ->
         Canvas.put_text(canvas, row + 3, col + 2, "── unreadable", [:faint])
 
@@ -791,6 +856,9 @@ defmodule AutoNuke.Tui.Dashboard do
         end
     end
   end
+
+  defp attention_count(%{data: %{maintenance: %{attention_count: count}}}), do: count
+  defp attention_count(_diag), do: nil
 
   defp log_strip(canvas, {_row, _col, _w, h}) when h < 3, do: canvas
 
@@ -1044,6 +1112,116 @@ defmodule AutoNuke.Tui.Dashboard do
   end
 
   defp ops_prompt_overlay(canvas, _state, _size), do: canvas
+
+  # -- Plant health overlay ---------------------------------------------------
+
+  defp health_overlay(canvas, %{diag: diag, data: data, health_scroll: scroll}, {cols, rows}) do
+    w = min(cols - 4, 90)
+    h = rows - 2
+    row0 = 2
+    col0 = max(div(cols - w, 2), 2)
+
+    canvas = Canvas.box(canvas, {row0, col0, w, h}, title: "PLANT HEALTH", style: [:green, :bright])
+
+    lines = health_lines(diag.data, data, w - 4)
+    visible = h - 2
+    scroll = min(scroll, max(length(lines) - visible, 0))
+
+    canvas =
+      lines
+      |> Enum.slice(scroll, visible)
+      |> Enum.with_index()
+      |> Enum.reduce(canvas, fn {{text, style}, i}, acc ->
+        Canvas.put_text(acc, row0 + 1 + i, col0 + 2, Canvas.clip(text, w - 4), style)
+      end)
+
+    footer =
+      case length(lines) - visible do
+        rest when rest > 0 -> " ↑↓ pgup/pgdn scroll (#{scroll}/#{rest}) · esc close "
+        _ -> " esc close "
+      end
+
+    Canvas.put_text(canvas, row0 + h - 1, col0 + 2, footer, [:green])
+  end
+
+  defp health_lines(:err, _data, _width) do
+    [
+      {"Diagnostics unavailable.", [:red, :bright]},
+      {"", []},
+      {"The AO diagnostics feed could not be read — game offline", [:faint]},
+      {"or the endpoint failed. Retrying every few seconds.", [:faint]}
+    ]
+  end
+
+  defp health_lines(diag, data, _width) do
+    vitals =
+      {"Core integrity #{fmt(data.health.integrity, "%", 0)} · core wear #{fmt(data.health.wear, "%", 1)}",
+       [:bright]}
+
+    [vitals, {"", []}]
+    |> Kernel.++(named_list("ALARMS", diag.alarms, [:red, :bright]))
+    |> Kernel.++(named_list("SITUATIONS", diag.situations, [:yellow, :bright]))
+    |> Kernel.++(maintenance_lines(diag.maintenance))
+  end
+
+  defp named_list(title, entries, style) do
+    case entries do
+      [] -> [{"#{title}: none", [:faint]}]
+      list -> [{"#{title}:", style} | Enum.map(list, &{"  ✖ #{&1}", style})]
+    end
+    |> Kernel.++([{"", []}])
+  end
+
+  defp maintenance_lines(nil) do
+    [{"No maintenance analysis available.", [:faint]}]
+  end
+
+  defp maintenance_lines(ms) do
+    header =
+      {"MAINTENANCE — analysed #{ms.timestamp} (#{ms.age_minutes} min ago), " <>
+         "#{ms.element_count} elements, #{ms.attention_count} need attention", [:cyan]}
+
+    items =
+      case ms.items do
+        [] ->
+          [{"  ✓ nothing needs attention", [:green]}]
+
+        items ->
+          items
+          |> Enum.sort_by(fn item -> {item.integrity || 100.0, -(item.wear || 0.0)} end)
+          |> Enum.flat_map(&item_lines/1)
+      end
+
+    [header, {"", []} | items]
+  end
+
+  defp item_lines(item) do
+    style =
+      cond do
+        is_number(item.integrity) and item.integrity < 70 -> [:red, :bright]
+        is_number(item.integrity) and item.integrity < 100 -> [:yellow]
+        item.flags != [] -> [:yellow]
+        true -> []
+      end
+
+    flags = if item.flags == [], do: "", else: "  [#{Enum.join(item.flags, ", ")}]"
+
+    radiation =
+      case item.radiation do
+        r when is_number(r) and r > 0 -> "  ☢ #{fmt(r, "", 1)}"
+        _ -> ""
+      end
+
+    main =
+      {"#{String.pad_trailing(item.label, 34)} int #{String.pad_leading(fmt(item.integrity, "%", 0), 5)}" <>
+         "  wear #{String.pad_leading(fmt(item.wear, "%", 1), 6)}#{radiation}#{flags}", style}
+
+    case item.summary do
+      nil -> [main]
+      "" -> [main]
+      summary -> [main, {"    └ #{summary}", [:faint]}]
+    end
+  end
 
   # -- Drills overlays --------------------------------------------------------
 
