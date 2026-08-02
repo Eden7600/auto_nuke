@@ -47,7 +47,7 @@ defmodule AutoNuke.Tui.Dashboard do
       notice: nil,
       ops: %{cursor: 0, list: [], actions: nil, action_cursor: 0, input: nil, flash: nil},
       drills: %{cursor: 0, input: nil, flash: nil},
-      history: %{core_temp: [], net_mw: [], sg_pressure: []},
+      history: %{core_temp: [], net_mw: [], sg_pressure: [], rods: []},
       diag: %{data: :err, fetched_at: nil, fetching_since: nil},
       health_scroll: 0
     }
@@ -121,10 +121,20 @@ defmodule AutoNuke.Tui.Dashboard do
         _ -> :err
       end
 
+    rods_avg =
+      data.core.rods
+      |> Enum.map(fn {_bank, pos} -> pos end)
+      |> Enum.filter(&is_number/1)
+      |> case do
+        [] -> :err
+        positions -> Enum.sum(positions) / length(positions)
+      end
+
     %{
       core_temp: Enum.take(history.core_temp ++ [data.core.temp], -@history_len),
       net_mw: Enum.take(history.net_mw ++ [net_mw], -@history_len),
-      sg_pressure: Enum.take(history.sg_pressure ++ [sg_avg], -@history_len)
+      sg_pressure: Enum.take(history.sg_pressure ++ [sg_avg], -@history_len),
+      rods: Enum.take(history.rods ++ [rods_avg], -@history_len)
     }
   end
 
@@ -892,16 +902,33 @@ defmodule AutoNuke.Tui.Dashboard do
       end)
       |> Enum.join(" ")
 
+    temp_text = "Temp #{fmt(core.temp, "°C", 1)}#{target}"
+    rods_text = "Rods #{rods} %"
+
     canvas
     |> Canvas.box(rect, title: "CORE", style: [:green])
-    |> Canvas.put_text(row + 1, col + 2, "Temp #{fmt(core.temp, "°C", 1)}#{target}", [:bright])
-    |> Canvas.put_text(row + 2, col + 2, "Rods #{rods} %")
+    |> Canvas.put_text(row + 1, col + 2, temp_text, [:bright])
+    |> Canvas.put_text(row + 2, col + 2, rods_text)
     |> Canvas.put_text(row + 3, col + 2, "Boron #{fmt(core.boron_ppm, "ppm", 0)}")
     |> Canvas.put_text(row + 4, col + 2, "Fill #{fmt(core.fill, "m³", 0)}")
+    |> spark_after(row + 1, col, temp_text, history.core_temp, w)
+    |> spark_after(row + 2, col, rods_text, history.rods, w)
     |> Canvas.put_text(row + 1, col + w - 24, "PZR #{fmt(pzr.temp, "°C", 0)}")
     |> Canvas.put_text(row + 2, col + w - 24, "    #{fmt(pzr.pressure, "bar", 1)}")
     |> Canvas.put_text(row + 3, col + w - 24, "    heat #{onoff(pzr.heaters)}")
-    |> Canvas.put_text(row + 4, col + w - 24, Canvas.sparkline(history.core_temp, 20), [:green])
+  end
+
+  # Draw a sparkline after `text`, in whatever room remains before the
+  # PZR block; skipped when the terminal is too narrow to fit one.
+  defp spark_after(canvas, row, col, text, values, w) do
+    start = col + 2 + String.length(text) + 2
+    width = min(col + w - 26 - start, 20)
+
+    if width >= 5 do
+      Canvas.put_text(canvas, row, start, Canvas.sparkline(values, width), [:green])
+    else
+      canvas
+    end
   end
 
   defp loops_panel(canvas, {row, col, w, _h} = rect, %{loops: loops}, history) do

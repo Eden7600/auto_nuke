@@ -236,7 +236,8 @@ defmodule AutoNuke.Tui.TelemetryTest do
 
       state =
         Enum.reduce([100.0, 200.0, 300.0], state, fn temp, acc ->
-          data = %{Data.empty() | core: %{Data.empty().core | temp: temp}}
+          rods = Enum.map(1..9, fn b -> {b, if(b <= 3, do: temp / 10, else: nil)} end)
+          data = %{Data.empty() | core: %{Data.empty().core | temp: temp, rods: rods}}
           {:ok, acc} = Dashboard.update({:tui_data, data}, acc)
           acc
         end)
@@ -244,6 +245,8 @@ defmodule AutoNuke.Tui.TelemetryTest do
       # 3 data points pushed (plus init's async fetch may add one).
       assert length(state.history.core_temp) >= 3
       assert List.last(state.history.core_temp) == 300.0
+      # Rods history averages the installed banks only:
+      assert List.last(state.history.rods) == 30.0
     end
 
     test "d opens drills; confirm flow presses the variable" do
