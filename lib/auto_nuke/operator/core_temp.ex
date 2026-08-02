@@ -89,6 +89,10 @@ defmodule AutoNuke.Operator.CoreTemp do
     GenServer.call(pid, {:override, temp + 0.0, ANTime.parse_expiry(expiry)})
   end
 
+  def get_override(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_override)
+  end
+
   def clear_override(pid \\ __MODULE__) do
     GenServer.call(pid, :clear_override)
   end
@@ -185,6 +189,11 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     Logger.info(@log_prefix <> "Override set to #{temp}°C, #{expires_desc}.")
     {:reply, :ok, %State{state | override: {temp, expiry}}}
+  end
+
+  @impl true
+  def handle_call(:get_override, _from, %State{} = state) do
+    {:reply, state.override, state}
   end
 
   @impl true

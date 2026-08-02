@@ -46,9 +46,63 @@ defmodule AutoNuke.Tui.Data do
       tanks: tanks(),
       operators: operators(),
       demand: safe_call(Op.SteamFlow, :get_demand_status),
-      health: health()
+      health: health(),
+      overrides: overrides()
     }
   end
+
+  @doc """
+  Every override/boost/non-default mode currently active on a running
+  operator, as `%{op: label, desc: description}`. Local GenServer queries
+  only — works even when the game is unreachable.
+  """
+  def overrides do
+    [
+      steam_flow_override(),
+      boost("SteamFlow", safe_call(Op.SteamFlow, :get_boost_mode)),
+      core_temp_override(),
+      rods_mode(),
+      boost("SecondaryFill L1", secondary_boost(1)),
+      boost("SecondaryFill L2", secondary_boost(2)),
+      boost("SecondaryFill L3", secondary_boost(3)),
+      boost("CondenserFill", safe_call(Op.CondenserFill, :get_boost_mode)),
+      boost("CondenserCooling", safe_call(Op.CondenserCooling, :get_boost_mode))
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp steam_flow_override do
+    case safe_call(Op.SteamFlow, :get_override) do
+      {{ratio, :ratio}, expiry} -> %{op: "SteamFlow", desc: "→ #{round(ratio * 100)}%#{expiry(expiry)}"}
+      {{mw, :mw}, expiry} -> %{op: "SteamFlow", desc: "→ #{mw} MW#{expiry(expiry)}"}
+      _ -> nil
+    end
+  end
+
+  defp core_temp_override do
+    case safe_call(Op.CoreTemp, :get_override) do
+      {temp, expiry} -> %{op: "CoreTemp", desc: "→ #{temp}°C#{expiry(expiry)}"}
+      _ -> nil
+    end
+  end
+
+  # :direct is the hands-on mode; :predictive is the default.
+  defp rods_mode do
+    case safe_call(Op.ControlRods, :get_mode) do
+      :direct -> %{op: "ControlRods", desc: "direct mode"}
+      _ -> nil
+    end
+  end
+
+  defp secondary_boost(loop) do
+    safe_call(Module.concat(Op.SecondaryFill, "L#{loop}"), :get_boost_mode)
+  end
+
+  defp boost(_label, value) when value in [nil, :err], do: nil
+  defp boost(label, expiry), do: %{op: label, desc: "boost#{expiry(expiry)}"}
+
+  defp expiry(:never), do: " (no expiry)"
+  defp expiry(ts) when is_integer(ts), do: " until #{AutoNuke.Time.timestamp_to_string(ts)}"
 
   defp health do
     %{
@@ -147,7 +201,9 @@ defmodule AutoNuke.Tui.Data do
       tanks: Enum.map(@tank_vessels, fn {label, _vessel} -> {label, :err} end),
       operators: operators(),
       demand: :err,
-      health: %{integrity: :err, wear: :err, issues: :err}
+      health: %{integrity: :err, wear: :err, issues: :err},
+      # Override state is local process state — live even when offline.
+      overrides: overrides()
     }
   end
 

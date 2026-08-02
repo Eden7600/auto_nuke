@@ -138,6 +138,10 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, :get_demand_status)
   end
 
+  def get_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_boost_mode)
+  end
+
   def set_generated_mwh(mwh, pid \\ __MODULE__) do
     GenServer.call(pid, {:set_generated_mwh, mwh})
   end
@@ -277,6 +281,11 @@ defmodule AutoNuke.Operator.SteamFlow do
       })
 
     {:reply, status, state}
+  end
+
+  @impl true
+  def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state) do
+    {:reply, boost, state}
   end
 
   @impl true

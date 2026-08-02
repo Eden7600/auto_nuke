@@ -76,6 +76,11 @@ defmodule AutoNuke.Operator.SecondaryFill do
     |> GenServer.call({:boost_mode, nil})
   end
 
+  def get_boost_mode(loop_id) do
+    process_name(loop_id)
+    |> GenServer.call(:get_boost_mode)
+  end
+
   def boost_mode_active?(loop_id) do
     process_name(loop_id)
     |> GenServer.call(:boost_mode_active?)
@@ -123,6 +128,11 @@ defmodule AutoNuke.Operator.SecondaryFill do
   @impl true
   def handle_call(:is_active?, _from, nil), do: {:reply, false, nil}
   def handle_call(:is_active?, _from, %State{} = state), do: {:reply, true, state}
+
+  def handle_call(:get_boost_mode, _from, nil), do: {:reply, nil, nil}
+
+  def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state),
+    do: {:reply, boost, state}
 
   def handle_call(:boost_mode_active?, _from, %State{boost_mode: boost} = state),
     do: {:reply, !is_nil(boost), state}

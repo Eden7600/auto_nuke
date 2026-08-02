@@ -37,6 +37,10 @@ defmodule AutoNuke.Operator.CondenserFill do
     GenServer.call(pid, {:boost_mode, nil})
   end
 
+  def get_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_boost_mode)
+  end
+
   @impl true
   def init(_) do
     fill_level = @condenser |> API.Vessels.get_fill_percent()
@@ -52,6 +56,11 @@ defmodule AutoNuke.Operator.CondenserFill do
     PubSub.subscribe(self(), :ticker)
     Logger.info(@log_prefix <> "Started with fill level #{fill_level}%.")
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state) do
+    {:reply, boost, state}
   end
 
   @impl true

@@ -644,6 +644,17 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(1, cols - 12, " #{label} ", style)
     |> Canvas.put_text(2, 3, power_line(data.power))
     |> task_chip(state, cols)
+    |> override_chip(data.overrides, cols)
+  end
+
+  # Overrides mean the operators are NOT doing their normal thing — keep
+  # that permanently visible while any are active.
+  defp override_chip(canvas, [], _cols), do: canvas
+
+  defp override_chip(canvas, overrides, cols) do
+    count = length(overrides)
+    label = if count == 1, do: "1 OVERRIDE", else: "#{count} OVERRIDES"
+    Canvas.put_text(canvas, 2, cols - 18, " ⚙ #{label} ", [:yellow, :bright])
   end
 
   defp task_chip(canvas, %{task: nil}, _cols), do: canvas
@@ -862,7 +873,7 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(row + 3, col + 2, "Retention tank #{fmt(c.retention, "%", 1)}")
   end
 
-  defp operators_panel(canvas, {row, col, _w, _h} = rect, %{operators: operators}) do
+  defp operators_panel(canvas, {row, col, w, _h} = rect, %{operators: operators} = data) do
     canvas = Canvas.box(canvas, rect, title: "OPERATORS", style: [:green])
 
     operators
@@ -875,9 +886,15 @@ defmodule AutoNuke.Tui.Dashboard do
           false -> {"·", [:faint]}
         end
 
+      overridden? =
+        Enum.any?(data.overrides, &String.starts_with?(&1.op, to_string(name)))
+
       acc
       |> Canvas.put_text(row + 1 + i, col + 2, mark, style)
       |> Canvas.put_text(row + 1 + i, col + 4, "#{name}", if(status == false, do: [:faint], else: []))
+      |> then(fn c ->
+        if overridden?, do: Canvas.put_text(c, row + 1 + i, col + w - 3, "⚙", [:yellow, :bright]), else: c
+      end)
     end)
   end
 
@@ -896,7 +913,7 @@ defmodule AutoNuke.Tui.Dashboard do
 
   # -- Operators overlays -----------------------------------------------------
 
-  defp ops_overlay(canvas, %{ops: ops, view: view}, {cols, rows}) do
+  defp ops_overlay(canvas, %{ops: ops, view: view, data: data}, {cols, rows}) do
     h = min(length(ops.list) + 5, rows - 2)
     w = 58
     row0 = max(div(rows - h, 2), 2)
@@ -942,13 +959,41 @@ defmodule AutoNuke.Tui.Dashboard do
         |> Canvas.put_text(r, col0 + 2, mark, mark_style ++ if(selected?, do: [:magenta_background], else: []))
         |> Canvas.put_text(r, col0 + 4, entry.label, base)
         |> Canvas.put_text(r, col0 + w - 15, status_word(entry.status), base ++ [:faint])
+        |> then(fn c ->
+          if override_for(data, entry.label) do
+            Canvas.put_text(c, r, col0 + w - 3, "⚙", [:yellow, :bright] ++ if(selected?, do: [:magenta_background], else: []))
+          else
+            c
+          end
+        end)
       end)
 
-    case ops.flash do
-      nil -> canvas
-      {:ok, msg} -> Canvas.put_text(canvas, row0 + h - 2, col0 + 2, Canvas.clip("✓ #{msg}", w - 4), [:green])
-      {:error, msg} -> Canvas.put_text(canvas, row0 + h - 2, col0 + 2, Canvas.clip("✖ #{msg}", w - 4), [:red, :bright])
+    # Flash beats override detail on the shared line; both are transient.
+    selected_override =
+      case Enum.at(ops.list, ops.cursor) do
+        %{label: label} -> override_for(data, label)
+        _ -> nil
+      end
+
+    case {ops.flash, selected_override} do
+      {{:ok, msg}, _} ->
+        Canvas.put_text(canvas, row0 + h - 2, col0 + 2, Canvas.clip("✓ #{msg}", w - 4), [:green])
+
+      {{:error, msg}, _} ->
+        Canvas.put_text(canvas, row0 + h - 2, col0 + 2, Canvas.clip("✖ #{msg}", w - 4), [:red, :bright])
+
+      {nil, %{desc: desc}} ->
+        Canvas.put_text(canvas, row0 + h - 2, col0 + 2, Canvas.clip("⚙ active: #{desc}", w - 4), [:yellow, :bright])
+
+      {nil, nil} ->
+        canvas
     end
+  end
+
+  # SteamFlow can have both an override and a boost — show the first,
+  # the ⚙ marker covers the rest.
+  defp override_for(%{overrides: overrides}, label) do
+    Enum.find(overrides, &(&1.op == label))
   end
 
   defp status_word(:supervised), do: "running"

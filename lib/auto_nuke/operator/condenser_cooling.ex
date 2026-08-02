@@ -40,6 +40,10 @@ defmodule AutoNuke.Operator.CondenserCooling do
     GenServer.call(pid, {:boost_mode, ANTime.parse_expiry(expiry)})
   end
 
+  def get_boost_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_boost_mode)
+  end
+
   def disable_boost_mode(pid \\ __MODULE__) do
     GenServer.call(pid, {:boost_mode, nil})
   end
@@ -57,6 +61,11 @@ defmodule AutoNuke.Operator.CondenserCooling do
     PubSub.subscribe(self(), :ticker)
     Logger.info(@log_prefix <> "Started with temperature #{temp}°C, pump at #{speed}%.")
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state) do
+    {:reply, boost, state}
   end
 
   @impl true

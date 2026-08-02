@@ -35,6 +35,10 @@ defmodule AutoNuke.Operator.ControlRods do
 
   def get_target(pid \\ __MODULE__), do: GenServer.call(pid, :get_target)
 
+  def get_mode(pid \\ __MODULE__) do
+    GenServer.call(pid, :get_mode)
+  end
+
   def set_mode(mode, pid \\ __MODULE__) when mode in @modes do
     GenServer.call(pid, {:set_mode, mode})
   end
@@ -93,6 +97,11 @@ defmodule AutoNuke.Operator.ControlRods do
   @impl true
   def handle_call(:get_target, _from, %State{} = state) do
     {:reply, state.target, state}
+  end
+
+  @impl true
+  def handle_call(:get_mode, _from, %State{} = state) do
+    {:reply, state.mode, state}
   end
 
   @impl true
