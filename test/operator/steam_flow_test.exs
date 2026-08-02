@@ -35,6 +35,39 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
+  describe "debounce_demand/3" do
+    test "first-ever reading becomes stable without a confirmed change" do
+      assert SteamFlow.debounce_demand(nil, nil, 100_000) == {100_000, nil, nil}
+    end
+
+    test "steady demand stays stable" do
+      assert SteamFlow.debounce_demand(100_000, nil, 100_000) == {100_000, nil, nil}
+      # Sub-threshold wiggle is not a change:
+      assert SteamFlow.debounce_demand(100_000, nil, 100_400) == {100_000, nil, nil}
+    end
+
+    test "a change needs two consecutive ticks to confirm" do
+      # Tick 1: change observed, held as pending.
+      assert SteamFlow.debounce_demand(100_000, nil, 150_000) == {100_000, 150_000, nil}
+
+      # Tick 2: still there — confirmed.
+      assert SteamFlow.debounce_demand(100_000, 150_000, 150_000) ==
+               {150_000, nil, {100_000, 150_000}}
+    end
+
+    test "a single-tick blip is discarded" do
+      {stable, pending, nil} = SteamFlow.debounce_demand(100_000, nil, 999_999)
+      assert {stable, pending} == {100_000, 999_999}
+
+      # Next tick it's back to normal: pending dropped, nothing confirmed.
+      assert SteamFlow.debounce_demand(stable, pending, 100_000) == {100_000, nil, nil}
+    end
+
+    test "a blip to a different wrong value keeps waiting" do
+      assert SteamFlow.debounce_demand(100_000, 999_999, 150_000) == {100_000, 150_000, nil}
+    end
+  end
+
   describe "total_power_to_axis/2" do
     test "is min axis for power level 2" do
       assert SteamFlow.total_power_to_axis(2, 1) == -1.0

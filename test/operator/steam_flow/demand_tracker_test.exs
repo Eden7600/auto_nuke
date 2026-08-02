@@ -114,6 +114,34 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTrackerTest do
     end
   end
 
+  describe "status/1 across a minute rollover" do
+    setup do
+      create_demand_tracker(minute: 10, demand: 100)
+    end
+
+    test "projection never sees a rate gap from the fresh smoother", %{dt: dt, ts: ts} do
+      # Supplying over demand consults the resistor capacity:
+      API.mock_get("RES_ABSORPTION_CAPACITY_MW", 0, times: :any)
+
+      # Steady 105 MW through the minute (a :any mock would shadow the
+      # later timestamp, so count the reads out exactly):
+      API.mock_get("TIME_STAMP", ts, times: 5)
+      dt = Enum.reduce(1..5, dt, fn _, acc -> DT.tick(acc, 105_000) end)
+
+      projected_before = DT.status(dt).projected_ratio
+
+      # Minute rolls over: smoother resets to empty...
+      API.mock_get("TIME_STAMP", ts + 1, times: :any)
+      dt = DT.tick(dt, 105_000)
+      assert dt.supply_per_second.size == 0
+
+      # ...but the projection carries the closed minute's rate.
+      projected_after = DT.status(dt).projected_ratio
+      assert_in_delta projected_after, projected_before, 0.02
+      refute is_nil(DT.status(dt).supply_kw)
+    end
+  end
+
   describe "tick/2 when hour rolls over" do
     setup do
       create_demand_tracker(minute: Enum.random(5..55))

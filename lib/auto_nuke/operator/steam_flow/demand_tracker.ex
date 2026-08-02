@@ -2,7 +2,7 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
   require Logger
 
   @enforce_keys [:timestamp, :demand_kwh, :supplied_kwh, :supply_per_second]
-  defstruct(@enforce_keys)
+  defstruct(@enforce_keys ++ [recent_rate: nil])
   alias __MODULE__, as: DT
 
   alias AutoNuke.API
@@ -158,7 +158,10 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
       dt
       | timestamp: new_ts,
         supplied_kwh: dt.supplied_kwh + average_supply / 60.0,
-        supply_per_second: Smoother.new(@seconds_per_minute)
+        supply_per_second: Smoother.new(@seconds_per_minute),
+        # The fresh smoother is empty until the next tick; remember the
+        # closed minute's rate so projections never see a rate gap.
+        recent_rate: average_supply
     }
   end
 
@@ -172,7 +175,9 @@ defmodule AutoNuke.Operator.SteamFlow.DemandTracker do
 
     avg_supply_kw =
       case dt.supply_per_second do
-        %Smoother{size: 0} -> nil
+        # Right after a minute rollover the smoother is empty — fall back
+        # to the closed minute's rate instead of projecting a rate of zero.
+        %Smoother{size: 0} -> dt.recent_rate
         smoother -> Smoother.average(smoother)
       end
 

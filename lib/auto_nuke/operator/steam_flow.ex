@@ -14,7 +14,10 @@ defmodule AutoNuke.Operator.SteamFlow do
       demand_tracker: nil,
       target_override: nil,
       boost_mode: nil,
-      flow_control: nil
+      flow_control: nil,
+      # Demand debounce (feedforward fires only on confirmed changes):
+      stable_demand: nil,
+      pending_demand: nil
     )
   end
 
@@ -345,7 +348,6 @@ defmodule AutoNuke.Operator.SteamFlow do
   @impl true
   def handle_info({:tick, _}, %State{turbines: turbines} = state) do
     supply_kw = get_current_supply(turbines)
-    old_demand = state.demand_tracker.demand_kwh
 
     state =
       %State{
@@ -355,12 +357,42 @@ defmodule AutoNuke.Operator.SteamFlow do
       |> maybe_expire_override()
       |> maybe_expire_boost_mode()
 
+    {stable, pending, confirmed} =
+      debounce_demand(state.stable_demand, state.pending_demand, state.demand_tracker.demand_kwh)
+
+    state = %State{state | stable_demand: stable, pending_demand: pending}
+
     if turbines |> Enum.all?(&Turbine.sanity_check/1) do
-      tick_power(state, supply_kw, old_demand)
+      tick_power(state, supply_kw, confirmed)
     else
       state
     end
     |> then(fn %State{} = s -> {:noreply, s} end)
+  end
+
+  # How different two demand readings must be to count as a change:
+  @demand_change_threshold 0.005
+
+  @doc """
+  Demand-change debouncing: a new demand level must hold for two
+  consecutive ticks before it's confirmed — a single-tick blip from the
+  game must not whipsaw the feedforward.
+
+  Returns `{stable, pending, confirmed}` where `confirmed` is
+  `{old, new}` on the tick a change is accepted, else nil.
+  """
+  def debounce_demand(nil, _pending, new), do: {new, nil, nil}
+
+  def debounce_demand(stable, pending, new) do
+    cond do
+      demand_close?(new, stable) -> {stable, nil, nil}
+      pending != nil and demand_close?(new, pending) -> {new, nil, {stable, new}}
+      true -> {stable, new, nil}
+    end
+  end
+
+  defp demand_close?(a, b) do
+    b > 0 and abs(a - b) / b < @demand_change_threshold
   end
 
   defp tick_power(
@@ -369,12 +401,12 @@ defmodule AutoNuke.Operator.SteamFlow do
            turbines: old_turbines
          } = state,
          supply_kw,
-         old_demand
+         confirmed_demand_change
        ) do
     ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
     {target, deadzone} = get_target_ratio_and_deadzone(state)
     old_axis = %ControlAxis{old_axis | deadzone: deadzone}
-    old_axis = maybe_feedforward(old_axis, state, old_demand, target, supply_kw)
+    old_axis = maybe_feedforward(old_axis, state, confirmed_demand_change, target, supply_kw)
     boost_mode = !is_nil(state.boost_mode)
 
     # Limit the new target to within +20% of our current ratio.  If we just
@@ -420,23 +452,19 @@ defmodule AutoNuke.Operator.SteamFlow do
   # letting the PID discover it through accumulated error. The gain
   # (kW per power level) is measured from the current operating point, so
   # no plant model is needed; the PID trims from there.
-  @feedforward_threshold 0.005
   # Below this supply the measured gain is meaningless (startup, trip):
   @feedforward_min_supply_kw 1000
 
-  defp maybe_feedforward(axis, %State{} = state, old_demand, target, supply_kw) do
-    new_demand = state.demand_tracker.demand_kwh
+  defp maybe_feedforward(axis, _state, nil, _target, _supply), do: axis
+
+  defp maybe_feedforward(axis, %State{} = state, {old_demand, new_demand}, target, supply_kw) do
     turbine_count = Enum.count(state.turbines)
     total_power = state.turbines |> Enum.sum_by(& &1.power_level)
-
-    significant? =
-      old_demand > 0 and
-        abs(new_demand - old_demand) / old_demand >= @feedforward_threshold
 
     usable? =
       turbine_count > 0 and total_power > 0 and supply_kw >= @feedforward_min_supply_kw
 
-    if significant? and usable? do
+    if usable? do
       kw_per_level = supply_kw / total_power
 
       ff_total =
