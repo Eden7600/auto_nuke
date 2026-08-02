@@ -46,13 +46,29 @@ defmodule AutoNuke.API.Web do
   def get(key) do
     req_new()
     |> Req.get!(url: "/", params: [variable: key])
-    |> then(fn %Req.Response{status: 200, body: body} -> body end)
+    |> then(fn
+      %Req.Response{status: 200, body: body} -> body
+      %Req.Response{} = response -> raise_api_error!("read", key, response)
+    end)
   end
 
   def put(key, value) do
+    put_with_reply(key, value)
+    :ok
+  end
+
+  # Some writes answer with useful text (e.g. which pump a drill jammed).
+  def put_with_reply(key, value) do
     req_new()
     |> Req.post!(url: "/", params: [variable: key, value: value], body: "")
-    |> then(fn %{status: 200} -> :ok end)
+    |> then(fn
+      %Req.Response{status: 200, body: body} -> {:ok, body}
+      %Req.Response{} = response -> raise_api_error!("write #{inspect(value)} to", key, response)
+    end)
+  end
+
+  defp raise_api_error!(action, key, %Req.Response{status: status, body: body}) do
+    raise "Nucleares API failed to #{action} #{key}: HTTP #{status}, #{inspect(body)}"
   end
 
   alias Req.TransportError, as: RTE

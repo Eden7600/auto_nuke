@@ -28,6 +28,11 @@ defmodule AutoNuke.Test.MockAPI do
     GenServer.cast(__MODULE__, {:put, self(), key, value})
   end
 
+  def put_with_reply(key, value) do
+    put(key, value)
+    {:ok, ""}
+  end
+
   def mock_put_value(key) do
     case GenServer.call(__MODULE__, {:mock_put_value, self(), key}) do
       nil -> raise "API `put` call was not received: #{inspect(key)}"

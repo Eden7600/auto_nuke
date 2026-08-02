@@ -141,6 +141,8 @@ defmodule AutoNuke.API.Pumps do
   def set_switch(%Pump{switch_key: k}, v) when is_binary(k), do: API.put(k, v)
   def set_switch(%Pump{switch_key: nil, name: n}), do: raise("Can't set #{n} switch")
 
+  def get_active?(%Pump{active_key: k}) when is_binary(k), do: API.get_boolean(k)
+
   def get_active?(%Pump{actual_key: k}) when is_binary(k), do: API.get_float(k) > 0
 
   def get_active?(%Pump{valve_panel_key: k}) when is_binary(k) do

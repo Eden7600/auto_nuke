@@ -5,6 +5,7 @@ defmodule AutoNuke.API do
 
   defp get(key), do: @backend.get(key)
   defdelegate put(key, value), to: @backend
+  defdelegate put_with_reply(key, value), to: @backend
 
   defmemo get_string(key) do
     get(key)
