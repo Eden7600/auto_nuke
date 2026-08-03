@@ -99,6 +99,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   @pressure_stall_bar 0.5
   # Choke the main steam control valves to here — not quite shut:
   @mscv_floor 1.0
+  # Real minutes to close them over. Brisk on purpose.
+  @mscv_choke_minutes 1.0
   # Primary pump speed for Part III (the operators cap themselves at 49):
   @primary_flood_speed 100.0
   # A steam generator counts as "live" above this pressure:
@@ -572,20 +574,23 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     # The pool holds 150 kL and empties slowly, so start it now and let
     # it run underneath the overpressure work; Part IV waits it out.
-    UI.set("Core Pool Pump", "REMOVE")
-    safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
+    start_draining_pool()
     UI.notice("Core pool is draining (#{fmt(core_pool_percent())}%).")
 
     # The first bar drives the ramp — each sample closes the valves a
     # little further — while the second watches what that does.
     sgs = Enum.map(state.loops, &SteamGen.for_loop/1)
 
+    # Choking is quick — the drama is in what the pressure does after.
+    choke_from = starting_mscv(sgs)
+    choke_step_size = (choke_from - @mscv_floor) / (@mscv_choke_minutes * @ticks_per_minute)
+
     UI.ProgressBar.wait_many(
       [
         [
-          config: PBConfig.target(starting_mscv(sgs), @mscv_floor, "%", 1),
+          config: PBConfig.target(choke_from, @mscv_floor, "%", 1),
           label: "MSCV",
-          current_fn: fn -> choke_step(sgs, state.step) end
+          current_fn: fn -> choke_step(sgs, choke_step_size) end
         ],
         [
           config: PBConfig.target(max_pressure(state.loops), @pressure_ceiling, " bar", 1),
@@ -726,7 +731,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     UI.notice("The plant is now venting and draining wherever it can.")
 
     # Draining since Part III; re-assert in case anything reset it.
-    safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
+    start_draining_pool()
 
     bar(
       "Core Pool",
@@ -781,9 +786,29 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   end
 
   @core_pool API.Vessels.core_pool()
+  # CORE_POOL_PUMP reads back as a mode number: REMOVE=1, OFF=2, LOAD=3.
+  @pool_remove 1
 
   defp core_pool_percent do
     safe_number(fn -> API.Vessels.get_fill_percent(@core_pool) end, 0.0)
+  end
+
+  # A single write doesn't reliably take — the pump needs telling until
+  # the mode actually reads back, same as the refill task does.
+  defp start_draining_pool(attempts \\ 20)
+
+  defp start_draining_pool(0) do
+    UI.warn("Core pool pump won't switch to REMOVE.")
+  end
+
+  defp start_draining_pool(attempts) do
+    if safe_number(fn -> API.get_integer("CORE_POOL_PUMP") end, -1) == @pool_remove do
+      UI.set("Core Pool Pump", "REMOVE")
+    else
+      safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
+      Process.sleep(500)
+      start_draining_pool(attempts - 1)
+    end
   end
 
   # -- Part V: prompt criticality ---------------------------------------------
