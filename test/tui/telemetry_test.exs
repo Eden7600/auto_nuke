@@ -49,18 +49,38 @@ defmodule AutoNuke.Tui.TelemetryTest do
   end
 
   describe "LogBuffer" do
-    test "captures logger output for the TUI" do
+    test "captures structured entries with level and operator prefix" do
       LogBuffer.attach()
 
       try do
         require Logger
         # The test env's primary logger level is :warning.
-        Logger.warning("tui log buffer smoke test")
+        Logger.warning("[SteamFlow] tui log buffer smoke test")
         Process.sleep(50)
 
-        lines = LogBuffer.tail(50)
-        assert Enum.any?(lines, &(&1 =~ "tui log buffer smoke test"))
-        assert Enum.any?(lines, &(&1 =~ "[warning]"))
+        entry =
+          LogBuffer.tail(50)
+          |> Enum.find(&(&1.text =~ "tui log buffer smoke test"))
+
+        assert entry.level == :warning
+        assert entry.prefix == "SteamFlow"
+        # No TimeTracker in tests -> wall-clock fallback (HH:MM:SS).
+        assert entry.time =~ ~r/^\d{2}:\d{2}:\d{2}$/
+      after
+        LogBuffer.detach()
+      end
+    end
+
+    test "messages without a prefix parse cleanly" do
+      LogBuffer.attach()
+
+      try do
+        require Logger
+        Logger.warning("no prefix here")
+        Process.sleep(50)
+
+        entry = LogBuffer.tail(50) |> Enum.find(&(&1.text =~ "no prefix here"))
+        assert entry.prefix == nil
       after
         LogBuffer.detach()
       end
@@ -70,6 +90,21 @@ defmodule AutoNuke.Tui.TelemetryTest do
       # Never attached in this path (table may exist from the other test —
       # tail must simply not crash).
       assert is_list(LogBuffer.tail(5))
+    end
+  end
+
+  describe "Canvas.put_segments" do
+    test "paints segments in sequence and clips at the budget" do
+      frame =
+        Canvas.new(20, 1)
+        |> Canvas.put_segments(1, 1, [{"abc", [:red]}, {"defgh", []}], 6)
+        |> Canvas.to_iodata()
+        |> IO.iodata_to_binary()
+
+      plain = String.replace(frame, ~r/\e\[[0-9;]*[a-zA-Z]/, "")
+      assert plain =~ "abcdef"
+      refute plain =~ "abcdefg"
+      assert frame =~ IO.ANSI.red() <> "abc"
     end
   end
 

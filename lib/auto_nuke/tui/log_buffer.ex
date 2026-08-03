@@ -33,7 +33,12 @@ defmodule AutoNuke.Tui.LogBuffer do
     :ok
   end
 
-  @doc "The newest `n` lines, oldest first."
+  @doc """
+  The newest `n` entries, oldest first. Each is a map:
+  `%{time: string, level: atom, prefix: string | nil, text: string}` —
+  `time` is in-game time when the TimeTracker has it, `prefix` is the
+  `[Module]` tag operators put in front of their messages.
+  """
   def tail(n) do
     case :ets.whereis(@table) do
       :undefined ->
@@ -55,27 +60,46 @@ defmodule AutoNuke.Tui.LogBuffer do
   # -- :logger handler callbacks ----------------------------------------------
 
   def log(%{level: level, msg: msg, meta: meta}, _config) do
-    line = format_line(level, msg, meta)
-    append(line)
+    append(build_entry(level, msg, meta))
   rescue
     # A logging handler must never take the app down.
     _ -> :ok
   end
 
-  defp format_line(level, msg, meta) do
-    time =
-      case meta[:time] do
-        t when is_integer(t) ->
-          t
-          |> System.convert_time_unit(:microsecond, :second)
-          |> DateTime.from_unix!()
-          |> Calendar.strftime("%H:%M:%S")
+  defp build_entry(level, msg, meta) do
+    {prefix, text} = split_prefix(format_msg(msg))
 
-        _ ->
-          ""
-      end
+    %{time: game_time(meta), level: level, prefix: prefix, text: text}
+  end
 
-    "#{time} [#{level}] #{format_msg(msg)}"
+  # Prefer in-game time (same source as the file log's formatter); fall
+  # back to the wall clock until the TimeTracker has data.
+  defp game_time(meta) do
+    case AutoNuke.TimeTracker.get() do
+      {ts, ticks} ->
+        AutoNuke.LogFormatter.sim_time(ts, ticks) |> IO.chardata_to_string()
+
+      nil ->
+        case meta[:time] do
+          t when is_integer(t) ->
+            t
+            |> System.convert_time_unit(:microsecond, :second)
+            |> DateTime.from_unix!()
+            |> Calendar.strftime("%H:%M:%S")
+
+          _ ->
+            ""
+        end
+    end
+  end
+
+  # Operators tag their messages "[SteamFlow.L1] ..." — split that out so
+  # the TUI can colour it.
+  defp split_prefix(text) do
+    case Regex.run(~r/^\[([^\]]+)\]\s*(.*)$/s, text) do
+      [_, prefix, rest] -> {prefix, rest}
+      nil -> {nil, text}
+    end
   end
 
   defp format_msg({:string, chardata}), do: IO.chardata_to_string(chardata)

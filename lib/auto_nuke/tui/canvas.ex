@@ -138,6 +138,32 @@ defmodule AutoNuke.Tui.Canvas do
     |> Enum.join()
   end
 
+  @doc "Display width (in terminal columns) of `text`."
+  def display_width(text) do
+    text
+    |> to_string()
+    |> String.graphemes()
+    |> Enum.reduce(0, &(&2 + width_of(&1)))
+  end
+
+  @doc """
+  Paint a list of `{text, style}` segments left to right from `{row, col}`,
+  clipping the whole run to `max_width` display columns.
+  """
+  def put_segments(%Canvas{} = canvas, row, col, segments, max_width) do
+    segments
+    |> Enum.reduce({canvas, col, max_width}, fn {text, style}, {acc, at, budget} ->
+      if budget <= 0 do
+        {acc, at, 0}
+      else
+        clipped = clip(text, budget)
+        width = display_width(clipped)
+        {put_text(acc, row, at, clipped, style), at + width, budget - width}
+      end
+    end)
+    |> elem(0)
+  end
+
   # -- Internals --------------------------------------------------------------
 
   defp put_grapheme(%Canvas{cols: cols, rows: rows} = canvas, row, col, grapheme, style)

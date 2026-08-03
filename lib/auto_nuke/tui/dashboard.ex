@@ -658,8 +658,8 @@ defmodule AutoNuke.Tui.Dashboard do
     canvas =
       LogBuffer.tail(h - 2)
       |> Enum.with_index()
-      |> Enum.reduce(canvas, fn {line, i}, acc ->
-        Canvas.put_text(acc, row0 + 1 + i, col0 + 2, Canvas.clip(line, w - 4))
+      |> Enum.reduce(canvas, fn {entry, i}, acc ->
+        Canvas.put_segments(acc, row0 + 1 + i, col0 + 2, log_segments(entry), w - 4)
       end)
 
     Canvas.put_text(canvas, row0 + h - 1, col0 + 2, " [l/esc] close ", [:cyan])
@@ -881,10 +881,35 @@ defmodule AutoNuke.Tui.Dashboard do
 
     LogBuffer.tail(h - 2)
     |> Enum.with_index()
-    |> Enum.reduce(canvas, fn {line, i}, acc ->
-      Canvas.put_text(acc, row + 1 + i, col + 2, Canvas.clip(line, w - 4))
+    |> Enum.reduce(canvas, fn {entry, i}, acc ->
+      Canvas.put_segments(acc, row + 1 + i, col + 2, log_segments(entry), w - 4)
     end)
   end
+
+  # Syntax-highlighted log line: faint game-time stamp, severity-coloured
+  # level tag, cyan operator prefix, message coloured only when it matters.
+  defp log_segments(entry) do
+    [
+      {entry.time <> " ", [:faint]},
+      {"[#{entry.level}] ", level_style(entry.level)},
+      case entry.prefix do
+        nil -> {"", []}
+        prefix -> {"[#{prefix}] ", [:cyan]}
+      end,
+      {entry.text, message_style(entry.level)}
+    ]
+  end
+
+  defp level_style(level) when level in [:emergency, :alert, :critical, :error], do: [:red, :bright]
+  defp level_style(:warning), do: [:yellow, :bright]
+  defp level_style(:notice), do: [:green]
+  defp level_style(:debug), do: [:faint]
+  defp level_style(_info), do: [:faint]
+
+  defp message_style(level) when level in [:emergency, :alert, :critical, :error], do: [:red, :bright]
+  defp message_style(:warning), do: [:yellow]
+  defp message_style(:debug), do: [:faint]
+  defp message_style(_), do: []
 
   defp core_panel(canvas, {row, col, w, _h} = rect, %{core: core, pzr: pzr}, history) do
     target =
