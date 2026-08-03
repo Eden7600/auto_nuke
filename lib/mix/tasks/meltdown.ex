@@ -29,9 +29,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       everything it can safely make: grid demand plus the full
       absorption capacity of the banks. The operators drive it up there
       and we wait for the power to genuinely plateau.
-    * **Part II — Destroy the turbines.** Condenser cooling off, vacuum
-      pump stopped and the condensate return valve opened, then we wait
-      for the condenser vacuum to collapse. The turbines keep spinning
+    * **Part II — Destroy the turbines.** The condenser cooling pump is
+      walked down to nothing, then the vacuum pump stopped and the
+      condensate return valve opened, and we wait for the condenser
+      vacuum to collapse. The turbines keep spinning
       into the rising backpressure — tripping them would *protect* them.
       The turbine bypass is shut so no steam can route around them, and
       the emergency generators are started on the way down, at 80%
@@ -333,11 +334,24 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     stand_down(Op.CondenserCooling, "Condenser Cooling Operator")
 
     # With no cooling the condenser can't condense, so the vacuum has
-    # nothing holding it up.
+    # nothing holding it up. Walk the pump down rather than dropping it:
+    # a step change just trips things, where a slow starve doesn't.
     cooling_pump = API.Pumps.condenser_cooling()
-    UI.set("Condenser Cooling Pump", "OFF")
-    safe(fn -> API.Pumps.set_speed(cooling_pump, 0) end)
+    start_speed = safe_number(fn -> API.Pumps.get_ordered_speed(cooling_pump) end, 100.0)
+
+    UI.set("Condenser Cooling Pump", "WALK DOWN TO 0")
+
+    bar(
+      "Cooling",
+      PBConfig.target(start_speed, 0.0, "%", 1),
+      fn -> cooling_step(cooling_pump, state.step, start_speed) end,
+      fn actual -> actual <= 0.1 end,
+      state.limit
+    )
+
+    # Only once it has actually wound down.
     safe(fn -> API.Pumps.set_switch(cooling_pump, false) end)
+    UI.success("Condenser cooling stopped.")
 
     UI.set("Condenser Vacuum Pump", "STOP")
     safe(fn -> API.VacuumPump.stop() end)
@@ -409,6 +423,16 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   defp vacuum_percent do
     safe_number(fn -> API.VacuumPump.get_vacuum_level() end, 0.0) * 100
+  end
+
+  # Commands the ordered speed down a notch, reports the actual speed.
+  defp cooling_step(pump, step, start_speed) do
+    ordered = Process.get(:cooling, start_speed) - step
+    ordered = max(ordered, 0.0)
+    Process.put(:cooling, ordered)
+
+    safe(fn -> API.Pumps.set_speed(pump, Float.round(ordered, 1)) end)
+    safe_number(fn -> API.Pumps.get_actual_speed(pump) end, 0.0)
   end
 
   # Reports vacuum, and gets the diesels running on the way down: once
