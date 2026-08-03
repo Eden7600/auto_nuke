@@ -21,6 +21,21 @@ defmodule AutoNuke.Operator do
   def assigned_tick_modulo(Op.PCSTFill), do: 25
   def assigned_tick_modulo(_), do: 5
 
+  @doc """
+  Unsubscribe a named operator from a topic, but only if it's actually
+  running.
+
+  `PubSub.unsubscribe/2` resolves the name and then unlinks it — handing
+  it the name of a process that doesn't exist crashes the PubSub server
+  itself, taking the rest of the supervision tree with it.
+  """
+  def unsubscribe_if_running(name, topic) do
+    case Process.whereis(name) do
+      nil -> :ok
+      pid -> PubSub.unsubscribe(pid, topic)
+    end
+  end
+
   defmacro __using__(_) do
     quote do
       @my_tick AutoNuke.Operator.assigned_tick(__MODULE__)

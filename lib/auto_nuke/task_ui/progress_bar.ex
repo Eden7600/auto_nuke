@@ -186,10 +186,14 @@ defmodule AutoNuke.TaskUI.ProgressBar do
     ]
   end
 
+  # A zero-width range (the value already starts at its target) has
+  # nothing to travel, so it's complete — dividing would just blow up.
+  defp percent_of_range(_value, same, same), do: 1.0
+
   defp percent_of_range(value, left, right) do
     ((value - left) / (right - left))
     |> max(0.0)
-    |> min(100.0)
+    |> min(1.0)
   end
 
   defp format_number(n, _) when is_integer(n), do: Integer.to_string(n)

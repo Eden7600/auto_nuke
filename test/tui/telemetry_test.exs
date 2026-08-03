@@ -145,6 +145,57 @@ defmodule AutoNuke.Tui.TelemetryTest do
     end
   end
 
+  describe "ProgressBar edge cases" do
+    alias AutoNuke.TaskUI.ProgressBar
+    alias AutoNuke.TaskUI.ProgressBar.Config, as: PBConfig
+
+    setup do
+      start_supervised!(PubSub)
+      :ok
+    end
+
+    # A pump already at zero gives left == right, which used to divide by
+    # zero and take the whole task down.
+    test "a zero-width range renders instead of crashing" do
+      spawn(fn ->
+        Process.sleep(30)
+        PubSub.publish(:ticker, {:tick, 0})
+      end)
+
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          ProgressBar.wait(
+            config: PBConfig.target(0.0, 0.0, "%", 1),
+            label: "Cooling",
+            current_fn: fn -> 0.0 end,
+            done_fn: fn _ -> true end
+          )
+        end)
+
+      assert output =~ "Cooling"
+    end
+
+    test "overshooting the target renders a full bar" do
+      spawn(fn ->
+        Process.sleep(30)
+        PubSub.publish(:ticker, {:tick, 0})
+      end)
+
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          ProgressBar.wait(
+            config: PBConfig.target(0.0, 100.0, " bar", 1),
+            label: "Pressure",
+            current_fn: fn -> 250.0 end,
+            done_fn: fn _ -> true end
+          )
+        end)
+
+      assert output =~ "Pressure"
+      assert output =~ "250.0"
+    end
+  end
+
   describe "diagnostics parsing" do
     test "parses the AO feed into alarms, situations and attention items" do
       MockAPI.mock_get(

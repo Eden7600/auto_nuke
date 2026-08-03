@@ -6,18 +6,27 @@ defmodule AutoNuke.LogFormatter do
 
   # Erlang logger style, used by TaskUI.log_to_file:
   def format(event, _config) do
-    level = event.level
+    do_format(event.level, message_text(event.msg), event.meta.time, event.meta)
+  end
 
-    message =
-      case event.msg do
-        {_, msg} -> msg
-        msg -> msg
-      end
+  # Erlang log messages come in three shapes; only the first is already
+  # printable. Crash reports are `:report`, and getting this wrong means
+  # losing exactly the messages you most need.
+  defp message_text({:string, chardata}), do: safe_chardata(chardata)
+  defp message_text({:report, report}), do: inspect(report, limit: :infinity)
 
-    timestamp = event.meta.time
-    metadata = event.meta
+  defp message_text({format, args}) when is_list(args) do
+    :io_lib.format(format, args) |> safe_chardata()
+  rescue
+    _ -> inspect({format, args})
+  end
 
-    do_format(level, message, timestamp, metadata)
+  defp message_text(other), do: safe_chardata(other)
+
+  defp safe_chardata(message) do
+    IO.chardata_to_string(message)
+  rescue
+    _ -> inspect(message)
   end
 
   defp do_format(level, message, timestamp, _metadata) do
@@ -33,11 +42,12 @@ defmodule AutoNuke.LogFormatter do
         " [",
         Atom.to_string(level),
         "] ",
-        IO.chardata_to_string(message),
+        safe_chardata(message),
         "\n"
       ]
     rescue
-      e -> IO.inspect(e)
+      # Never write to stdout from here — it would corrupt the TUI.
+      e -> "?? [#{level}] unformattable log event: #{Exception.message(e)}\n"
     end
   end
 

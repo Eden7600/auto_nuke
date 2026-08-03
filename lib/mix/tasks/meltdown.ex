@@ -341,15 +341,19 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     cooling_pump = API.Pumps.condenser_cooling()
     start_speed = safe_number(fn -> API.Pumps.get_ordered_speed(cooling_pump) end, 100.0)
 
-    UI.set("Condenser Cooling Pump", "WALK DOWN TO 0")
+    if start_speed <= 0.1 do
+      UI.set("Condenser Cooling Pump", "ALREADY STOPPED")
+    else
+      UI.set("Condenser Cooling Pump", "WALK DOWN TO 0")
 
-    bar(
-      "Cooling",
-      PBConfig.target(start_speed, 0.0, "%", 1),
-      fn -> cooling_step(cooling_pump, state.step, start_speed) end,
-      fn actual -> actual <= 0.1 end,
-      state.limit
-    )
+      bar(
+        "Cooling",
+        PBConfig.target(start_speed, 0.0, "%", 1),
+        fn -> cooling_step(cooling_pump, state.step, start_speed) end,
+        fn actual -> actual <= 0.1 end,
+        state.limit
+      )
+    end
 
     # Only once it has actually wound down.
     safe(fn -> API.Pumps.set_switch(cooling_pump, false) end)
@@ -891,12 +895,15 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     )
   end
 
-  # SecondaryFill runs one process per loop.
+  # SecondaryFill runs one process per loop — and on a plant with idle
+  # loops, most of them won't exist.
   defp unsubscribe_all(Op.SecondaryFill) do
-    Enum.each(@loops, &PubSub.unsubscribe(Module.concat(Op.SecondaryFill, "L#{&1}"), :ticker))
+    Enum.each(@loops, fn loop ->
+      Op.unsubscribe_if_running(Module.concat(Op.SecondaryFill, "L#{loop}"), :ticker)
+    end)
   end
 
-  defp unsubscribe_all(module), do: PubSub.unsubscribe(module, :ticker)
+  defp unsubscribe_all(module), do: Op.unsubscribe_if_running(module, :ticker)
 
   defp any_subscribed?(Op.SecondaryFill) do
     subscribers = PubSub.subscribers(:ticker)
