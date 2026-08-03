@@ -30,9 +30,9 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       absorption capacity of the banks. The operators drive it up there
       and we wait for the power to genuinely plateau.
     * **Part II — Destroy the turbines.** The condenser cooling pump is
-      walked down to nothing, then the vacuum pump stopped and the
-      condensate return valve opened, and we wait for the condenser
-      vacuum to collapse. The turbines keep spinning
+      walked down to nothing, then the vacuum pump stopped, the steam
+      ejector's motive steam shut off and the condensate return valve
+      opened, and we wait for the condenser vacuum to collapse. The turbines keep spinning
       into the rising backpressure — tripping them would *protect* them.
       The turbine bypass is shut so no steam can route around them, the
       main steam valves are wound open as the vacuum goes to work the
@@ -61,9 +61,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     * **Part VI — Aftermath.** Core temperature, then core integrity,
       watched to the end.
 
-  Operators are stood down one at a time, each at the moment it becomes
-  an obstacle — so the plant is running itself, hard, for as long as
-  possible.
+  Operators are stopped one at a time, each at the moment it becomes an
+  obstacle — so the plant is running itself, hard, for as long as
+  possible. They stay stopped afterwards; re-enable them from the TUI's
+  operator menu.
 
   `pace` is how fast valves, rods and pumps are driven, and `patience`
   is how long any one stage may take before we give up on it and press
@@ -373,6 +374,12 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     UI.set("Condenser Vacuum Pump", "STOP")
     safe(fn -> API.VacuumPump.stop() end)
+
+    # The ejector is the other way vacuum gets made — shut its motive
+    # steam off so the pump isn't simply replaced by it.
+    UI.set("Motive Steam Inlets", "SHUT")
+    safe(fn -> API.Valves.set_open_percent(API.Valves.omsi(), 0) end)
+    safe(fn -> API.Valves.set_open_percent(API.Valves.smsi(), 0) end)
 
     UI.set("Condensate Return Valve", "OPEN")
     safe(fn -> API.Valves.set_open_percent(API.Valves.crv(), 100) end)
@@ -898,34 +905,35 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   # -- Standing operators down, one at a time ---------------------------------
 
+  # Actually stop the operator, don't just mute it. Unsubscribing leaves
+  # the process alive and supervised — it still reads as running
+  # everywhere, and a supervisor restart would put it straight back to
+  # work against us.
   defp stand_down(module, name) do
+    ids = operator_ids(module)
+
     UI.set_wait(
       name,
-      "STAND DOWN",
-      fn -> not any_subscribed?(module) end,
-      fn -> unsubscribe_all(module) end
+      "STOP",
+      fn -> not any_running?(ids) end,
+      fn ->
+        Enum.each(ids, fn id ->
+          Op.unsubscribe_if_running(id, :ticker)
+          safe(fn -> AutoNuke.Tui.Operators.disable(id) end)
+        end)
+      end
     )
   end
 
   # SecondaryFill runs one process per loop — and on a plant with idle
   # loops, most of them won't exist.
-  defp unsubscribe_all(Op.SecondaryFill) do
-    Enum.each(@loops, fn loop ->
-      Op.unsubscribe_if_running(Module.concat(Op.SecondaryFill, "L#{loop}"), :ticker)
-    end)
+  defp operator_ids(Op.SecondaryFill) do
+    Enum.map(@loops, &Module.concat(Op.SecondaryFill, "L#{&1}"))
   end
 
-  defp unsubscribe_all(module), do: Op.unsubscribe_if_running(module, :ticker)
+  defp operator_ids(module), do: [module]
 
-  defp any_subscribed?(Op.SecondaryFill) do
-    subscribers = PubSub.subscribers(:ticker)
-
-    Enum.any?(@loops, fn loop ->
-      Process.whereis(Module.concat(Op.SecondaryFill, "L#{loop}")) in subscribers
-    end)
-  end
-
-  defp any_subscribed?(module), do: Process.whereis(module) in PubSub.subscribers(:ticker)
+  defp any_running?(ids), do: Enum.any?(ids, &is_pid(Process.whereis(&1)))
 
   # -- Abort protection -------------------------------------------------------
 
