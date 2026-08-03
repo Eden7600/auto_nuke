@@ -22,8 +22,11 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   It doesn't just yank the rods. It works the plant to death from the
   outside in, letting each stage fully develop before starting the next:
 
-    * **Part I — Maximum output.** Resistor banks on, then the plant is
-      asked for everything it can safely make: grid demand plus the full
+    * **Part I — Maximum output.** Boron dosing blocked and the ion
+      exchange run flat out, so the core starts slowly losing its
+      poison — it takes an age, so it runs underneath everything that
+      follows. Then the resistor banks go on and the plant is asked for
+      everything it can safely make: grid demand plus the full
       absorption capacity of the banks. The operators drive it up there
       and we wait for the power to genuinely plateau.
     * **Part II — Destroy the turbines.** Condenser cooling off, vacuum
@@ -34,12 +37,15 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       the emergency generators are started on the way down, at 80%
       vacuum, so the plant still has power once the turbines give up.
       Done when every turbine has stopped making power.
-    * **Part III — Overpressure.** Feedwater to maximum, vents shut,
-      then the main steam control valves slowly choked, and we watch the
-      steam generator pressure climb with nowhere to go.
+    * **Part III — Destroy the steam generators.** Feedwater to maximum,
+      vents shut, and primary circulation opened right up so core heat
+      pours into the generators — then the main steam control valves are
+      slowly choked down to a crack, and the pressure goes wherever it
+      wants to go.
     * **Part IV — Heat sink.** The core pool is drained away.
-    * **Part V — Prompt criticality.** Boron filtered out, rods
-      withdrawn, primary circulation throttled to nothing.
+    * **Part V — Prompt criticality.** Rods withdrawn and primary
+      circulation throttled to nothing, on a core that has been losing
+      boron since Part I.
     * **Part VI — Aftermath.** Core temperature, then core integrity,
       watched to the end.
 
@@ -71,8 +77,14 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   @generator_start_vacuum 80.0
   # A generator making less than this (MW) has stopped generating:
   @idle_mw 0.1
-  # Watch steam generator pressure climb towards this:
-  @pressure_ceiling 120.0
+  # Drive the steam generator pressure at this, and call it done there:
+  @pressure_ceiling 200.0
+  # Pressure has stopped climbing when a window moves less than this:
+  @pressure_stall_bar 0.5
+  # Choke the main steam control valves to here — not quite shut:
+  @mscv_floor 1.0
+  # Primary pump speed for Part III (the operators cap themselves at 49):
+  @primary_flood_speed 100.0
   # A steam generator counts as "live" above this pressure:
   @live_pressure 5.0
   # Pressure milestones worth shouting about:
@@ -154,6 +166,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   defp part_1_maximum_output(state) do
     UI.console("PART I — MAXIMUM OUTPUT")
 
+    start_stripping_boron()
+
     # The banks are where the surplus goes: with them on, "safe maximum"
     # is grid demand plus everything they can absorb.
     capacity_mw = Mix.Tasks.AutoNuke.Startup.enable_resistor_bank()
@@ -185,6 +199,24 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
         UI.success("Output settled at #{fmt(total_generation_mw())} MW.")
     end
   end
+
+  # Stripping boron destabilises the core, but it takes an age — so it
+  # runs from the very start, quietly, underneath everything else.
+  defp start_stripping_boron do
+    stand_down(Op.BoronLevel, "Boron Level Operator")
+
+    UI.set("Boron Dosing", "BLOCKED")
+    safe(fn -> API.Pumps.set_speed(API.Pumps.boron_dosing(), 0) end)
+
+    UI.set("Ion Exchange", "MAXIMUM")
+    safe(fn -> API.Pumps.set_speed(API.Pumps.boron_filter(), 100) end)
+
+    UI.notice(
+      "Boron is coming out of the core (#{fmt(boron_ppm())} ppm) and none is going back in."
+    )
+  end
+
+  defp boron_ppm, do: safe_number(fn -> API.get_float("CHEM_BORON_PPM") end, 0.0)
 
   # Accumulates its own history: true once output has been flat for a
   # sustained stretch, not merely flat for an instant.
@@ -352,9 +384,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   defp part_3_overpressure(state) do
     UI.console("PART III — OVERPRESSURE")
 
-    # These two would undo the choking and the flooding respectively.
+    # These would undo the choking, the flooding and the overheating.
     stand_down(Op.SteamFlow, "Steam Flow Operator")
     stand_down(Op.SecondaryFill, "Secondary Fill Operators")
+    stand_down(Op.PrimaryPumps, "Primary Pumps Operator")
 
     UI.set("Feedwater Pumps", "MAXIMUM")
 
@@ -368,34 +401,67 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       safe(fn -> SteamGen.for_loop(loop) |> SteamGen.set_vent_open(false) end)
     end)
 
-    # The bar drives the ramp: each sample closes the outlets a little
-    # further and reports how far they've shut.
+    # Far more primary flow than the operators would ever allow: it drags
+    # core heat into the generators as fast as the loop can carry it.
+    UI.set("Primary Circulation", "#{round(@primary_flood_speed)}%")
+
+    Enum.each(@loops, fn loop ->
+      safe(fn -> API.Pumps.primary(loop) |> API.Pumps.set_speed(@primary_flood_speed) end)
+    end)
+
+    UI.notice("Heat is pouring into the generators with nowhere to send it.")
+
+    # The first bar drives the ramp — each sample closes the valves a
+    # little further — while the second watches what that does.
     sgs = Enum.map(state.loops, &SteamGen.for_loop/1)
 
-    bar(
-      "Steam Outlets",
-      PBConfig.reverse_percent(),
-      fn -> choke_step(sgs, state.step) end,
-      fn opening -> opening <= 0.0 end,
-      state.limit
+    UI.ProgressBar.wait_many(
+      [
+        [
+          config: PBConfig.target(100.0, @mscv_floor, "%", 1),
+          label: "MSCV",
+          current_fn: fn -> choke_step(sgs, state.step) end
+        ],
+        [
+          config: PBConfig.target(max_pressure(state.loops), @pressure_ceiling, " bar", 1),
+          label: "Bar",
+          current_fn: fn -> watch_pressure(state.loops) end
+        ]
+      ],
+      steam_generators_destroyed_fn(state.limit)
     )
 
-    UI.success("Steam outlets shut.")
+    UI.warn("Steam generators at #{fmt(max_pressure(state.loops))} bar.")
+  end
 
-    bar(
-      "Steam Pressure",
-      PBConfig.target(max_pressure(state.loops), @pressure_ceiling, " bar", 1),
-      fn -> watch_pressure(state.loops) end,
-      fn pressure -> pressure >= @pressure_ceiling end,
-      state.limit
-    )
+  # Done at an absurd pressure, or once the valves are shut to their
+  # floor and pressure has stopped climbing — whichever comes first.
+  defp steam_generators_destroyed_fn(limit) do
+    fn [mscv, pressure] ->
+      n = Process.get(:bar_ticks, 0) + 1
+      Process.put(:bar_ticks, n)
+
+      history = Process.get(:pressure, Smoother.new(@plateau_window)) |> Smoother.add(pressure)
+      Process.put(:pressure, history)
+
+      stalled? =
+        history.size >= history.max and
+          abs(Smoother.rate_of_change(history)) < @pressure_stall_bar
+
+      cond do
+        pressure >= @pressure_ceiling -> true
+        mscv <= @mscv_floor and stalled? -> true
+        n >= limit -> :abort
+        true -> false
+      end
+    end
   end
 
   # Only the MSCVs move here — the bypass was shut in Part II and stays
   # shut, so steam has no path around the turbines.
   defp choke_step(sgs, step) do
     opening = Process.get(:opening, 100.0) - step
-    opening = max(opening, 0.0)
+    opening = max(opening, @mscv_floor)
     Process.put(:opening, opening)
 
     rounded = Float.round(opening, 1)
@@ -461,11 +527,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     # The last of the supervision goes now.
     stand_down(Op.ControlRods, "Control Rods Operator")
     stand_down(Op.CoreTemp, "Core Temperature Operator")
-    stand_down(Op.PrimaryPumps, "Primary Pumps Operator")
-    stand_down(Op.BoronLevel, "Boron Level Operator")
 
-    UI.set("Boron Filtering", "MAXIMUM")
-    safe(fn -> API.put("CHEM_BORON_FILTER_ORDERED_SPEED", 100) end)
+    UI.notice("Boron is down to #{fmt(boron_ppm())} ppm.")
 
     pumps = Enum.map(@loops, &API.Pumps.primary/1)
 
@@ -488,7 +551,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     Process.put(:rods, ordered)
     safe(fn -> API.put("RODS_ALL_POS_ORDERED", Float.round(ordered, 1)) end)
 
-    speed = Process.get(:pump_speed, 100.0)
+    # Starts from wherever Part III left the pumps.
+    speed = Process.get(:pump_speed, @primary_flood_speed)
     speed = max(speed - step, 0.0)
     Process.put(:pump_speed, speed)
     Enum.each(pumps, fn pump -> safe(fn -> API.Pumps.set_speed(pump, Float.round(speed, 1)) end) end)
