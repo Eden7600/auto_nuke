@@ -96,9 +96,9 @@ The pre-TUI workflow still works (and is what the TUI uses under the hood):
   - Detects a station blackout (no external or turbine supply — batteries draining) and starts the emergency diesel generators.
   - Stops the generators it started once normal supply returns; generators you started by hand are left alone.
   - Warns about low diesel fuel and pending generator maintenance.
-- [`ResistorBanks`](lib/auto_nuke/operator/resistor_banks.ex) - Overproduction protection.
-  - Keeps the resistor banks off in steady state (power fed to resistors is power not sold).
-  - Enables them when supply sustains above 108% of demand (approaching the 110% scoring ceiling), disables them again after a sustained calm period.
+- [`ResistorBanks`](lib/auto_nuke/operator/resistor_banks.ex) - Resistor bank management.
+  - Keeps the resistor banks off while supply tracks the target (power fed to resistors is power not sold).
+  - Enables them whenever supply strays outside ±10% of SteamFlow's current target — overproduction or an aggressive catch-up transient — and disables them again once supply has hugged the target for a sustained stretch.
 - [`CondenserCooling`](lib/auto_nuke/operators/condenser_cooling.ex) - Manages the condenser cooling pump.
   - Runs the pump at the lowest speed it can get away with (down to 10%) without temperature climbing.
   - Uses a probe/backoff strategy, where it will (very slowly) reduce speed until temperature starts climbing, then back off and leave it alone for 15+ minutes at a time.

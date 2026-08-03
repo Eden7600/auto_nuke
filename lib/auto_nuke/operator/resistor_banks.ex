@@ -1,13 +1,13 @@
 defmodule AutoNuke.Operator.ResistorBanks do
   @moduledoc """
-  Overproduction protection.
+  Resistor bank management.
 
   Resistor banks burn surplus power, but with them enabled the plant only
   targets 100% of demand — power fed to resistors is power not sold. So:
-  keep them OFF in steady state, and switch them ON when the supply ratio
-  climbs toward the 110% scoring ceiling; back OFF once things have been
-  calm for a while. Hysteresis between the two thresholds prevents
-  flapping against SteamFlow's resistor-aware targeting.
+  keep them OFF while supply tracks the target, and switch them ON
+  whenever supply strays outside ±10% of SteamFlow's current target —
+  overproduction *or* an aggressive catch-up transient both count. Back
+  OFF once supply has hugged the target again for a sustained stretch.
   """
 
   use GenServer
@@ -15,18 +15,21 @@ defmodule AutoNuke.Operator.ResistorBanks do
   require Logger
 
   alias AutoNuke.API
+  alias AutoNuke.Operator.SteamFlow
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Enable when supply/demand sustains above this (band ceiling is 1.10):
-  @on_ratio 1.08
-  # Disable when it sustains at/below this (resistor-mode target is 1.02,
-  # steady no-resistor target is 1.05 — the gap is the hysteresis):
-  @off_ratio 1.04
+  # Enable when |supply ratio - target| sustains beyond this:
+  @on_deviation 0.10
+  # Disable when it sustains within this (the gap is the hysteresis):
+  @off_deviation 0.08
 
   # Sustain requirements, in this operator's ticks (≈1 game-second each):
   @on_after 3
   @off_after 30
+
+  # Assume this target when SteamFlow isn't running to tell us:
+  @fallback_target 1.0
 
   defmodule State do
     defstruct high: 0, low: 0
@@ -52,17 +55,18 @@ defmodule AutoNuke.Operator.ResistorBanks do
     state =
       case supply_ratio() do
         nil -> %State{state | high: 0, low: 0}
-        ratio -> track(state, ratio)
+        ratio -> track(state, ratio, ratio - target())
       end
 
     {:noreply, state}
   end
 
-  defp track(%State{} = state, ratio) do
+  defp track(%State{} = state, ratio, deviation) do
     state =
       cond do
-        ratio >= @on_ratio -> %State{state | high: state.high + 1, low: 0}
-        ratio <= @off_ratio -> %State{state | low: state.low + 1, high: 0}
+        abs(deviation) > @on_deviation -> %State{state | high: state.high + 1, low: 0}
+        abs(deviation) <= @off_deviation -> %State{state | low: state.low + 1, high: 0}
+        # In the hysteresis margin: hold both streaks.
         true -> %State{state | high: 0, low: 0}
       end
 
@@ -70,19 +74,32 @@ defmodule AutoNuke.Operator.ResistorBanks do
       state.high == @on_after and not enabled?() ->
         Logger.warning(
           @log_prefix <>
-            "Supply at #{round(ratio * 100)}% of demand — enabling resistor banks."
+            "Supply at #{round(ratio * 100)}% of demand, " <>
+            "#{round(deviation * 100)}% off target — enabling resistor banks."
         )
 
         enable_banks()
         state
 
       state.low == @off_after and enabled?() ->
-        Logger.notice(@log_prefix <> "Supply stable — disabling resistor banks.")
+        Logger.notice(@log_prefix <> "Supply back on target — disabling resistor banks.")
         disable_banks()
         state
 
       true ->
         state
+    end
+  end
+
+  # SteamFlow's current target ratio, when it's around to ask.
+  defp target do
+    try do
+      case GenServer.call(SteamFlow, :get_demand_status, 250) do
+        %{target: target} when is_number(target) -> target
+        _ -> @fallback_target
+      end
+    catch
+      :exit, _ -> @fallback_target
     end
   end
 
