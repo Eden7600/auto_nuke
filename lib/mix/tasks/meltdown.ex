@@ -43,8 +43,11 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       slowly choked down to a crack, and the pressure goes wherever it
       wants to go. The core pool starts draining here too — it holds
       150 kL and takes its time.
-    * **Part IV — Heat sink.** Waits out the rest of the core pool
-      drain, until there's no external cooling left.
+    * **Part IV — Heat sink.** Every freight pump switched on and the
+      secondary circulation opened right up — helpful at first, then
+      steadily fatal as the pumps fight vessel pressure — while the core
+      pool finishes draining and equipment failures are called out as
+      they happen.
     * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
       boron since Part I.
@@ -508,8 +511,38 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   # -- Part IV: take away the heat sink ---------------------------------------
 
+  # Everything that can push water into the plant. The Transfer Freight
+  # Pump has no API switch, so it can't join in.
+  @flood_pumps [
+    API.Pumps.external_freight(),
+    API.Pumps.internal_freight(),
+    API.Pumps.primary_circuit(),
+    API.Pumps.condenser_freight()
+  ]
+
   defp part_4_heat_sink(state) do
     UI.console("PART IV — HEAT SINK")
+
+    # These would switch the freight pumps back off as levels are met.
+    stand_down(Op.CoreFill, "Core Fill Operator")
+    stand_down(Op.PCSTFill, "PCST Fill Operator")
+    stand_down(Op.CondenserFill, "Condenser Fill Operator")
+
+    # Helpful at first — then the vessels come up to pressure and the
+    # pumps start cooking themselves against it.
+    UI.set("Freight Pumps", "ALL ON")
+
+    Enum.each(@flood_pumps, fn pump ->
+      safe(fn -> API.Pumps.set_switch(pump, true) end)
+    end)
+
+    # The generators are wrecked by now; nothing is served by holding
+    # the feedwater back.
+    UI.set("Secondary Circulation", "100%")
+
+    Enum.each(@loops, fn loop ->
+      safe(fn -> API.Pumps.secondary(loop) |> API.Pumps.set_speed(100) end)
+    end)
 
     # Draining since Part III; re-assert in case anything reset it.
     safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
@@ -517,12 +550,53 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     bar(
       "Core Pool",
       PBConfig.reverse_percent(),
-      fn -> core_pool_percent() end,
+      fn ->
+        watch_pumps()
+        core_pool_percent()
+      end,
       fn percent -> percent <= 1.0 end,
       state.limit
     )
 
     UI.warn("Core pool drained (#{fmt(core_pool_percent())}%).  External cooling is gone.")
+  end
+
+  # Announce equipment as it fails, once each. Cheap enough at this
+  # interval, and it's the whole point of running the pumps into
+  # pressurised vessels.
+  @pump_check_every 20
+  @failure_flags ["Overload", "Destroyed", "Dry", "Flooded"]
+
+  defp watch_pumps do
+    n = Process.get(:pump_check, 0) + 1
+    Process.put(:pump_check, n)
+
+    if rem(n, @pump_check_every) == 0 do
+      seen = Process.get(:pump_failures, MapSet.new())
+
+      failures =
+        case safe(fn -> API.get_json("VALVE_PANEL_JSON") end) do
+          %{"pumps" => pumps} ->
+            for {name, entry} <- pumps,
+                device_state = Map.get(entry, "State", %{}),
+                flag <- @failure_flags,
+                device_state[flag] == true,
+                do: {name, flag}
+
+          _ ->
+            []
+        end
+
+      seen =
+        failures
+        |> Enum.reject(&MapSet.member?(seen, &1))
+        |> Enum.reduce(seen, fn {name, flag} = key, acc ->
+          UI.warn("#{name}: #{String.upcase(flag)}")
+          MapSet.put(acc, key)
+        end)
+
+      Process.put(:pump_failures, seen)
+    end
   end
 
   @core_pool API.Vessels.core_pool()
