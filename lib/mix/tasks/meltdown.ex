@@ -47,7 +47,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       secondary circulation opened right up — helpful at first, then
       steadily fatal as the pumps fight vessel pressure — the
       pressurizer vent and spray both opened so the core loses pressure
-      control entirely, and the core pool finishes draining. Equipment
+      control entirely, the turbine vents and the condenser and storage
+      tank drains opened, and the core pool finished draining. Equipment
       failures are called out as they happen.
     * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
@@ -554,6 +555,22 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     safe(fn -> API.Valves.set_actuator(API.Valves.pzr_cooling(), "OPEN") end)
 
     UI.notice("Pressurizer is open to the room and spraying.")
+
+    # Everything that can be opened, opened: steam out of the turbines,
+    # coolant out of the condenser and the storage tank.
+    UI.set("Turbine Vents", "OPEN")
+
+    Enum.each(@loops, fn loop ->
+      safe(fn -> API.Valves.set_actuator(API.Valves.turbine_vent(loop), "OPEN") end)
+    end)
+
+    UI.set("Condenser Drain", "OPEN")
+    safe(fn -> API.Valves.set_actuator(API.Valves.condenser_drain(), "OPEN") end)
+
+    UI.set("Coolant Storage Tank Drain", "OPEN")
+    safe(fn -> API.Valves.set_actuator(API.Valves.cst_drain(), "OPEN") end)
+
+    UI.notice("The plant is now venting and draining wherever it can.")
 
     # Draining since Part III; re-assert in case anything reset it.
     safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
