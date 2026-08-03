@@ -41,8 +41,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       vents shut, and primary circulation opened right up so core heat
       pours into the generators — then the main steam control valves are
       slowly choked down to a crack, and the pressure goes wherever it
-      wants to go.
-    * **Part IV — Heat sink.** The core pool is drained away.
+      wants to go. The core pool starts draining here too — it holds
+      150 kL and takes its time.
+    * **Part IV — Heat sink.** Waits out the rest of the core pool
+      drain, until there's no external cooling left.
     * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
       boron since Part I.
@@ -411,6 +413,12 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     UI.notice("Heat is pouring into the generators with nowhere to send it.")
 
+    # The pool holds 150 kL and empties slowly, so start it now and let
+    # it run underneath the overpressure work; Part IV waits it out.
+    UI.set("Core Pool Pump", "REMOVE")
+    safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
+    UI.notice("Core pool is draining (#{fmt(core_pool_percent())}%).")
+
     # The first bar drives the ramp — each sample closes the valves a
     # little further — while the second watches what that does.
     sgs = Enum.map(state.loops, &SteamGen.for_loop/1)
@@ -503,20 +511,24 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   defp part_4_heat_sink(state) do
     UI.console("PART IV — HEAT SINK")
 
-    UI.set("Core Pool", "DRAIN")
+    # Draining since Part III; re-assert in case anything reset it.
     safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
-
-    pool = API.Vessels.core_pool()
 
     bar(
       "Core Pool",
       PBConfig.reverse_percent(),
-      fn -> safe_number(fn -> API.Vessels.get_fill_percent(pool) end, 0.0) end,
+      fn -> core_pool_percent() end,
       fn percent -> percent <= 1.0 end,
       state.limit
     )
 
-    UI.warn("Core pool drained.  External cooling is gone.")
+    UI.warn("Core pool drained (#{fmt(core_pool_percent())}%).  External cooling is gone.")
+  end
+
+  @core_pool API.Vessels.core_pool()
+
+  defp core_pool_percent do
+    safe_number(fn -> API.Vessels.get_fill_percent(@core_pool) end, 0.0)
   end
 
   # -- Part V: prompt criticality ---------------------------------------------
