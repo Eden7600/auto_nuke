@@ -69,8 +69,9 @@ defmodule Mix.Tasks.AutoNuke.RefuelTest do
     end
   end
 
-  # Selection logic, short of driving the pool/piston flow:
-  # spent = loaded and under threshold; empty bays never selected.
+  # Selection logic, short of driving the pool/piston flow: the run
+  # proceeds past selection into the pool step, which reads levels we
+  # leave unmocked, so the flow stops right there.
   test "spent selection picks only depleted loaded cells" do
     mock_safe_reactor()
 
@@ -81,11 +82,23 @@ defmodule Mix.Tasks.AutoNuke.RefuelTest do
       4 => {"EXTERIOR", 3.5}
     })
 
-    # The run proceeds past selection into the pool step, which needs the
-    # pool level — leave it unmocked so the flow stops right there, and
-    # verify the report happened for the selected bays.
     assert_raise RuntimeError, ~r/not mocked/, fn ->
       capture_io(fn -> Refuel.run([]) end)
+    end
+  end
+
+  test "an all-empty core has nothing spent, but `all` can still fill it" do
+    mock_safe_reactor()
+    mock_bays(%{1 => {"VACIO", 0.0}, 2 => {"VACIO", 0.0}})
+
+    # Empty bays are not "spent" — nothing to replace.
+    assert_raise Mix.Error, ~r/No bays to refuel/, fn ->
+      capture_io(fn -> Refuel.run([]) end)
+    end
+
+    # ...but `all` includes them, so the flow proceeds to the pool step.
+    assert_raise RuntimeError, ~r/not mocked/, fn ->
+      capture_io(fn -> Refuel.run(["all"]) end)
     end
   end
 end

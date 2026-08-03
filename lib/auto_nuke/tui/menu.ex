@@ -54,8 +54,7 @@ defmodule AutoNuke.Tui.Menu do
         group: "Plant",
         label: "Refuel — replace spent fuel cells (guided)",
         params: [
-          %{label: "Bays", hint: "blank = spent; all; or 1, 3..5", optional: true},
-          %{label: "Pool level", hint: "% for hatch work; blank = 50", optional: true}
+          %{label: "Bays", hint: "blank = spent; all; or 1, 3..5", optional: true}
         ],
         task: T.Refuel,
         confirm: "Refuel the reactor? (Reactor must be shut down and cool.)"

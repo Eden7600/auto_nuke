@@ -138,7 +138,7 @@ These need to be run via `task.sh` in order to set up communication with a runni
 
 ### Miscellaneous
 
-- [`mix auto_nuke.refuel`](lib/mix/tasks/refuel.ex) — Guided reactor refueling: safety checks, fuel report, pool level, pistons and hatches.  (The crane has no API — the cell swaps are up to you.)
+- [`mix auto_nuke.refuel`](lib/mix/tasks/refuel.ex) — Guided reactor refueling: safety checks, fuel report, drains the core pool, walks each bay through piston/hatch open and close, then refills the pool.  (The crane has no API — the cell swaps are up to you.)
 - [`mix auto_nuke.boron.inject`](lib/mix/tasks/boron/inject.ex) — Injects boron into the core.
 - [`mix auto_nuke.boron.filter`](lib/mix/tasks/boron/filter.ex) — Filters boron out of the core.
 - [`mix auto_nuke.valve`](lib/mix/tasks/valve.ex) — Opens or closes valves with electric actuators.
