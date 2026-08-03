@@ -30,9 +30,12 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       pump stopped and the condensate return valve opened, then we wait
       for the condenser vacuum to collapse. The turbines keep spinning
       into the rising backpressure — tripping them would *protect* them.
+      The turbine bypass is shut so no steam can route around them, and
+      the emergency generators are started on the way down, at 80%
+      vacuum, so the plant still has power once the turbines give up.
     * **Part III — Overpressure.** Feedwater to maximum, vents shut,
-      then the steam outlets slowly choked, and we watch the steam
-      generator pressure climb with nowhere to go.
+      then the main steam control valves slowly choked, and we watch the
+      steam generator pressure climb with nowhere to go.
     * **Part IV — Heat sink.** The core pool is drained away.
     * **Part V — Prompt criticality.** Boron filtered out, rods
       withdrawn, primary circulation throttled to nothing.
@@ -60,8 +63,11 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   @plateau_threshold_mw 1.0
   @plateau_hold @ticks_per_minute
 
-  # Vacuum (a 0-1 fraction) counts as gone below this:
-  @vacuum_gone 0.5
+  # Vacuum (a 0-1 fraction) has collapsed far enough below this that the
+  # turbines are done for; no need to watch it all the way down:
+  @vacuum_gone 0.6
+  # Get the diesels running before the turbines stop carrying the plant:
+  @generator_start_vacuum 80.0
   # Watch steam generator pressure climb towards this:
   @pressure_ceiling 120.0
   # A steam generator counts as "live" above this pressure:
@@ -233,21 +239,63 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     UI.set("Condensate Return Valve", "OPEN")
     safe(fn -> API.Valves.set_open_percent(API.Valves.crv(), 100) end)
 
-    UI.notice("Vacuum is on its own now.  The turbines keep spinning.")
+    # The bypass exists to route steam around the turbines and spare
+    # them. Shut it: everything goes through the turbines from here.
+    UI.set("Turbine Bypass", "SHUT")
+
+    Enum.each(state.loops, fn loop ->
+      safe(fn -> API.Valves.set_open_percent(API.Valves.turbine_bypass(loop), 0) end)
+    end)
+
+    UI.notice("Vacuum is on its own now.  All steam goes through the turbines.")
 
     bar(
       "Condenser Vacuum",
       PBConfig.target(vacuum_percent(), @vacuum_gone * 100, "%", 1),
-      fn -> vacuum_percent() end,
+      fn -> watch_vacuum() end,
       fn value -> value <= @vacuum_gone * 100 end,
       state.limit
     )
 
-    UI.warn("Condenser vacuum is gone (#{fmt(vacuum_percent())}%).")
+    UI.warn("Condenser vacuum has collapsed (#{fmt(vacuum_percent())}%).  Turbines are done.")
   end
 
   defp vacuum_percent do
     safe_number(fn -> API.VacuumPump.get_vacuum_level() end, 0.0) * 100
+  end
+
+  # Reports vacuum, and gets the diesels running on the way down: once
+  # the turbines stop carrying the plant, everything else needs power to
+  # keep the cascade going.
+  defp watch_vacuum do
+    vacuum = vacuum_percent()
+
+    if vacuum <= @generator_start_vacuum and not Process.get(:generators_started, false) do
+      Process.put(:generators_started, true)
+      start_emergency_generators()
+    end
+
+    vacuum
+  end
+
+  defp start_emergency_generators do
+    case safe(fn -> Op.EmergencyPower.generator_statuses() end) do
+      statuses when is_list(statuses) ->
+        case for {gen, "INACTIVO"} <- statuses, do: gen do
+          [] ->
+            UI.notice("No idle emergency generators to start.")
+
+          idle ->
+            UI.warn("Vacuum below #{round(@generator_start_vacuum)}% — starting generators #{inspect(idle)}.")
+
+            Enum.each(idle, fn gen ->
+              safe(fn -> API.put("EMERGENCY_GENERATOR_#{gen}_START_STOP", "START") end)
+            end)
+        end
+
+      _ ->
+        UI.notice("Couldn't read the emergency generators.")
+    end
   end
 
   # -- Part III: overpressure the steam generators ----------------------------
@@ -299,6 +347,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     )
   end
 
+  # Only the MSCVs move here — the bypass was shut in Part II and stays
+  # shut, so steam has no path around the turbines.
   defp choke_step(sgs, step) do
     opening = Process.get(:opening, 100.0) - step
     opening = max(opening, 0.0)
@@ -308,7 +358,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     Enum.each(sgs, fn sg ->
       safe(fn -> API.Valves.set_open_percent(sg.mscv, rounded) end)
-      safe(fn -> API.Valves.set_open_percent(sg.bypass, rounded) end)
+      safe(fn -> API.Valves.set_open_percent(sg.bypass, 0) end)
     end)
 
     opening

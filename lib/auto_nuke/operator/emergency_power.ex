@@ -73,8 +73,11 @@ defmodule AutoNuke.Operator.EmergencyPower do
     {:noreply, state}
   end
 
-  # `{gen, status}` for each generator that is actually installed.
-  defp generator_statuses do
+  @doc """
+  `{generator, status}` for each generator that is actually installed —
+  absent hardware reads as "null" and is left out.
+  """
+  def generator_statuses do
     @generators
     |> Enum.map(&{&1, API.get_string("EMERGENCY_GENERATOR_#{&1}_STATUS")})
     |> Enum.reject(fn {_gen, status} -> status in @not_installed end)
