@@ -169,8 +169,8 @@ defmodule AutoNuke.Tui.Menu do
         group: "Danger",
         label: "☢ MELTDOWN — cascade the plant into failure",
         params: [
-          %{label: "Pace", hint: "%/game-min; blank = 5", optional: true},
-          %{label: "Act limit", hint: "game-min per act; blank = 10", optional: true}
+          %{label: "Pace", hint: "%/min of real time; blank = 20", optional: true},
+          %{label: "Patience", hint: "min per stage; blank = 5", optional: true}
         ],
         task: T.Meltdown,
         confirm: "DESTROY the plant? [x] aborts and SCRAMs."

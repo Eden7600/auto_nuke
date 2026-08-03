@@ -7,78 +7,78 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   alias AutoNuke.API.SteamGen
   alias AutoNuke.Smoother
   alias AutoNuke.TaskUI, as: UI
+  alias AutoNuke.TaskUI.ProgressBar.Config, as: PBConfig
   alias AutoNuke.Operator, as: Op
 
   @moduledoc """
-  Drives the plant into a cascading failure, in acts.
+  Drives the plant into a cascading failure, in parts.
 
-      mix auto_nuke.meltdown [pace %/game-min] [act limit in game-min]
+      mix auto_nuke.meltdown [pace %/min] [patience min]
 
   A sandbox toy: it exists to find out how the game behaves at its
   limits, and whether you can pull the plant back from the brink. It
   will wreck the reactor in your save.
 
   It doesn't just yank the rods. It works the plant to death from the
-  outside in, letting each stage settle before starting the next:
+  outside in, letting each stage fully develop before starting the next:
 
     * **Part I — Maximum output.** Resistor banks on, then the plant is
       asked for everything it can safely make: grid demand plus the full
       absorption capacity of the banks. The operators drive it up there
-      and we wait for the power to plateau.
-    * **Part II — Destroy the turbines.** Vacuum pump stopped and the
-      condensate return valve opened, then we wait for the condenser
-      vacuum to collapse. The turbines keep spinning into the rising
-      backpressure.
+      and we wait for the power to genuinely plateau.
+    * **Part II — Destroy the turbines.** Condenser cooling off, vacuum
+      pump stopped and the condensate return valve opened, then we wait
+      for the condenser vacuum to collapse. The turbines keep spinning
+      into the rising backpressure — tripping them would *protect* them.
     * **Part III — Overpressure.** Feedwater to maximum, vents shut,
-      then the steam outlets slowly choked. Steam generator pressure
-      climbs with nowhere to go.
+      then the steam outlets slowly choked, and we watch the steam
+      generator pressure climb with nowhere to go.
     * **Part IV — Heat sink.** The core pool is drained away.
     * **Part V — Prompt criticality.** Boron filtered out, rods
       withdrawn, primary circulation throttled to nothing.
-    * **Part VI — Aftermath.** Narrates core temperature and integrity
-      to the end.
+    * **Part VI — Aftermath.** Core temperature, then core integrity,
+      watched to the end.
 
   Operators are stood down one at a time, each at the moment it becomes
   an obstacle — so the plant is running itself, hard, for as long as
   possible.
 
-  **Aborting**: cancelling (`[x]` in the TUI) slams the rods home and
-  presses SCRAM. It does not undo the valve work — that's yours to fix,
-  if it's still fixable.
+  `pace` is how fast valves, rods and pumps are driven, and `patience`
+  is how long any one stage may take before we give up on it and press
+  on. Both are in minutes of real time at 1× simulation speed.
   """
 
-  # Percent per in-game minute, for rods/valves/pumps:
-  @default_pace 5.0
-  # Give up on an act after this many in-game minutes:
-  @default_act_limit 10.0
+  # Ticks arrive five times per real second at 1x simulation speed.
+  @ticks_per_minute 5 * 60
 
-  @ticks_per_minute AutoNuke.Ticker.ticks_per_second() *
-                      AutoNuke.Ticker.seconds_per_minute()
+  @default_pace 20.0
+  @default_patience 5.0
 
-  @report_every 10
-  @integrity_floor 1.0
-  @loops 1..3
-
-  # A steam generator counts as "live" above this pressure:
-  @live_pressure 5.0
-
-  # Output counts as plateaued when a full window of samples (one
-  # in-game minute) opens and closes within this many MW of each other.
-  @plateau_window @ticks_per_minute
+  # Output has plateaued when a window of samples opens and closes within
+  # this many MW of each other, sustained for @plateau_hold ticks.
+  @plateau_window 40
   @plateau_threshold_mw 1.0
+  @plateau_hold @ticks_per_minute
 
   # Vacuum (a 0-1 fraction) counts as gone below this:
   @vacuum_gone 0.5
+  # Watch steam generator pressure climb towards this:
+  @pressure_ceiling 120.0
+  # A steam generator counts as "live" above this pressure:
+  @live_pressure 5.0
   # Pressure milestones worth shouting about:
   @pressure_milestones [65, 70, 75, 80, 90, 100, 120]
 
+  @integrity_floor 1.0
+  @loops 1..3
+
   def run(args), do: run(args, [])
 
-  def run([], opts), do: meltdown(@default_pace, @default_act_limit, opts)
-  def run([pace], opts), do: meltdown(parse(pace, @default_pace), @default_act_limit, opts)
+  def run([], opts), do: meltdown(@default_pace, @default_patience, opts)
+  def run([pace], opts), do: meltdown(parse(pace, @default_pace), @default_patience, opts)
 
-  def run([pace, limit], opts),
-    do: meltdown(parse(pace, @default_pace), parse(limit, @default_act_limit), opts)
+  def run([pace, patience], opts),
+    do: meltdown(parse(pace, @default_pace), parse(patience, @default_patience), opts)
 
   defp parse("", default), do: default
 
@@ -89,7 +89,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     end
   end
 
-  def meltdown(pace, act_limit, opts \\ []) do
+  def meltdown(pace, patience, opts \\ []) do
     UI.init()
     UI.log_to_file("startup.log")
 
@@ -99,14 +99,13 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     UI.warn("Deliberately destroying the plant.  [x] aborts and SCRAMs.")
 
     guard = start_abort_guard(Keyword.get(opts, :guard, true))
-    PubSub.subscribe(self(), :ticker)
 
     state = %{
       pace: pace,
-      limit_ticks: round(act_limit * @ticks_per_minute),
+      # Per-tick movement, and the tick budget for any one stage:
       step: pace / @ticks_per_minute,
-      loops: live_loops(),
-      seen: MapSet.new()
+      limit: round(patience * @ticks_per_minute),
+      loops: live_loops()
     }
 
     UI.notice("Live steam generators: #{inspect(state.loops)}")
@@ -136,10 +135,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   defp live_loops do
     Enum.filter(@loops, fn loop ->
-      case safe(fn -> SteamGen.for_loop(loop) |> SteamGen.get_pressure() end) do
-        p when is_number(p) -> p >= @live_pressure
-        _ -> false
-      end
+      safe_number(fn -> SteamGen.for_loop(loop) |> SteamGen.get_pressure() end, 0.0) >=
+        @live_pressure
     end)
   end
 
@@ -164,43 +161,40 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     case safe(fn -> Op.SteamFlow.set_target_override_mw(target_mw, :never) end) do
       :err ->
         UI.warn("Steam Flow Operator isn't running — can't drive the plant up.")
-        state
 
       _ ->
         UI.notice("Operators are now pushing the plant to its limit.")
-        wait_for_plateau(state, target_mw, Smoother.new(@plateau_window), 0)
+
+        bar(
+          "Plant Output",
+          PBConfig.target(total_generation_mw(), target_mw, " MW", 1),
+          fn -> total_generation_mw() end,
+          plateau_done_fn(),
+          state.limit
+        )
+
+        UI.success("Output settled at #{fmt(total_generation_mw())} MW.")
     end
   end
 
-  defp wait_for_plateau(state, target_mw, history, n) do
-    cond do
-      n > state.limit_ticks * 3 ->
-        UI.warn("Output never settled; pressing on anyway.")
-        state
+  # Accumulates its own history: true once output has been flat for a
+  # sustained stretch, not merely flat for an instant.
+  defp plateau_done_fn do
+    fn value ->
+      history = Process.get(:plateau, Smoother.new(@plateau_window)) |> Smoother.add(value)
+      held = if plateau?(history), do: Process.get(:plateau_held, 0) + 1, else: 0
 
-      plateau?(history) ->
-        UI.success("Output has plateaued at #{fmt(total_generation_mw())} MW.")
-        state
+      Process.put(:plateau, history)
+      Process.put(:plateau_held, held)
 
-      true ->
-        wait_tick()
-        history = Smoother.add(history, total_generation_mw())
-
-        if rem(n, @report_every) == 0 do
-          UI.set(
-            "Output",
-            "#{fmt(total_generation_mw())} / #{fmt(target_mw)} MW  (climbing)"
-          )
-        end
-
-        wait_for_plateau(state, target_mw, history, n + 1)
+      held >= @plateau_hold
     end
   end
 
   @doc """
   Has output plateaued? True once a full window of samples opens and
-  closes within `@plateau_threshold_mw` of each other — a partial window
-  never counts, so a slow climb can't be mistaken for a plateau.
+  closes within `#{@plateau_threshold_mw}` MW — a partial window never
+  counts, so a slow climb can't be mistaken for a plateau.
   """
   def plateau?(%Smoother{size: size, max: max}) when size < max, do: false
 
@@ -224,6 +218,14 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     UI.console("PART II — DESTROY THE TURBINES")
 
     stand_down(Op.VacuumTank, "Vacuum Tank Operator")
+    stand_down(Op.CondenserCooling, "Condenser Cooling Operator")
+
+    # With no cooling the condenser can't condense, so the vacuum has
+    # nothing holding it up.
+    cooling_pump = API.Pumps.condenser_cooling()
+    UI.set("Condenser Cooling Pump", "OFF")
+    safe(fn -> API.Pumps.set_speed(cooling_pump, 0) end)
+    safe(fn -> API.Pumps.set_switch(cooling_pump, false) end)
 
     UI.set("Condenser Vacuum Pump", "STOP")
     safe(fn -> API.VacuumPump.stop() end)
@@ -232,33 +234,238 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     safe(fn -> API.Valves.set_open_percent(API.Valves.crv(), 100) end)
 
     UI.notice("Vacuum is on its own now.  The turbines keep spinning.")
-    wait_for_vacuum_loss(state, 0)
+
+    bar(
+      "Condenser Vacuum",
+      PBConfig.target(vacuum_percent(), @vacuum_gone * 100, "%", 1),
+      fn -> vacuum_percent() end,
+      fn value -> value <= @vacuum_gone * 100 end,
+      state.limit
+    )
+
+    UI.warn("Condenser vacuum is gone (#{fmt(vacuum_percent())}%).")
   end
 
-  defp wait_for_vacuum_loss(state, n) do
-    vacuum = safe_number(fn -> API.VacuumPump.get_vacuum_level() end, 0.0)
+  defp vacuum_percent do
+    safe_number(fn -> API.VacuumPump.get_vacuum_level() end, 0.0) * 100
+  end
 
-    cond do
-      vacuum <= @vacuum_gone ->
-        UI.success("Condenser vacuum is gone (#{fmt(vacuum * 100)}%).")
-        state
+  # -- Part III: overpressure the steam generators ----------------------------
 
-      n > state.limit_ticks * 3 ->
-        UI.warn("Vacuum is holding at #{fmt(vacuum * 100)}%; pressing on.")
-        state
+  defp part_3_overpressure(%{loops: []}) do
+    UI.console("PART III — OVERPRESSURE")
+    UI.notice("No live steam generators; skipping the secondary side.")
+  end
 
-      true ->
-        wait_tick()
+  defp part_3_overpressure(state) do
+    UI.console("PART III — OVERPRESSURE")
 
-        state =
-          if rem(n, @report_every) == 0 do
-            UI.set("Condenser Vacuum", "#{fmt(vacuum * 100)}%")
-            announce_once(state, {:vacuum, 95}, vacuum < 0.95, "Condenser vacuum is failing!")
-          else
-            state
-          end
+    # These two would undo the choking and the flooding respectively.
+    stand_down(Op.SteamFlow, "Steam Flow Operator")
+    stand_down(Op.SecondaryFill, "Secondary Fill Operators")
 
-        wait_for_vacuum_loss(state, n + 1)
+    UI.set("Feedwater Pumps", "MAXIMUM")
+
+    Enum.each(state.loops, fn loop ->
+      safe(fn -> API.Pumps.secondary(loop) |> API.Pumps.set_speed(100) end)
+    end)
+
+    UI.set("Pressure Relief Vents", "SHUT")
+
+    Enum.each(state.loops, fn loop ->
+      safe(fn -> SteamGen.for_loop(loop) |> SteamGen.set_vent_open(false) end)
+    end)
+
+    # The bar drives the ramp: each sample closes the outlets a little
+    # further and reports how far they've shut.
+    sgs = Enum.map(state.loops, &SteamGen.for_loop/1)
+
+    bar(
+      "Steam Outlets",
+      PBConfig.reverse_percent(),
+      fn -> choke_step(sgs, state.step) end,
+      fn opening -> opening <= 0.0 end,
+      state.limit
+    )
+
+    UI.success("Steam outlets shut.")
+
+    bar(
+      "Steam Pressure",
+      PBConfig.target(max_pressure(state.loops), @pressure_ceiling, " bar", 1),
+      fn -> watch_pressure(state.loops) end,
+      fn pressure -> pressure >= @pressure_ceiling end,
+      state.limit
+    )
+  end
+
+  defp choke_step(sgs, step) do
+    opening = Process.get(:opening, 100.0) - step
+    opening = max(opening, 0.0)
+    Process.put(:opening, opening)
+
+    rounded = Float.round(opening, 1)
+
+    Enum.each(sgs, fn sg ->
+      safe(fn -> API.Valves.set_open_percent(sg.mscv, rounded) end)
+      safe(fn -> API.Valves.set_open_percent(sg.bypass, rounded) end)
+    end)
+
+    opening
+  end
+
+  defp max_pressure(loops) do
+    loops
+    |> Enum.map(&safe_number(fn -> SteamGen.for_loop(&1) |> SteamGen.get_pressure() end, 0.0))
+    |> Enum.max(fn -> 0.0 end)
+  end
+
+  # Reports the highest steam generator pressure, shouting as it passes
+  # each milestone.
+  defp watch_pressure(loops) do
+    pressure = max_pressure(loops)
+    seen = Process.get(:milestones, MapSet.new())
+
+    seen =
+      @pressure_milestones
+      |> Enum.filter(&(pressure >= &1 and not MapSet.member?(seen, &1)))
+      |> Enum.reduce(seen, fn milestone, acc ->
+        UI.warn("Steam generator pressure past #{milestone} bar!")
+        MapSet.put(acc, milestone)
+      end)
+
+    Process.put(:milestones, seen)
+    pressure
+  end
+
+  # -- Part IV: take away the heat sink ---------------------------------------
+
+  defp part_4_heat_sink(state) do
+    UI.console("PART IV — HEAT SINK")
+
+    UI.set("Core Pool", "DRAIN")
+    safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
+
+    pool = API.Vessels.core_pool()
+
+    bar(
+      "Core Pool",
+      PBConfig.reverse_percent(),
+      fn -> safe_number(fn -> API.Vessels.get_fill_percent(pool) end, 0.0) end,
+      fn percent -> percent <= 1.0 end,
+      state.limit
+    )
+
+    UI.warn("Core pool drained.  External cooling is gone.")
+  end
+
+  # -- Part V: prompt criticality ---------------------------------------------
+
+  defp part_5_prompt_criticality(state) do
+    UI.console("PART V — PROMPT CRITICALITY")
+
+    # The last of the supervision goes now.
+    stand_down(Op.ControlRods, "Control Rods Operator")
+    stand_down(Op.CoreTemp, "Core Temperature Operator")
+    stand_down(Op.PrimaryPumps, "Primary Pumps Operator")
+    stand_down(Op.BoronLevel, "Boron Level Operator")
+
+    UI.set("Boron Filtering", "MAXIMUM")
+    safe(fn -> API.put("CHEM_BORON_FILTER_ORDERED_SPEED", 100) end)
+
+    pumps = Enum.map(@loops, &API.Pumps.primary/1)
+
+    bar(
+      "Control Rods",
+      PBConfig.reverse_percent(),
+      fn -> rods_and_pumps_step(pumps, state.step) end,
+      fn actual -> actual <= 0.1 end,
+      state.limit
+    )
+
+    UI.warn("Rods out, coolant stopped.")
+  end
+
+  # Drives the rods out and the primary pumps down together, reporting
+  # actual rod position.
+  defp rods_and_pumps_step(pumps, step) do
+    ordered = Process.get(:rods, safe_number(fn -> API.get_float("RODS_POS_ACTUAL") end, 100.0))
+    ordered = max(ordered - step, 0.0)
+    Process.put(:rods, ordered)
+    safe(fn -> API.put("RODS_ALL_POS_ORDERED", Float.round(ordered, 1)) end)
+
+    speed = Process.get(:pump_speed, 100.0)
+    speed = max(speed - step, 0.0)
+    Process.put(:pump_speed, speed)
+    Enum.each(pumps, fn pump -> safe(fn -> API.Pumps.set_speed(pump, Float.round(speed, 1)) end) end)
+
+    safe_number(fn -> API.get_float("RODS_POS_ACTUAL") end, 0.0)
+  end
+
+  # -- Part VI: aftermath ------------------------------------------------------
+
+  defp part_6_aftermath(state) do
+    UI.console("PART VI — AFTERMATH")
+
+    temp_max = safe_number(fn -> API.get_float("CORE_TEMP_MAX") end, 550.0)
+
+    bar(
+      "Core Temperature",
+      PBConfig.target(core_temp(), temp_max, "°C", 1),
+      fn -> core_temp() end,
+      fn temp -> temp >= temp_max or beyond_saving?() end,
+      state.limit
+    )
+
+    UI.warn("Core is over its maximum temperature.")
+
+    bar(
+      "Core Integrity",
+      PBConfig.reverse_percent(),
+      fn -> core_integrity() end,
+      fn _integrity -> beyond_saving?() end,
+      state.limit * 3
+    )
+
+    if beyond_saving?() do
+      UI.warn("Core destroyed.")
+    else
+      UI.notice("Still holding on.  Leaving it to burn.")
+    end
+  end
+
+  defp core_temp, do: safe_number(fn -> API.get_float("CORE_TEMP") end, 0.0)
+  defp core_integrity, do: safe_number(fn -> API.get_float("CORE_INTEGRITY") end, 100.0)
+
+  defp beyond_saving? do
+    safe(fn -> API.get_boolean("CORE_IMMINENT_FUSION") end) == true or
+      core_integrity() <= @integrity_floor
+  end
+
+  # -- Progress bars -----------------------------------------------------------
+
+  # Every bar gets a tick budget so a stage that never completes can't
+  # strand the sequence. ProgressBar runs its own ticker-subscribed task,
+  # so nothing here may raise — a crash would kill us and trip the guard.
+  defp bar(label, config, current_fn, done_fn, limit) do
+    UI.ProgressBar.wait(
+      config: config,
+      label: label,
+      current_fn: current_fn,
+      done_fn: with_limit(done_fn, limit)
+    )
+  end
+
+  defp with_limit(done_fn, limit) do
+    fn value ->
+      n = Process.get(:bar_ticks, 0) + 1
+      Process.put(:bar_ticks, n)
+
+      cond do
+        done_fn.(value) -> true
+        n >= limit -> :abort
+        true -> false
+      end
     end
   end
 
@@ -289,257 +496,6 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   end
 
   defp any_subscribed?(module), do: Process.whereis(module) in PubSub.subscribers(:ticker)
-
-  # -- Act II: overpressure the steam generators ------------------------------
-
-  defp part_3_overpressure(%{loops: []} = state) do
-    UI.console("PART III — OVERPRESSURE")
-    UI.notice("No live steam generators; skipping the secondary side.")
-    state
-  end
-
-  defp part_3_overpressure(state) do
-    UI.console("PART III — OVERPRESSURE")
-
-    # These two would undo the choking and the flooding respectively.
-    stand_down(Op.SteamFlow, "Steam Flow Operator")
-    stand_down(Op.SecondaryFill, "Secondary Fill Operators")
-
-    UI.set("Feedwater Pumps", "MAXIMUM")
-
-    Enum.each(state.loops, fn loop ->
-      safe(fn -> API.Pumps.secondary(loop) |> API.Pumps.set_speed(100) end)
-    end)
-
-    UI.set("Pressure Relief Vents", "SHUT")
-
-    Enum.each(state.loops, fn loop ->
-      safe(fn -> SteamGen.for_loop(loop) |> SteamGen.set_vent_open(false) end)
-    end)
-
-    UI.set("Steam Outlets", "CHOKING #{state.pace}%/min")
-    choke_loop(state, initial_openings(state.loops), 0)
-  end
-
-  defp initial_openings(loops) do
-    Enum.map(loops, fn loop ->
-      sg = SteamGen.for_loop(loop)
-
-      {loop, sg,
-       %{
-         mscv: safe_percent(sg.mscv, 100.0),
-         bypass: safe_percent(sg.bypass, 100.0)
-       }}
-    end)
-  end
-
-  defp safe_percent(valve, default) do
-    case safe(fn -> API.Valves.get_open_percent(valve) end) do
-      p when is_number(p) -> p / 1
-      _ -> default
-    end
-  end
-
-  defp choke_loop(state, openings, n) do
-    closed? = Enum.all?(openings, fn {_l, _sg, o} -> o.mscv <= 0.0 and o.bypass <= 0.0 end)
-
-    cond do
-      closed? ->
-        UI.success("Steam outlets fully shut.")
-        state
-
-      n > state.limit_ticks ->
-        UI.warn("Act limit reached; moving on with outlets partly open.")
-        state
-
-      true ->
-        wait_tick()
-
-        openings =
-          Enum.map(openings, fn {loop, sg, o} ->
-            mscv = max(o.mscv - state.step, 0.0)
-            bypass = max(o.bypass - state.step, 0.0)
-            safe(fn -> API.Valves.set_open_percent(sg.mscv, Float.round(mscv, 1)) end)
-            safe(fn -> API.Valves.set_open_percent(sg.bypass, Float.round(bypass, 1)) end)
-            {loop, sg, %{mscv: mscv, bypass: bypass}}
-          end)
-
-        state = report_pressures(state, n)
-        choke_loop(state, openings, n + 1)
-    end
-  end
-
-  # -- Part IV: take away the heat sink ---------------------------------------
-
-  defp part_4_heat_sink(state) do
-    UI.console("PART IV — HEAT SINK")
-
-    UI.set("Core Pool", "DRAIN")
-    safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
-
-    UI.notice("Draining the core pool.  External cooling is going away.")
-    settle(state, round(@ticks_per_minute))
-  end
-
-  # -- Part V: prompt criticality ---------------------------------------------
-
-  defp part_5_prompt_criticality(state) do
-    UI.console("PART V — PROMPT CRITICALITY")
-
-    # The last of the supervision goes now.
-    stand_down(Op.ControlRods, "Control Rods Operator")
-    stand_down(Op.CoreTemp, "Core Temperature Operator")
-    stand_down(Op.PrimaryPumps, "Primary Pumps Operator")
-    stand_down(Op.BoronLevel, "Boron Level Operator")
-
-    UI.set("Boron Filtering", "MAXIMUM")
-    safe(fn -> API.put("CHEM_BORON_FILTER_ORDERED_SPEED", 100) end)
-
-    UI.set("Control Rods", "WITHDRAW #{state.pace}%/min")
-    UI.set("Primary Pumps", "THROTTLE #{state.pace}%/min")
-
-    rods = safe_number(fn -> API.get_float("RODS_POS_ACTUAL") end, 100.0)
-
-    pumps =
-      @loops
-      |> Enum.map(&API.Pumps.primary/1)
-      |> Enum.map(fn pump -> {pump, safe_number(fn -> API.Pumps.get_ordered_speed(pump) end, 0.0)} end)
-
-    withdraw_loop(state, rods, pumps, 0)
-  end
-
-  defp withdraw_loop(state, rods, pumps, n) do
-    done? = rods <= 0.0 and Enum.all?(pumps, fn {_p, speed} -> speed <= 0.0 end)
-
-    cond do
-      done? ->
-        UI.success("Rods out, coolant stopped.")
-        state
-
-      beyond_saving?() ->
-        UI.warn("The core is already past saving.")
-        state
-
-      n > state.limit_ticks * 2 ->
-        UI.warn("Act limit reached.")
-        state
-
-      true ->
-        wait_tick()
-
-        rods = max(rods - state.step, 0.0)
-        safe(fn -> API.put("RODS_ALL_POS_ORDERED", Float.round(rods, 1)) end)
-
-        pumps =
-          Enum.map(pumps, fn {pump, speed} ->
-            speed = max(speed - state.step, 0.0)
-            safe(fn -> API.Pumps.set_speed(pump, Float.round(speed, 1)) end)
-            {pump, speed}
-          end)
-
-        state = report_core(state, n)
-        withdraw_loop(state, rods, pumps, n + 1)
-    end
-  end
-
-  # -- Part VI: aftermath ------------------------------------------------------
-
-  defp part_6_aftermath(state) do
-    UI.console("PART VI — AFTERMATH")
-    UI.set("Meltdown", "IN PROGRESS")
-    aftermath_loop(state, 0)
-  end
-
-  defp aftermath_loop(state, n) do
-    cond do
-      beyond_saving?() ->
-        UI.warn("Core destroyed.")
-        state
-
-      n > state.limit_ticks * 6 ->
-        UI.notice("Still holding on.  Leaving it to burn.")
-        state
-
-      true ->
-        wait_tick()
-        state = report_core(state, n)
-        aftermath_loop(state, n + 1)
-    end
-  end
-
-  # -- Narration ---------------------------------------------------------------
-
-  defp settle(state, ticks) do
-    Enum.reduce(0..ticks, state, fn n, acc ->
-      wait_tick()
-      acc |> report_pressures(n) |> report_core(n)
-    end)
-  end
-
-  defp report_pressures(state, n) when rem(n, @report_every) != 0, do: state
-
-  defp report_pressures(state, _n) do
-    Enum.reduce(state.loops, state, fn loop, acc ->
-      pressure = safe_number(fn -> SteamGen.for_loop(loop) |> SteamGen.get_pressure() end, 0.0)
-
-      UI.set("Steam Gen 0#{loop}", "#{fmt(pressure)} bar")
-      announce_milestones(acc, loop, pressure)
-    end)
-  end
-
-  defp announce_milestones(state, loop, pressure) do
-    @pressure_milestones
-    |> Enum.filter(&(pressure >= &1))
-    |> Enum.reduce(state, fn milestone, acc ->
-      key = {:pressure, loop, milestone}
-
-      if MapSet.member?(acc.seen, key) do
-        acc
-      else
-        UI.warn("Steam generator 0#{loop} past #{milestone} bar!")
-        %{acc | seen: MapSet.put(acc.seen, key)}
-      end
-    end)
-  end
-
-  defp report_core(state, n) when rem(n, @report_every) != 0, do: state
-
-  defp report_core(state, _n) do
-    temp = safe_number(fn -> API.get_float("CORE_TEMP") end, 0.0)
-    integrity = safe_number(fn -> API.get_float("CORE_INTEGRITY") end, 100.0)
-    rods = safe_number(fn -> API.get_float("RODS_POS_ACTUAL") end, 0.0)
-
-    steam =
-      cond do
-        safe(fn -> API.get_boolean("CORE_HIGH_STEAM_PRESENT") end) == true -> "  ⚠ HIGH STEAM"
-        safe(fn -> API.get_boolean("CORE_STEAM_PRESENT") end) == true -> "  ⚠ steam"
-        true -> ""
-      end
-
-    UI.set("Core", "#{fmt(temp)}°C  rods #{fmt(rods)}%  integrity #{fmt(integrity)}%#{steam}")
-
-    state
-    |> announce_once({:core, :over_max}, temp > safe_number(fn -> API.get_float("CORE_TEMP_MAX") end, 550.0),
-      "Core is over its maximum temperature!")
-    |> announce_once({:core, :damaged}, integrity < 100.0, "Core integrity is falling!")
-    |> announce_once({:core, :half}, integrity <= 50.0, "Core integrity below 50%!")
-  end
-
-  defp announce_once(state, _key, false, _message), do: state
-
-  defp announce_once(state, key, true, message) do
-    if MapSet.member?(state.seen, key) do
-      state
-    else
-      UI.warn(message)
-      %{state | seen: MapSet.put(state.seen, key)}
-    end
-  end
-
-  defp beyond_saving? do
-    safe(fn -> API.get_boolean("CORE_IMMINENT_FUSION") end) == true or
-      safe_number(fn -> API.get_float("CORE_INTEGRITY") end, 100.0) <= @integrity_floor
-  end
 
   # -- Abort protection -------------------------------------------------------
 
@@ -596,13 +552,4 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   end
 
   defp fmt(value), do: :erlang.float_to_binary(value / 1, decimals: 1)
-
-  defp wait_tick do
-    receive do
-      {:tick, _} -> :ok
-    after
-      # The game may be paused; keep the pane responsive either way.
-      5_000 -> :ok
-    end
-  end
 end
