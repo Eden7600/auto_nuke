@@ -128,6 +128,10 @@ These need to be run via `task.sh` in order to set up communication with a runni
 - [`mix auto_nuke.refill.secondary`](lib/mix/tasks/refill/secondary.ex) — Refills a given steam generator.
 - [`mix auto_nuke.refill.truck`](lib/mix/tasks/refill/truck.ex) — Loads liquids from a cargo truck.
 
+### Sandbox
+
+- [`mix auto_nuke.meltdown`](lib/mix/tasks/meltdown.ex) — Cascades the plant into failure, in acts: sabotage, secondary overpressure, load rejection, heat-sink loss, prompt criticality, aftermath.  For finding out how the game behaves at its limits.  **Wrecks your save.**  Cancelling the task slams the rods home and SCRAMs.
+
 ### Miscellaneous
 
 - [`mix auto_nuke.refuel`](lib/mix/tasks/refuel.ex) — Guided reactor refueling: safety checks, fuel report, pool level, pistons and hatches.  (The crane has no API — the cell swaps are up to you.)

@@ -162,6 +162,18 @@ defmodule AutoNuke.Tui.Menu do
           %{label: "Valves", hint: "e.g. A1 B2 DV01, or a group name", optional: false, split: true}
         ],
         task: T.Valve
+      },
+      # Last, in its own group, well away from the routine plant tasks.
+      %{
+        id: :meltdown,
+        group: "Danger",
+        label: "☢ MELTDOWN — cascade the plant into failure",
+        params: [
+          %{label: "Pace", hint: "%/game-min; blank = 5", optional: true},
+          %{label: "Act limit", hint: "game-min per act; blank = 10", optional: true}
+        ],
+        task: T.Meltdown,
+        confirm: "DESTROY the plant? [x] aborts and SCRAMs."
       }
     ]
   end
