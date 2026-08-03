@@ -50,9 +50,11 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       control entirely, the turbine vents and the condenser and storage
       tank drains opened, and the core pool finished draining. Equipment
       failures are called out as they happen.
-    * **Part V — Prompt criticality.** Rods withdrawn and primary
+    * **Part V — Prompt criticality.** Fuel hatches opened so the core
+      bleeds pressure into the building, rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
-      boron since Part I.
+      boron since Part I. From here on, valves all over the plant are
+      actuated at random.
     * **Part VI — Aftermath.** Core temperature, then core integrity,
       watched to the end.
 
@@ -99,6 +101,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   @integrity_floor 1.0
   @loops 1..3
+  @core_bays 1..9
 
   def run(args), do: run(args, [])
 
@@ -142,11 +145,72 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     part_2_destroy_turbines(state)
     part_3_overpressure(state)
     part_4_heat_sink(state)
+
+    # From here to the end, nothing in the plant can be trusted to stay
+    # where it was put.
+    chaos = start_valve_chaos()
+
     part_5_prompt_criticality(state)
     part_6_aftermath(state)
 
+    stop_valve_chaos(chaos)
     stand_down_guard(guard)
     UI.notice("Cascade complete.")
+  end
+
+  # -- Valve chaos -------------------------------------------------------------
+
+  # Actuate a valve this often (in ticks) once the rods start moving:
+  @chaos_every 10
+
+  # Linked on purpose: aborting the task kills the chaos with it. A
+  # normal exit wouldn't, so the sequence stops it explicitly.
+  defp start_valve_chaos do
+    case all_valve_keys() do
+      [] ->
+        UI.notice("No valves to play with.")
+        nil
+
+      valves ->
+        UI.warn("Valve control is now random — #{length(valves)} valves in play.")
+
+        spawn_link(fn ->
+          PubSub.subscribe(self(), :ticker)
+          chaos_loop(valves, 0)
+        end)
+    end
+  end
+
+  defp stop_valve_chaos(nil), do: :ok
+
+  defp stop_valve_chaos(pid) do
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+  end
+
+  defp all_valve_keys do
+    case safe(fn -> API.get_json("VALVE_PANEL_JSON") end) do
+      %{"valves" => valves} -> Map.keys(valves)
+      _ -> []
+    end
+  end
+
+  @actuator_actions ["OPEN", "CLOSE", "OFF"]
+
+  defp chaos_loop(valves, n) do
+    receive do
+      {:tick, _} -> :ok
+    end
+
+    if rem(n, @chaos_every) == 0 do
+      valve = Enum.random(valves)
+      action = Enum.random(@actuator_actions)
+
+      safe(fn -> API.put("VALVE_#{action}", valve) end)
+      Logger.warning("[Meltdown] Random actuation: #{action} #{valve}")
+    end
+
+    chaos_loop(valves, n + 1)
   end
 
   defp check_reactor_live do
@@ -643,6 +707,15 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     stand_down(Op.CoreTemp, "Core Temperature Operator")
 
     UI.notice("Boron is down to #{fmt(boron_ppm())} ppm.")
+
+    # Open fuel hatches bleed core pressure straight into the room.
+    UI.set("Fuel Hatches", "OPEN")
+
+    Enum.each(@core_bays, fn bay ->
+      safe(fn -> API.put("CORE_BAY_#{bay}_HATCH", "OPEN") end)
+    end)
+
+    UI.notice("Fuel hatches open — the core is venting into the building.")
 
     pumps = Enum.map(@loops, &API.Pumps.primary/1)
 
