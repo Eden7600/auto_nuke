@@ -33,6 +33,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       The turbine bypass is shut so no steam can route around them, and
       the emergency generators are started on the way down, at 80%
       vacuum, so the plant still has power once the turbines give up.
+      Done when every turbine has stopped making power.
     * **Part III — Overpressure.** Feedwater to maximum, vents shut,
       then the main steam control valves slowly choked, and we watch the
       steam generator pressure climb with nowhere to go.
@@ -68,6 +69,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   @vacuum_gone 0.6
   # Get the diesels running before the turbines stop carrying the plant:
   @generator_start_vacuum 80.0
+  # A generator making less than this (MW) has stopped generating:
+  @idle_mw 0.1
   # Watch steam generator pressure climb towards this:
   @pressure_ceiling 120.0
   # A steam generator counts as "live" above this pressure:
@@ -249,15 +252,56 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     UI.notice("Vacuum is on its own now.  All steam goes through the turbines.")
 
-    bar(
-      "Condenser Vacuum",
-      PBConfig.target(vacuum_percent(), @vacuum_gone * 100, "%", 1),
-      fn -> watch_vacuum() end,
-      fn value -> value <= @vacuum_gone * 100 end,
-      state.limit
+    # Vacuum and turbine output fall together, side by side. The turbines
+    # are finished when they stop making power, whatever the vacuum does.
+    producing = producing_generators()
+
+    UI.ProgressBar.wait_many(
+      [
+        [
+          config: PBConfig.target(vacuum_percent(), @vacuum_gone * 100, "%", 1),
+          label: "Vac",
+          current_fn: fn -> watch_vacuum() end
+        ],
+        [
+          config: PBConfig.target(total_generation_mw(), 0.0, " MW", 1),
+          label: "Out",
+          current_fn: fn -> total_generation_mw() end
+        ]
+      ],
+      turbines_dead_fn(producing, state.limit)
     )
 
-    UI.warn("Condenser vacuum has collapsed (#{fmt(vacuum_percent())}%).  Turbines are done.")
+    UI.warn(
+      "Vacuum #{fmt(vacuum_percent())}%, turbines at #{fmt(total_generation_mw())} MW."
+    )
+  end
+
+  # Done when every generator that was producing has stopped.
+  defp turbines_dead_fn([], _limit) do
+    UI.notice("No turbines are generating; nothing to destroy here.")
+    fn _values -> true end
+  end
+
+  defp turbines_dead_fn(producing, limit) do
+    fn _values ->
+      n = Process.get(:bar_ticks, 0) + 1
+      Process.put(:bar_ticks, n)
+
+      cond do
+        Enum.all?(producing, &(generator_mw(&1) <= @idle_mw)) -> true
+        n >= limit -> :abort
+        true -> false
+      end
+    end
+  end
+
+  defp producing_generators do
+    Enum.filter(@loops, &(generator_mw(&1) > @idle_mw))
+  end
+
+  defp generator_mw(loop) do
+    safe_number(fn -> API.Generator.get_power_kw(loop) end, 0.0) / 1000
   end
 
   defp vacuum_percent do
