@@ -19,10 +19,11 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Enable when |supply ratio - target| sustains beyond this:
-  @on_deviation 0.10
+  # Enable when |supply ratio - target| sustains beyond this. The plant
+  # gets in trouble at 10% off — act before that, not at it.
+  @on_deviation 0.08
   # Disable when it sustains within this (the gap is the hysteresis):
-  @off_deviation 0.08
+  @off_deviation 0.06
 
   # Sustain requirements, in this operator's ticks (≈1 game-second each):
   @on_after 3

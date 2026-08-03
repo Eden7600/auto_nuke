@@ -98,7 +98,7 @@ The pre-TUI workflow still works (and is what the TUI uses under the hood):
   - Warns about low diesel fuel and pending generator maintenance.
 - [`ResistorBanks`](lib/auto_nuke/operator/resistor_banks.ex) - Resistor bank management.
   - Keeps the resistor banks off while supply tracks the target (power fed to resistors is power not sold).
-  - Enables them whenever supply strays outside ±10% of SteamFlow's current target — overproduction or an aggressive catch-up transient — and disables them again once supply has hugged the target for a sustained stretch.
+  - Enables them whenever supply strays outside ±8% of SteamFlow's current target — proactively, since the plant gets in trouble at 10% — and disables them again once supply has hugged the target for a sustained stretch.
 - [`CondenserCooling`](lib/auto_nuke/operators/condenser_cooling.ex) - Manages the condenser cooling pump.
   - Runs the pump at the lowest speed it can get away with (down to 10%) without temperature climbing.
   - Uses a probe/backoff strategy, where it will (very slowly) reduce speed until temperature starts climbing, then back off and leave it alone for 15+ minutes at a time.

@@ -42,7 +42,7 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
               })
 
   # With SteamFlow not running, the operator assumes a target of 1.0 —
-  # the on-trigger is |ratio - 1.0| > 0.10.
+  # the on-trigger is |ratio - 1.0| > 0.08.
 
   test "sustained overproduction enables main switch and installed banks" do
     state = init() |> tick(1.12) |> tick(1.12)
@@ -100,9 +100,9 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
     state = init()
     state = Enum.reduce(1..29, state, fn _, acc -> tick(acc, 1.02) end)
 
-    # A tick in the 8-10% deviation margin resets the calm streak; the
+    # A tick in the 6-8% deviation margin resets the calm streak; the
     # 31st on-target tick must not disable.
-    state = tick(state, 1.09)
+    state = tick(state, 1.07)
     tick(state, 1.02)
 
     refute_put("RESISTOR_BANKS_MAIN_SWITCH")
