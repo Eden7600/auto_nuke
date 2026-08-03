@@ -22,3 +22,7 @@ auto_nuke-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 /*.log
+
+# Runtime-toggleable settings persisted by the TUI.
+/auto_nuke.settings.json
+/tmp/

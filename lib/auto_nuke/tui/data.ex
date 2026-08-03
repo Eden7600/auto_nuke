@@ -62,6 +62,7 @@ defmodule AutoNuke.Tui.Data do
       boost("SteamFlow", safe_call(Op.SteamFlow, :get_boost_mode)),
       core_temp_override(),
       rods_mode(),
+      rods_anti_hunting(),
       boost("SecondaryFill L1", secondary_boost(1)),
       boost("SecondaryFill L2", secondary_boost(2)),
       boost("SecondaryFill L3", secondary_boost(3)),
@@ -90,6 +91,14 @@ defmodule AutoNuke.Tui.Data do
   defp rods_mode do
     case safe_call(Op.ControlRods, :get_mode) do
       :direct -> %{op: "ControlRods", desc: "direct mode"}
+      _ -> nil
+    end
+  end
+
+  # Anti-hunting off is non-default behaviour worth surfacing.
+  defp rods_anti_hunting do
+    case safe_call(Op.ControlRods, :get_anti_hunting) do
+      false -> %{op: "ControlRods", desc: "anti-hunting off"}
       _ -> nil
     end
   end

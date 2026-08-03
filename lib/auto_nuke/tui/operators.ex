@@ -176,7 +176,14 @@ defmodule AutoNuke.Tui.Operators do
   end
 
   defp extra_actions(Op.ControlRods) do
+    anti_hunting = AutoNuke.Settings.get(Op.ControlRods.anti_hunting_setting(), true)
+
     [
+      %{
+        label: "Anti-hunting: #{if anti_hunting, do: "ON", else: "OFF"} — toggle",
+        params: [],
+        run: fn _ -> toggle_anti_hunting(not anti_hunting) end
+      },
       %{
         label: "Mode: predictive",
         params: [],
@@ -217,6 +224,22 @@ defmodule AutoNuke.Tui.Operators do
       ]
     else
       []
+    end
+  end
+
+  # Persisted either way; applied live when the operator is running.
+  defp toggle_anti_hunting(enabled) do
+    case Process.whereis(Op.ControlRods) do
+      pid when is_pid(pid) ->
+        attempt(fn -> Op.ControlRods.set_anti_hunting(enabled) end)
+
+      nil ->
+        AutoNuke.Settings.put(Op.ControlRods.anti_hunting_setting(), enabled)
+        :ok
+    end
+    |> case do
+      :ok -> {:ok, "Anti-hunting #{if enabled, do: "enabled", else: "disabled"} (persisted)"}
+      error -> error
     end
   end
 

@@ -5,7 +5,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
   defmodule State do
     @enforce_keys [:banks, :target, :axis, :mode, :last_temp, :last_rods, :temp_history]
-    defstruct(@enforce_keys)
+    defstruct(@enforce_keys ++ [anti_hunting: true])
   end
 
   alias AutoNuke.ControlAxis
@@ -26,6 +26,10 @@ defmodule AutoNuke.Operator.ControlRods do
   # smaller than @min_move — let the intent accumulate into one real move.
   @calm_zone 1.0
   @min_move 0.5
+
+  # Toggleable from the TUI; persisted across restarts.
+  @anti_hunting_setting "rod_anti_hunting"
+  def anti_hunting_setting, do: @anti_hunting_setting
   # Keep the last 10 temperature readings:
   @temp_history_size 10
   # Look ahead 5 more readings during control loop:
@@ -52,6 +56,11 @@ defmodule AutoNuke.Operator.ControlRods do
   end
 
   def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
+
+  def get_anti_hunting(pid \\ __MODULE__), do: GenServer.call(pid, :get_anti_hunting)
+
+  def set_anti_hunting(enabled, pid \\ __MODULE__) when is_boolean(enabled),
+    do: GenServer.call(pid, {:set_anti_hunting, enabled})
 
   def add_bank(bank, pid \\ __MODULE__) when bank in @all_banks,
     do: GenServer.call(pid, {:add_bank, bank})
@@ -85,7 +94,8 @@ defmodule AutoNuke.Operator.ControlRods do
         mode: mode,
         last_temp: temp,
         last_rods: rods,
-        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp)
+        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp),
+        anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true)
       }
 
     PubSub.subscribe(self(), :ticker)
@@ -122,6 +132,18 @@ defmodule AutoNuke.Operator.ControlRods do
   def handle_call(:get_rods, _from, %State{} = state) do
     banks_and_rods = Enum.zip(state.banks, state.last_rods)
     {:reply, banks_and_rods, state}
+  end
+
+  @impl true
+  def handle_call(:get_anti_hunting, _from, %State{} = state) do
+    {:reply, state.anti_hunting, state}
+  end
+
+  @impl true
+  def handle_call({:set_anti_hunting, enabled}, _from, %State{} = state) do
+    Logger.notice(@log_prefix <> "Anti-hunting #{if enabled, do: "enabled", else: "disabled"}.")
+    AutoNuke.Settings.put(@anti_hunting_setting, enabled)
+    {:reply, :ok, %State{state | anti_hunting: enabled}}
   end
 
   @impl true
@@ -166,7 +188,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
-    if abs(t - state.target) >= @target_hysteresis do
+    if not state.anti_hunting or abs(t - state.target) >= @target_hysteresis do
       {:noreply, %State{state | target: t}}
     else
       {:noreply, state}
@@ -213,6 +235,10 @@ defmodule AutoNuke.Operator.ControlRods do
   # Anti-hunting gate: near the target, sub-@min_move commands are held —
   # the axis keeps its intent (bounded by @rods_clamping), and only a move
   # worth making is issued. Real deviations behave exactly as before.
+  defp gate_rod_command(%State{anti_hunting: false} = state, _measurement, new_rods) do
+    {new_rods, calculate_rod_changes(state.banks, state.last_rods, new_rods)}
+  end
+
   defp gate_rod_command(%State{} = state, measurement, new_rods) do
     calm? = abs(state.target - measurement) <= @calm_zone
 

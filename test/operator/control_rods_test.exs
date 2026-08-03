@@ -12,6 +12,10 @@ defmodule AutoNuke.Operator.ControlRodsTest do
   setup do
     start_supervised!(PubSub)
 
+    # Isolated persistent settings per test:
+    File.mkdir_p!("tmp")
+    File.rm(Application.get_env(:auto_nuke, :settings_file))
+
     # Three installed banks at 40%, six empty slots.
     for bank <- 0..2, do: MockAPI.mock_get("ROD_BANK_POS_#{bank}_ACTUAL", 40.0, times: :any)
     for bank <- 3..8, do: MockAPI.mock_get("ROD_BANK_POS_#{bank}_ACTUAL", "null", times: :any)
@@ -84,6 +88,34 @@ defmodule AutoNuke.Operator.ControlRodsTest do
 
     # A withdrawal order was issued (fewer % than the 40% start):
     assert MockAPI.mock_put_value("ROD_BANK_POS_0_ORDERED") < 40.0
+  end
+
+  test "with anti-hunting off, calm-zone jitter commands the rods again" do
+    AutoNuke.Settings.put(ControlRods.anti_hunting_setting(), false)
+
+    state = init(340.0, 340.0)
+    assert state.anti_hunting == false
+
+    set_temp(340.0, 1)
+    state = tick(state)
+
+    set_temp(339.9, 2)
+    tick(state)
+
+    # The same jitter the gated tests hold back now issues a command:
+    assert is_number(MockAPI.mock_put_value("ROD_BANK_POS_0_ORDERED"))
+  end
+
+  test "toggling anti-hunting persists across a restart" do
+    state = init(340.0, 340.0)
+    assert state.anti_hunting == true
+
+    {:reply, :ok, state} = ControlRods.handle_call({:set_anti_hunting, false}, nil, state)
+    assert state.anti_hunting == false
+
+    # A fresh init (as after a VM restart) reads the persisted value:
+    state = init(340.0, 340.0)
+    assert state.anti_hunting == false
   end
 
   test "sub-degree target changes are ignored; real ones accepted" do

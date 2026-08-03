@@ -517,6 +517,7 @@ defmodule AutoNuke.Tui.Dashboard do
     flash =
       case action.run.(answers) do
         :ok -> {:ok, "#{action.label} ✓"}
+        {:ok, msg} -> {:ok, msg}
         {:error, msg} -> {:error, msg}
       end
 
