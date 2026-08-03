@@ -17,9 +17,12 @@ defmodule Mix.Tasks.AutoNuke.Refuel do
     explicit bays (`1`, `3..5`, `1,4`).
 
   The task checks the reactor is safely shut down, prints a fuel report,
-  drains the core pool to the working level, then walks each bay through a
-  complete cycle — raise piston, open hatch, your crane work, close hatch,
-  lower piston — before refilling the core pool.
+  drains the core pool to the working level, then walks each bay through
+  raise piston, open hatch, your crane work, and close hatch, before
+  refilling the core pool.
+
+  Pistons are deliberately left raised: lowering one inserts its fuel into
+  the core, which is a startup action, not a refueling one.
   """
 
   # Loaded cells below this fissionable % count as spent:
@@ -62,29 +65,16 @@ defmodule Mix.Tasks.AutoNuke.Refuel do
     # Hatches won't open with the pool above the top of the hatch.
     Refill.CorePool.run([@pool_working_level])
 
-    Enum.each(bays, &refuel_bay/1)
+    Enum.each(bays, &Refill.FuelCells.refill_bay/1)
 
-    # Fuel is back in the core and every hatch is shut — safe to refill.
+    # Every hatch is shut — safe to refill. The pistons stay RAISED:
+    # lowering them inserts the fuel into the core, which is starting the
+    # reactor. That belongs to startup, never to refueling.
     UI.console("Core Pool")
     Refill.CorePool.run([@pool_full_level])
 
     UI.success("Refueling complete: bays #{Enum.join(bays, ", ")}.")
-  end
-
-  # A full cycle per bay: the shared assist handles piston-up, hatch open,
-  # your swap, and hatch close; we finish by putting the fuel back in.
-  defp refuel_bay(bay) do
-    Refill.FuelCells.refill_bay(bay)
-    lower_piston(bay)
-  end
-
-  defp lower_piston(bay) do
-    UI.set_wait(
-      "Core Bay #{bay}",
-      "LOWER PISTON",
-      fn -> bay_state(bay) == "INTERIOR" end,
-      fn -> API.put("CORE_BAY_#{bay}_FUEL_LOADING", "LOAD") end
-    )
+    UI.notice("Pistons remain raised — startup lowers them when it loads fuel.")
   end
 
   # -- Safety -----------------------------------------------------------------
