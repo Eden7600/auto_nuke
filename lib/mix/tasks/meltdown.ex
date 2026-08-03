@@ -53,8 +53,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       control entirely, the turbine vents and the condenser and storage
       tank drains opened, and the core pool finished draining. Equipment
       failures are called out as they happen.
-    * **Part V — Prompt criticality.** Fuel hatches opened so the core
-      bleeds pressure into the building, rods withdrawn and primary
+    * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
       boron since Part I. From here on, valves all over the plant are
       actuated at random.
@@ -110,7 +109,6 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   @integrity_floor 1.0
   @loops 1..3
-  @core_bays 1..9
 
   def run(args), do: run(args, [])
 
@@ -821,15 +819,6 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     stand_down(Op.CoreTemp, "Core Temperature Operator")
 
     UI.notice("Boron is down to #{fmt(boron_ppm())} ppm.")
-
-    # Open fuel hatches bleed core pressure straight into the room.
-    UI.set("Fuel Hatches", "OPEN")
-
-    Enum.each(@core_bays, fn bay ->
-      safe(fn -> API.put("CORE_BAY_#{bay}_HATCH", "OPEN") end)
-    end)
-
-    UI.notice("Fuel hatches open — the core is venting into the building.")
 
     pumps = Enum.map(@loops, &API.Pumps.primary/1)
 
