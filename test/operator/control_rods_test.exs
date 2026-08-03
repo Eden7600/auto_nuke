@@ -86,13 +86,16 @@ defmodule AutoNuke.Operator.ControlRodsTest do
     assert MockAPI.mock_put_value("ROD_BANK_POS_0_ORDERED") < 40.0
   end
 
-  test "published target micro-changes are ignored; real ones accepted" do
+  test "sub-degree target changes are ignored; real ones accepted" do
     state = init(340.0, 340.0)
 
     {:noreply, state} = ControlRods.handle_info({:core_temp, 340.05}, state)
     assert state.target == 340.0
 
-    {:noreply, state} = ControlRods.handle_info({:core_temp, 340.5}, state)
-    assert state.target == 340.5
+    {:noreply, state} = ControlRods.handle_info({:core_temp, 340.9}, state)
+    assert state.target == 340.0
+
+    {:noreply, state} = ControlRods.handle_info({:core_temp, 341.2}, state)
+    assert state.target == 341.2
   end
 end

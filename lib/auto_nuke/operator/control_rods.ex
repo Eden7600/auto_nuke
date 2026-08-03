@@ -19,12 +19,12 @@ defmodule AutoNuke.Operator.ControlRods do
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
-  # Anti-hunting: ignore published target changes smaller than this (the
-  # pressure PID upstream jitters at 0.01°C granularity)...
-  @target_hysteresis 0.1
-  # ...and while within this range of target, don't issue rod commands
+  # Anti-hunting: a 1°C variance is harmless (and the game only resolves
+  # 0.1 anyway), so ignore published target changes smaller than this...
+  @target_hysteresis 1.0
+  # ...and while within a degree of target, don't issue rod commands
   # smaller than @min_move — let the intent accumulate into one real move.
-  @calm_zone 0.8
+  @calm_zone 1.0
   @min_move 0.5
   # Keep the last 10 temperature readings:
   @temp_history_size 10
