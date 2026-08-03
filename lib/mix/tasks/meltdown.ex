@@ -48,15 +48,14 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       150 kL and takes its time.
     * **Part IV — Heat sink.** Every freight pump switched on and the
       secondary circulation opened right up — helpful at first, then
-      steadily fatal as the pumps fight vessel pressure — the
-      pressurizer vent and spray both opened so the core loses pressure
-      control entirely, the turbine vents and the condenser and storage
-      tank drains opened, and the core pool finished draining. Equipment
-      failures are called out as they happen.
+      steadily fatal as the pumps fight vessel pressure — the condenser
+      and storage tank drains opened to take coolant away, and the core
+      pool finished draining. Nothing is vented: pressure is left to
+      build everywhere. Equipment failures are called out as they
+      happen.
     * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
-      boron since Part I. From here on, valves all over the plant are
-      actuated at random.
+      boron since Part I.
     * **Part VI — Aftermath.** Core temperature, then core integrity,
       watched to the end.
 
@@ -152,72 +151,11 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     part_2_destroy_turbines(state)
     part_3_overpressure(state)
     part_4_heat_sink(state)
-
-    # From here to the end, nothing in the plant can be trusted to stay
-    # where it was put.
-    chaos = start_valve_chaos()
-
     part_5_prompt_criticality(state)
     part_6_aftermath(state)
 
-    stop_valve_chaos(chaos)
     stand_down_guard(guard)
     UI.notice("Cascade complete.")
-  end
-
-  # -- Valve chaos -------------------------------------------------------------
-
-  # Actuate a valve this often (in ticks) once the rods start moving:
-  @chaos_every 10
-
-  # Linked on purpose: aborting the task kills the chaos with it. A
-  # normal exit wouldn't, so the sequence stops it explicitly.
-  defp start_valve_chaos do
-    case all_valve_keys() do
-      [] ->
-        UI.notice("No valves to play with.")
-        nil
-
-      valves ->
-        UI.warn("Valve control is now random — #{length(valves)} valves in play.")
-
-        spawn_link(fn ->
-          PubSub.subscribe(self(), :ticker)
-          chaos_loop(valves, 0)
-        end)
-    end
-  end
-
-  defp stop_valve_chaos(nil), do: :ok
-
-  defp stop_valve_chaos(pid) do
-    Process.unlink(pid)
-    Process.exit(pid, :kill)
-  end
-
-  defp all_valve_keys do
-    case safe(fn -> API.get_json("VALVE_PANEL_JSON") end) do
-      %{"valves" => valves} -> Map.keys(valves)
-      _ -> []
-    end
-  end
-
-  @actuator_actions ["OPEN", "CLOSE", "OFF"]
-
-  defp chaos_loop(valves, n) do
-    receive do
-      {:tick, _} -> :ok
-    end
-
-    if rem(n, @chaos_every) == 0 do
-      valve = Enum.random(valves)
-      action = Enum.random(@actuator_actions)
-
-      safe(fn -> API.put("VALVE_#{action}", valve) end)
-      Logger.warning("[Meltdown] Random actuation: #{action} #{valve}")
-    end
-
-    chaos_loop(valves, n + 1)
   end
 
   defp check_reactor_live do
@@ -725,31 +663,15 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       safe(fn -> API.Pumps.secondary(loop) |> API.Pumps.set_speed(100) end)
     end)
 
-    # Venting and spraying the pressurizer at once: the core loses
-    # pressure control from both directions.
-    UI.set("Pressurizer Vent", "OPEN")
-    safe(fn -> API.Valves.set_actuator(API.Valves.pzr_vent(), "OPEN") end)
-
-    UI.set("Pressurizer Cooling", "OPEN")
-    safe(fn -> API.Valves.set_actuator(API.Valves.pzr_cooling(), "OPEN") end)
-
-    UI.notice("Pressurizer is open to the room and spraying.")
-
-    # Everything that can be opened, opened: steam out of the turbines,
-    # coolant out of the condenser and the storage tank.
-    UI.set("Turbine Vents", "OPEN")
-
-    Enum.each(@loops, fn loop ->
-      safe(fn -> API.Valves.set_actuator(API.Valves.turbine_vent(loop), "OPEN") end)
-    end)
-
+    # Nothing that would let pressure off: no vents, and no pressurizer
+    # spray. The drains take coolant away without relieving anything.
     UI.set("Condenser Drain", "OPEN")
     safe(fn -> API.Valves.set_actuator(API.Valves.condenser_drain(), "OPEN") end)
 
     UI.set("Coolant Storage Tank Drain", "OPEN")
     safe(fn -> API.Valves.set_actuator(API.Valves.cst_drain(), "OPEN") end)
 
-    UI.notice("The plant is now venting and draining wherever it can.")
+    UI.notice("Coolant is draining away with nowhere for the pressure to go.")
 
     # Draining since Part III; re-assert in case anything reset it.
     start_draining_pool()
