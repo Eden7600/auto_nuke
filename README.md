@@ -130,7 +130,7 @@ These need to be run via `task.sh` in order to set up communication with a runni
 
 ### Sandbox
 
-- [`mix auto_nuke.meltdown`](lib/mix/tasks/meltdown.ex) — Cascades the plant into failure, in acts: sabotage, secondary overpressure, load rejection, heat-sink loss, prompt criticality, aftermath.  For finding out how the game behaves at its limits.  **Wrecks your save.**  Cancelling the task slams the rods home and SCRAMs.
+- [`mix auto_nuke.meltdown`](lib/mix/tasks/meltdown.ex) — Works the plant to death from the outside in: maximum output (demand + resistor capacity, held until power plateaus), turbine destruction via vacuum loss, steam generator overpressure, heat-sink loss, prompt criticality, aftermath.  Operators are stood down one at a time, each when it becomes an obstacle, so the plant runs itself hard for as long as possible.  For finding out how the game behaves at its limits.  **Wrecks your save.**  Cancelling the task slams the rods home and SCRAMs.
 
 ### Miscellaneous
 

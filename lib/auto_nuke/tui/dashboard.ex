@@ -993,7 +993,8 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(
       row + 2,
       col + 2,
-      "Vacuum #{fmt(c.vacuum, "%", 1)}   pump #{onoff(c.vac_active)}"
+      # Vacuum reads as a 0-1 fraction (0.998 = 99.8%).
+      "Vacuum #{fmt(ratio_percent(c.vacuum), "%", 1)}   pump #{onoff(c.vac_active)}"
     )
     |> Canvas.put_text(row + 3, col + 2, "Retention tank #{fmt(c.retention, "%", 1)}")
   end
@@ -1521,6 +1522,9 @@ defmodule AutoNuke.Tui.Dashboard do
 
   defp pct(ratio) when is_number(ratio), do: "#{round(ratio * 100)}%"
   defp pct(_), do: "──"
+
+  defp ratio_percent(value) when is_number(value), do: value * 100
+  defp ratio_percent(other), do: other
 
   defp onoff(true), do: "ON"
   defp onoff(false), do: "off"

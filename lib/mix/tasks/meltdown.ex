@@ -5,6 +5,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   require Logger
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
+  alias AutoNuke.Smoother
   alias AutoNuke.TaskUI, as: UI
   alias AutoNuke.Operator, as: Op
 
@@ -17,22 +18,29 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   limits, and whether you can pull the plant back from the brink. It
   will wreck the reactor in your save.
 
-  It doesn't just yank the rods. It takes the plant apart in the order a
-  real cascade would go — secondary side first, so the steam plant tears
-  itself up long before the core is in trouble:
+  It doesn't just yank the rods. It works the plant to death from the
+  outside in, letting each stage settle before starting the next:
 
-    * **Act I — Sabotage.** Operators stood down, boron filtered out of
-      the core, resistor banks off. Nothing looks wrong yet.
-    * **Act II — Overpressure.** Feedwater to maximum, vents shut, then
-      the steam outlets slowly choked. Steam generator pressure climbs
-      with nowhere to go.
-    * **Act III — Load rejection.** Turbines tripped and condenser
-      vacuum killed at peak pressure, for the spike.
-    * **Act IV — Heat sink.** The core pool is drained away.
-    * **Act V — Prompt criticality.** Rods withdrawn and primary
-      circulation throttled to nothing.
-    * **Act VI — Aftermath.** Narrates core temperature and integrity to
-      the end.
+    * **Part I — Maximum output.** Resistor banks on, then the plant is
+      asked for everything it can safely make: grid demand plus the full
+      absorption capacity of the banks. The operators drive it up there
+      and we wait for the power to plateau.
+    * **Part II — Destroy the turbines.** Vacuum pump stopped and the
+      condensate return valve opened, then we wait for the condenser
+      vacuum to collapse. The turbines keep spinning into the rising
+      backpressure.
+    * **Part III — Overpressure.** Feedwater to maximum, vents shut,
+      then the steam outlets slowly choked. Steam generator pressure
+      climbs with nowhere to go.
+    * **Part IV — Heat sink.** The core pool is drained away.
+    * **Part V — Prompt criticality.** Boron filtered out, rods
+      withdrawn, primary circulation throttled to nothing.
+    * **Part VI — Aftermath.** Narrates core temperature and integrity
+      to the end.
+
+  Operators are stood down one at a time, each at the moment it becomes
+  an obstacle — so the plant is running itself, hard, for as long as
+  possible.
 
   **Aborting**: cancelling (`[x]` in the TUI) slams the rods home and
   presses SCRAM. It does not undo the valve work — that's yours to fix,
@@ -53,6 +61,14 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   # A steam generator counts as "live" above this pressure:
   @live_pressure 5.0
+
+  # Output counts as plateaued when a full window of samples (one
+  # in-game minute) opens and closes within this many MW of each other.
+  @plateau_window @ticks_per_minute
+  @plateau_threshold_mw 1.0
+
+  # Vacuum (a 0-1 fraction) counts as gone below this:
+  @vacuum_gone 0.5
   # Pressure milestones worth shouting about:
   @pressure_milestones [65, 70, 75, 80, 90, 100, 120]
 
@@ -95,12 +111,12 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
     UI.notice("Live steam generators: #{inspect(state.loops)}")
 
-    act_1_sabotage(state)
-    act_2_overpressure(state)
-    act_3_load_rejection(state)
-    act_4_heat_sink(state)
-    act_5_prompt_criticality(state)
-    act_6_aftermath(state)
+    part_1_maximum_output(state)
+    part_2_destroy_turbines(state)
+    part_3_overpressure(state)
+    part_4_heat_sink(state)
+    part_5_prompt_criticality(state)
+    part_6_aftermath(state)
 
     stand_down_guard(guard)
     UI.notice("Cascade complete.")
@@ -127,38 +143,134 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     end)
   end
 
-  # -- Act I: sabotage the safeties -------------------------------------------
+  # -- Part I: wring every megawatt out of the plant --------------------------
 
-  @stood_down [
-    {Op.ControlRods, "Control Rods Operator"},
-    {Op.CoreTemp, "Core Temperature Operator"},
-    {Op.PrimaryPumps, "Primary Pumps Operator"},
-    {Op.SteamFlow, "Steam Flow Operator"},
-    {Op.SecondaryFill, "Secondary Fill Operators"},
-    {Op.BoronLevel, "Boron Level Operator"},
-    {Op.ResistorBanks, "Resistor Banks Operator"},
-    {Op.VacuumTank, "Vacuum Tank Operator"}
-  ]
+  defp part_1_maximum_output(state) do
+    UI.console("PART I — MAXIMUM OUTPUT")
 
-  defp act_1_sabotage(_state) do
-    UI.console("ACT I — SABOTAGE")
+    # The banks are where the surplus goes: with them on, "safe maximum"
+    # is grid demand plus everything they can absorb.
+    capacity_mw = Mix.Tasks.AutoNuke.Startup.enable_resistor_bank()
+    stand_down(Op.ResistorBanks, "Resistor Banks Operator")
 
-    Enum.each(@stood_down, fn {module, name} ->
-      UI.set_wait(
-        name,
-        "STAND DOWN",
-        fn -> not any_subscribed?(module) end,
-        fn -> unsubscribe_all(module) end
-      )
-    end)
+    demand_mw = safe_number(fn -> API.Power.get_demand_mw() end, 0.0)
+    target_mw = demand_mw + capacity_mw
 
-    UI.set("Boron Filtering", "MAXIMUM")
-    safe(fn -> API.put("CHEM_BORON_FILTER_ORDERED_SPEED", 100) end)
+    UI.set(
+      "Power Target",
+      "#{fmt(target_mw)} MW  (demand #{fmt(demand_mw)} + banks #{fmt(capacity_mw)})"
+    )
 
-    UI.set("Resistor Banks", "OFF")
-    safe(fn -> API.put("RESISTOR_BANKS_MAIN_SWITCH", false) end)
+    case safe(fn -> Op.SteamFlow.set_target_override_mw(target_mw, :never) end) do
+      :err ->
+        UI.warn("Steam Flow Operator isn't running — can't drive the plant up.")
+        state
 
-    UI.notice("The plant is now unsupervised.  Boron is coming out of the core.")
+      _ ->
+        UI.notice("Operators are now pushing the plant to its limit.")
+        wait_for_plateau(state, target_mw, Smoother.new(@plateau_window), 0)
+    end
+  end
+
+  defp wait_for_plateau(state, target_mw, history, n) do
+    cond do
+      n > state.limit_ticks * 3 ->
+        UI.warn("Output never settled; pressing on anyway.")
+        state
+
+      plateau?(history) ->
+        UI.success("Output has plateaued at #{fmt(total_generation_mw())} MW.")
+        state
+
+      true ->
+        wait_tick()
+        history = Smoother.add(history, total_generation_mw())
+
+        if rem(n, @report_every) == 0 do
+          UI.set(
+            "Output",
+            "#{fmt(total_generation_mw())} / #{fmt(target_mw)} MW  (climbing)"
+          )
+        end
+
+        wait_for_plateau(state, target_mw, history, n + 1)
+    end
+  end
+
+  @doc """
+  Has output plateaued? True once a full window of samples opens and
+  closes within `@plateau_threshold_mw` of each other — a partial window
+  never counts, so a slow climb can't be mistaken for a plateau.
+  """
+  def plateau?(%Smoother{size: size, max: max}) when size < max, do: false
+
+  def plateau?(history) do
+    abs(Smoother.rate_of_change(history)) < @plateau_threshold_mw
+  end
+
+  @doc false
+  def plateau_window, do: @plateau_window
+
+  defp total_generation_mw do
+    @loops
+    |> Enum.map(&safe_number(fn -> API.Generator.get_power_kw(&1) end, 0.0))
+    |> Enum.sum()
+    |> Kernel./(1000)
+  end
+
+  # -- Part II: take the vacuum away from the turbines ------------------------
+
+  defp part_2_destroy_turbines(state) do
+    UI.console("PART II — DESTROY THE TURBINES")
+
+    stand_down(Op.VacuumTank, "Vacuum Tank Operator")
+
+    UI.set("Condenser Vacuum Pump", "STOP")
+    safe(fn -> API.VacuumPump.stop() end)
+
+    UI.set("Condensate Return Valve", "OPEN")
+    safe(fn -> API.Valves.set_open_percent(API.Valves.crv(), 100) end)
+
+    UI.notice("Vacuum is on its own now.  The turbines keep spinning.")
+    wait_for_vacuum_loss(state, 0)
+  end
+
+  defp wait_for_vacuum_loss(state, n) do
+    vacuum = safe_number(fn -> API.VacuumPump.get_vacuum_level() end, 0.0)
+
+    cond do
+      vacuum <= @vacuum_gone ->
+        UI.success("Condenser vacuum is gone (#{fmt(vacuum * 100)}%).")
+        state
+
+      n > state.limit_ticks * 3 ->
+        UI.warn("Vacuum is holding at #{fmt(vacuum * 100)}%; pressing on.")
+        state
+
+      true ->
+        wait_tick()
+
+        state =
+          if rem(n, @report_every) == 0 do
+            UI.set("Condenser Vacuum", "#{fmt(vacuum * 100)}%")
+            announce_once(state, {:vacuum, 95}, vacuum < 0.95, "Condenser vacuum is failing!")
+          else
+            state
+          end
+
+        wait_for_vacuum_loss(state, n + 1)
+    end
+  end
+
+  # -- Standing operators down, one at a time ---------------------------------
+
+  defp stand_down(module, name) do
+    UI.set_wait(
+      name,
+      "STAND DOWN",
+      fn -> not any_subscribed?(module) end,
+      fn -> unsubscribe_all(module) end
+    )
   end
 
   # SecondaryFill runs one process per loop.
@@ -180,13 +292,18 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   # -- Act II: overpressure the steam generators ------------------------------
 
-  defp act_2_overpressure(%{loops: []} = _state) do
-    UI.console("ACT II — OVERPRESSURE")
+  defp part_3_overpressure(%{loops: []} = state) do
+    UI.console("PART III — OVERPRESSURE")
     UI.notice("No live steam generators; skipping the secondary side.")
+    state
   end
 
-  defp act_2_overpressure(state) do
-    UI.console("ACT II — OVERPRESSURE")
+  defp part_3_overpressure(state) do
+    UI.console("PART III — OVERPRESSURE")
+
+    # These two would undo the choking and the flooding respectively.
+    stand_down(Op.SteamFlow, "Steam Flow Operator")
+    stand_down(Op.SecondaryFill, "Secondary Fill Operators")
 
     UI.set("Feedwater Pumps", "MAXIMUM")
 
@@ -252,27 +369,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     end
   end
 
-  # -- Act III: reject the load ----------------------------------------------
+  # -- Part IV: take away the heat sink ---------------------------------------
 
-  defp act_3_load_rejection(state) do
-    UI.console("ACT III — LOAD REJECTION")
-
-    UI.set("Turbines", "TRIP")
-    safe(fn -> API.Misc.trip_turbines() end)
-
-    UI.set("Condenser Vacuum Pump", "STOP")
-    safe(fn -> API.VacuumPump.stop() end)
-
-    UI.warn("Load rejected.  Steam has nowhere left to go.")
-
-    # Let the spike develop and narrate it.
-    settle(state, round(@ticks_per_minute * 2))
-  end
-
-  # -- Act IV: take away the heat sink ---------------------------------------
-
-  defp act_4_heat_sink(state) do
-    UI.console("ACT IV — HEAT SINK")
+  defp part_4_heat_sink(state) do
+    UI.console("PART IV — HEAT SINK")
 
     UI.set("Core Pool", "DRAIN")
     safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
@@ -281,10 +381,19 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     settle(state, round(@ticks_per_minute))
   end
 
-  # -- Act V: prompt criticality ---------------------------------------------
+  # -- Part V: prompt criticality ---------------------------------------------
 
-  defp act_5_prompt_criticality(state) do
-    UI.console("ACT V — PROMPT CRITICALITY")
+  defp part_5_prompt_criticality(state) do
+    UI.console("PART V — PROMPT CRITICALITY")
+
+    # The last of the supervision goes now.
+    stand_down(Op.ControlRods, "Control Rods Operator")
+    stand_down(Op.CoreTemp, "Core Temperature Operator")
+    stand_down(Op.PrimaryPumps, "Primary Pumps Operator")
+    stand_down(Op.BoronLevel, "Boron Level Operator")
+
+    UI.set("Boron Filtering", "MAXIMUM")
+    safe(fn -> API.put("CHEM_BORON_FILTER_ORDERED_SPEED", 100) end)
 
     UI.set("Control Rods", "WITHDRAW #{state.pace}%/min")
     UI.set("Primary Pumps", "THROTTLE #{state.pace}%/min")
@@ -333,10 +442,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     end
   end
 
-  # -- Act VI: aftermath ------------------------------------------------------
+  # -- Part VI: aftermath ------------------------------------------------------
 
-  defp act_6_aftermath(state) do
-    UI.console("ACT VI — AFTERMATH")
+  defp part_6_aftermath(state) do
+    UI.console("PART VI — AFTERMATH")
     UI.set("Meltdown", "IN PROGRESS")
     aftermath_loop(state, 0)
   end

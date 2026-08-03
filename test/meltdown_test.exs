@@ -25,6 +25,35 @@ defmodule Mix.Tasks.AutoNuke.MeltdownTest do
     end
   end
 
+  describe "plateau detection" do
+    alias AutoNuke.Smoother
+
+    defp fill(values) do
+      Enum.reduce(values, Smoother.new(Meltdown.plateau_window()), &Smoother.add(&2, &1))
+    end
+
+    test "a partial window is never a plateau" do
+      refute Meltdown.plateau?(fill([100.0, 100.0, 100.0]))
+    end
+
+    test "a full flat window is a plateau" do
+      window = Meltdown.plateau_window()
+      assert Meltdown.plateau?(fill(List.duplicate(180.0, window)))
+    end
+
+    test "output still climbing is not a plateau" do
+      window = Meltdown.plateau_window()
+      climbing = Enum.map(1..window, &(100.0 + &1 * 0.5))
+      refute Meltdown.plateau?(fill(climbing))
+    end
+
+    test "small wobble around a level still counts as a plateau" do
+      window = Meltdown.plateau_window()
+      wobble = Enum.map(1..window, fn n -> 180.0 + rem(n, 3) * 0.1 end)
+      assert Meltdown.plateau?(fill(wobble))
+    end
+  end
+
   describe "abort guard" do
     # The guard is the safety-critical part: if the task dies without
     # standing it down, the plant must be scrammed.
