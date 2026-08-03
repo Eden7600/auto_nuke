@@ -37,10 +37,22 @@ defmodule AutoNuke.Operator.EmergencyPower do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
+  # Absent equipment reads as "null" (same convention as rod banks).
+  @not_installed ["null", ""]
+
   @impl true
   def init(nil) do
     PubSub.subscribe(self(), :ticker)
-    Logger.info(@log_prefix <> "Watching for station blackout.")
+
+    installed = generator_statuses() |> Enum.map(&elem(&1, 0))
+    batteries = if batteries_installed?(), do: "present", else: "none"
+
+    Logger.info(
+      @log_prefix <>
+        "Watching for station blackout " <>
+        "(generators: #{inspect(installed)}, batteries: #{batteries})."
+    )
+
     {:ok, %State{}}
   end
 
@@ -49,14 +61,27 @@ defmodule AutoNuke.Operator.EmergencyPower do
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do
+    generators = generator_statuses()
+
     state =
       state
       |> track_supply(normal_supply?())
-      |> maybe_start_generators()
-      |> maybe_stop_generators()
-      |> check_generator_health()
+      |> maybe_start_generators(generators)
+      |> maybe_stop_generators(generators)
+      |> check_generator_health(generators)
 
     {:noreply, state}
+  end
+
+  # `{gen, status}` for each generator that is actually installed.
+  defp generator_statuses do
+    @generators
+    |> Enum.map(&{&1, API.get_string("EMERGENCY_GENERATOR_#{&1}_STATUS")})
+    |> Enum.reject(fn {_gen, status} -> status in @not_installed end)
+  end
+
+  defp batteries_installed? do
+    API.get_string("EMERGENCY_BATTERIES_MODE") not in @not_installed
   end
 
   # Normal = the grid or our own turbines are carrying the plant load.
@@ -72,27 +97,41 @@ defmodule AutoNuke.Operator.EmergencyPower do
   defp track_supply(%State{} = state, false),
     do: %State{state | abnormal: state.abnormal + 1, normal: 0}
 
-  defp maybe_start_generators(%State{abnormal: @blackout_after} = state) do
-    idle = Enum.filter(@generators, &(generator_status(&1) == "INACTIVO"))
+  defp maybe_start_generators(%State{abnormal: @blackout_after} = state, generators) do
+    idle = for {gen, "INACTIVO"} <- generators, do: gen
 
-    case idle do
-      [] ->
-        state
-
-      gens ->
+    cond do
+      generators == [] ->
         Logger.warning(
-          @log_prefix <> "Station blackout — starting emergency generator(s) #{inspect(gens)}."
+          @log_prefix <> "Station blackout — and no emergency generators are installed!"
         )
 
-        Enum.each(gens, &API.put("EMERGENCY_GENERATOR_#{&1}_START_STOP", "START"))
-        %State{state | started_by_us: Enum.uniq(state.started_by_us ++ gens)}
+        state
+
+      idle == [] ->
+        state
+
+      true ->
+        Logger.warning(
+          @log_prefix <> "Station blackout — starting emergency generator(s) #{inspect(idle)}."
+        )
+
+        Enum.each(idle, &API.put("EMERGENCY_GENERATOR_#{&1}_START_STOP", "START"))
+        %State{state | started_by_us: Enum.uniq(state.started_by_us ++ idle)}
     end
   end
 
-  defp maybe_start_generators(state), do: state
+  defp maybe_start_generators(state, _generators), do: state
 
-  defp maybe_stop_generators(%State{normal: @recovery_after, started_by_us: [_ | _]} = state) do
-    running = Enum.filter(state.started_by_us, &(generator_status(&1) != "INACTIVO"))
+  defp maybe_stop_generators(
+         %State{normal: @recovery_after, started_by_us: [_ | _]} = state,
+         generators
+       ) do
+    statuses = Map.new(generators)
+
+    # Unknown/uninstalled counts as not running — nothing to stop.
+    running =
+      Enum.filter(state.started_by_us, &(Map.get(statuses, &1, "INACTIVO") != "INACTIVO"))
 
     if running != [] do
       Logger.notice(
@@ -105,12 +144,10 @@ defmodule AutoNuke.Operator.EmergencyPower do
     %State{state | started_by_us: []}
   end
 
-  defp maybe_stop_generators(state), do: state
+  defp maybe_stop_generators(state, _generators), do: state
 
-  defp generator_status(gen), do: API.get_string("EMERGENCY_GENERATOR_#{gen}_STATUS")
-
-  defp check_generator_health(%State{} = state) do
-    Enum.reduce(@generators, state, fn gen, acc ->
+  defp check_generator_health(%State{} = state, generators) do
+    Enum.reduce(generators, state, fn {gen, _status}, acc ->
       acc
       |> warn_once({:fuel, gen}, fn ->
         API.get_float("EMERGENCY_GENERATOR_#{gen}_FUEL") < @low_fuel
