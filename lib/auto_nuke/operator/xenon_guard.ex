@@ -2,21 +2,26 @@ defmodule AutoNuke.Operator.XenonGuard do
   @moduledoc """
   Xenon poisoning prevention.
 
-  The game reports gross xenon production (`CORE_XENON_GENERATION`), but
-  burn-off scales with core flux — so the signal that matters is the NET
-  trend of `CORE_XENON_CUMULATIVE`. Measured live: a core factor of ~2.8
-  balances a generation of ~35; at factor ~1 the same core drowned.
+  The game reports gross xenon production (`CORE_XENON_GENERATION`), which
+  stays high on a perfectly healthy core because burn-off scales with flux
+  and cancels it. The signal that matters is the NET trend of
+  `CORE_XENON_CUMULATIVE`.
 
-  Burning xenon needs reactivity headroom (withdrawing rods is what raises
-  the flux), so this operator acts *early*:
+  Absolute xenon levels are deliberately NOT used as triggers: what counts
+  as "high" depends on the plant and its power level, and guessing wrong
+  either cries wolf or misses the problem. Instead this operator watches
+  the thing that actually hurts — **reactivity margin being spent to
+  compensate for rising xenon**. `BoronLevel` keeps the rods in a 33-66%
+  band; rods driven well below that while xenon climbs means the
+  compensation loop is losing.
 
-    * **Burn**: xenon high and net-rising while rods still have travel →
+    * **Burn**: xenon net-rising while rod margin is low but not gone →
       enable the resistor banks (excess power isn't counted against the
       score while they absorb it) and set a SteamFlow override above
-      demand. Cleared once xenon is back down or clearly falling.
-    * **Spiral alarm**: rods near zero, criticality non-positive, xenon
-      still rising — burning is no longer possible; say so, loudly. The
-      options at that point are SCRAM-and-wait or manual heroics.
+      demand. Cleared once xenon falls and margin recovers.
+    * **Spiral alarm**: margin gone (rods bottomed, boron nearly gone) with
+      the reaction dying and xenon still rising — burning is no longer
+      possible; say so, loudly.
 
   A user-set SteamFlow override is never overridden or cleared.
   """
@@ -31,17 +36,22 @@ defmodule AutoNuke.Operator.XenonGuard do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Xenon cumulative levels (observed operating range ~60-80; the core
-  # died climbing through ~78 with no margin left):
-  @burn_threshold 70.0
-  @burn_exit 62.0
-
-  # Net-trend detection: slope across the sample window (~30s of samples).
+  # Net-trend detection: total change across the sample window (~30s).
+  # A stable core was measured drifting ~0.03 over that span, so this sits
+  # an order of magnitude above the noise floor. Provisional: it wants
+  # confirming against a real poisoning event.
   @trend_window 30
-  @rising_slope 0.05
+  @rising_slope 0.5
 
-  # Burn only while the rods still have meaningful travel left:
+  # Rod margin (percent inserted). BoronLevel aims to hold 33-66%, so
+  # being pushed below @margin_low means we're losing ground...
+  @margin_low 25.0
+  # ...and this much recovery means we've won it back.
+  @margin_ok 35.0
+  # Below this there is nothing left to withdraw — burning is impossible.
   @min_rod_margin 10.0
+  # With rods bottomed, boron this low means no chemical margin either.
+  @min_boron 100.0
 
   # Burn power: this multiple of demand (resistors soak the surplus).
   @burn_power_ratio 1.10
@@ -80,22 +90,32 @@ defmodule AutoNuke.Operator.XenonGuard do
   def handle_info({:tick, t}, %State{} = state) do
     xenon = API.get_float("CORE_XENON_CUMULATIVE")
     history = Smoother.add(state.history, xenon)
-    slope = Smoother.rate_of_change(history)
     rods = API.get_float("RODS_POS_ACTUAL")
 
     state = %State{state | history: history}
 
+    # `rate_of_change` extrapolates from a partial window, so a small
+    # wiggle during warmup reads as a steep slope. Wait for a full window
+    # before trusting the trend.
     state =
-      cond do
-        spiral?(rods, slope) -> spiral_alarm(state, xenon, t)
-        not state.burning and should_burn?(xenon, slope, rods) -> start_burn(state, xenon)
-        state.burning and should_stop?(xenon, slope) -> stop_burn(state, xenon)
-        state.burning -> maybe_renew_override(state)
-        true -> state
+      if trend_ready?(history) do
+        slope = Smoother.rate_of_change(history)
+
+        cond do
+          spiral?(rods, slope) -> spiral_alarm(state, xenon, t)
+          not state.burning and should_burn?(slope, rods) -> start_burn(state, xenon, rods)
+          state.burning and should_stop?(slope, rods) -> stop_burn(state, xenon)
+          state.burning -> maybe_renew_override(state)
+          true -> state
+        end
+      else
+        state
       end
 
     {:noreply, state}
   end
+
+  defp trend_ready?(%Smoother{size: size, max: max}), do: size >= max
 
   # Our override carries an hourly expiry as a failsafe (it clears itself
   # if this operator dies mid-burn); while alive and burning, renew it.
@@ -115,18 +135,22 @@ defmodule AutoNuke.Operator.XenonGuard do
 
   # -- Burn procedure ---------------------------------------------------------
 
-  defp should_burn?(xenon, slope, rods) do
-    xenon > @burn_threshold and slope > @rising_slope and rods > @min_rod_margin
+  # Rising xenon that we're paying for in rod margin, while enough margin
+  # remains to actually raise flux.
+  defp should_burn?(slope, rods) do
+    slope > @rising_slope and rods < @margin_low and rods > @min_rod_margin
   end
 
-  defp should_stop?(xenon, slope) do
-    xenon < @burn_exit or (xenon < @burn_threshold and slope < -@rising_slope)
+  # Stop once xenon is genuinely falling, or margin has recovered.
+  defp should_stop?(slope, rods) do
+    (slope < -@rising_slope and rods > @margin_low) or rods > @margin_ok
   end
 
-  defp start_burn(%State{} = state, xenon) do
+  defp start_burn(%State{} = state, xenon, rods) do
     Logger.warning(
       @log_prefix <>
-        "Xenon at #{Float.round(xenon, 1)} and rising — starting burn-off procedure."
+        "Xenon at #{Float.round(xenon, 1)} and rising with rods down to " <>
+        "#{Float.round(rods, 1)}% — starting burn-off procedure."
     )
 
     ResistorBanks.enable_banks()
@@ -182,8 +206,11 @@ defmodule AutoNuke.Operator.XenonGuard do
 
   # -- Spiral alarm -----------------------------------------------------------
 
+  # No rods left to withdraw, no boron left to filter, reaction dying, and
+  # xenon still climbing.
   defp spiral?(rods, slope) do
     rods < @min_rod_margin and slope > 0 and
+      API.get_float("CHEM_BORON_PPM") < @min_boron and
       API.get_float("CORE_STATE_CRITICALITY") <= 0
   end
 

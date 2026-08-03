@@ -952,10 +952,12 @@ defmodule AutoNuke.Tui.Dashboard do
     budget = col + w - 26 - start
 
     if budget >= 12 do
+      # Colour by what xenon is *costing* (rod margin), not by an absolute
+      # level — see XenonGuard for why magnitudes aren't meaningful.
       xe_style =
-        case core.xenon do
-          xe when is_number(xe) and xe > 80 -> [:red, :bright]
-          xe when is_number(xe) and xe > 70 -> [:yellow]
+        case rod_margin(core) do
+          m when is_number(m) and m < 10 -> [:red, :bright]
+          m when is_number(m) and m < 25 -> [:yellow]
           _ -> []
         end
 
@@ -972,6 +974,16 @@ defmodule AutoNuke.Tui.Dashboard do
       )
     else
       canvas
+    end
+  end
+
+  defp rod_margin(core) do
+    core.rods
+    |> Enum.map(fn {_bank, pos} -> pos end)
+    |> Enum.filter(&is_number/1)
+    |> case do
+      [] -> nil
+      positions -> Enum.sum(positions) / length(positions)
     end
   end
 

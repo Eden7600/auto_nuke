@@ -34,10 +34,13 @@ defmodule AutoNuke.Operator.XenonGuardTest do
     :ok
   end
 
+  # The trend window must fill before the operator trusts a slope, so
+  # warm up with a flat history at the starting level.
   defp init(xenon) do
     MockAPI.mock_get("CORE_XENON_CUMULATIVE", xenon)
     {:ok, state} = XenonGuard.init(nil)
-    state
+
+    Enum.reduce(1..30, state, fn _, acc -> tick(acc, xenon, 50.0) end)
   end
 
   defp tick(state, xenon, rods) do
@@ -68,12 +71,15 @@ defmodule AutoNuke.Operator.XenonGuardTest do
     assert_raise RuntimeError, ~r/not received/, fn -> MockAPI.mock_put_value(key) end
   end
 
-  test "rising xenon over threshold with rod margin starts the burn" do
+  # Triggers are margin-based: rising xenon while rods are driven below
+  # 25% (but still above 10%) means we're paying for xenon in reactivity.
+
+  test "rising xenon with spent rod margin starts the burn" do
     with_stub(fn ->
       mock_banks_json()
       MockAPI.mock_get("POWER_DEMAND_MW", 100.0)
 
-      state = init(70.0) |> tick(72.0, 50.0)
+      state = init(70.0) |> tick(74.0, 20.0)
 
       assert state.burning
       assert state.our_override
@@ -86,11 +92,20 @@ defmodule AutoNuke.Operator.XenonGuardTest do
     end)
   end
 
+  test "rising xenon with healthy rod margin is left alone" do
+    # Same xenon rise, but the rods are sitting comfortably — the
+    # compensation loop is winning, so there's nothing to do.
+    state = init(70.0) |> tick(74.0, 50.0)
+
+    refute state.burning
+    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
+  end
+
   test "a user-set override is respected, not replaced" do
     with_stub({{0.5, :ratio}, :never}, fn ->
       mock_banks_json()
 
-      state = init(70.0) |> tick(72.0, 50.0)
+      state = init(70.0) |> tick(74.0, 20.0)
 
       assert state.burning
       refute state.our_override
@@ -99,21 +114,31 @@ defmodule AutoNuke.Operator.XenonGuardTest do
   end
 
   test "no burn without rod margin — the spiral alarm fires instead" do
+    MockAPI.mock_get("CHEM_BORON_PPM", 20.0)
     MockAPI.mock_get("CORE_STATE_CRITICALITY", -0.5)
 
-    state = init(70.0) |> tick(75.0, 3.0)
+    state = init(70.0) |> tick(78.0, 3.0)
 
     refute state.burning
     assert state.next_spiral_alarm > 0
     refute_put("RESISTOR_BANKS_MAIN_SWITCH")
   end
 
-  test "falling xenon below the exit level ends the burn" do
+  test "bottomed rods with boron left is not a spiral" do
+    # Boron can still be filtered out — margin exists, no alarm.
+    MockAPI.mock_get("CHEM_BORON_PPM", 1800.0)
+
+    state = init(70.0) |> tick(78.0, 3.0)
+
+    assert state.next_spiral_alarm == 0
+  end
+
+  test "recovered rod margin ends the burn" do
     with_stub(fn ->
       mock_banks_json()
       MockAPI.mock_get("POWER_DEMAND_MW", 100.0)
 
-      state = init(70.0) |> tick(72.0, 50.0)
+      state = init(70.0) |> tick(74.0, 20.0)
       assert state.burning
       assert_receive {:steam_flow_call, {:override, _, _}}
 
@@ -121,7 +146,7 @@ defmodule AutoNuke.Operator.XenonGuardTest do
       MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH")
       MockAPI.mock_put_value("RESISTOR_BANK_01_SWITCH")
 
-      state = tick(state, 61.0, 50.0)
+      state = tick(state, 73.0, 40.0)
       refute state.burning
 
       # Banks off (bank switches then main):
@@ -131,7 +156,7 @@ defmodule AutoNuke.Operator.XenonGuardTest do
   end
 
   test "quiet xenon does nothing" do
-    state = init(50.0) |> tick(50.0, 50.0) |> tick(50.1, 50.0)
+    state = init(50.0) |> tick(50.0, 20.0) |> tick(50.1, 20.0)
 
     refute state.burning
     refute_put("RESISTOR_BANKS_MAIN_SWITCH")

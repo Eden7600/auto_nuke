@@ -145,7 +145,11 @@ defmodule AutoNuke.Tui.Data do
     |> add_issue("Em. generator 2 maintenance", fn ->
       API.get_boolean("EMERGENCY_GENERATOR_2_MAINTENANCE_NEEDED")
     end)
-    |> add_issue("Xenon high", fn -> API.get_float("CORE_XENON_CUMULATIVE") > 80 end)
+    # Xenon has no universal "high" level — what matters is paying for it
+    # in rod margin (the same signal XenonGuard acts on).
+    |> add_issue("Xenon costing rod margin", fn ->
+      API.get_float("CORE_XENON_CUMULATIVE") > 0 and API.get_float("RODS_POS_ACTUAL") < 25
+    end)
     |> Enum.reverse()
     |> Kernel.++(safe_list(&panel_issues/0))
   end

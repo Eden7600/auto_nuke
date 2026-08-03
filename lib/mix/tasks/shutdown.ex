@@ -69,19 +69,25 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
 
   @min_power_level Op.SteamFlow.Turbine.allowed_power_levels().first
 
-  defp reduce_throttle(node) do
-    UI.tablet("AutoNuke Remote Control")
-
-    steam_flow = {Op.SteamFlow, node}
-
-    UI.set_wait(
-      "Steam Flow Target Override",
-      "SET TO 0%",
-      fn -> Op.SteamFlow.get_target_override(steam_flow) == {{0.0, :ratio}, :never} end,
-      fn -> Op.SteamFlow.set_target_override_percent(0, :never, steam_flow) end
-    )
-
+  def reduce_throttle(node) do
     mscvs = @steam_gens |> Enum.map(& &1.mscv)
+
+    if running?(node, Op.SteamFlow) do
+      UI.tablet("AutoNuke Remote Control")
+      steam_flow = {Op.SteamFlow, node}
+
+      UI.set_wait(
+        "Steam Flow Target Override",
+        "SET TO 0%",
+        fn -> Op.SteamFlow.get_target_override(steam_flow) == {{0.0, :ratio}, :never} end,
+        fn -> Op.SteamFlow.set_target_override_percent(0, :never, steam_flow) end
+      )
+    else
+      # Nobody is driving the valves — close them ourselves.
+      UI.console("Steam Generator")
+      UI.notice("Steam Flow operator is not running; closing MSCVs directly.")
+      Enum.each(mscvs, &UI.Valves.set(&1, @min_power_level, wait: false))
+    end
 
     UI.wait(
       "Main Steam Control Valves",
@@ -92,6 +98,12 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
         |> Enum.all?(&(&1 <= @min_power_level))
       end
     )
+  end
+
+  # Operators are optional: the TUI starts them all off, and any of them
+  # can be disabled by hand. Shutdown must cope with their absence.
+  defp running?(node, module) do
+    remote(node, fn -> is_pid(Process.whereis(module)) end)
   end
 
   defp open_breakers do
@@ -123,16 +135,20 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     |> Enum.each(fn key ->
       {module, name} = @remote_operators |> Map.fetch!(key)
 
-      UI.set_wait(
-        name,
-        "DISABLE",
-        remote_fn(node, fn ->
-          !(Process.whereis(module) in PubSub.subscribers(:ticker))
-        end),
-        remote_fn(node, fn ->
-          PubSub.unsubscribe(module, :ticker)
-        end)
-      )
+      if running?(node, module) do
+        UI.set_wait(
+          name,
+          "DISABLE",
+          remote_fn(node, fn ->
+            !(Process.whereis(module) in PubSub.subscribers(:ticker))
+          end),
+          remote_fn(node, fn ->
+            PubSub.unsubscribe(module, :ticker)
+          end)
+        )
+      else
+        UI.set(name, "NOT RUNNING")
+      end
     end)
   end
 
@@ -207,6 +223,7 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     UI.tablet("AutoNuke Remote Control")
 
     @loops
+    |> Enum.filter(&running?(node, Module.concat(Op.SecondaryFill, "L#{&1}")))
     |> Enum.filter(&Op.SecondaryFill.is_active?({&1, node}))
     |> Enum.each(fn loop ->
       UI.set_wait(
