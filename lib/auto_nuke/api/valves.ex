@@ -28,9 +28,9 @@ defmodule AutoNuke.API.Valves do
     )
   end
 
-  defp loop_letter(1), do: "A"
-  defp loop_letter(2), do: "B"
-  defp loop_letter(3), do: "C"
+  def loop_letter(1), do: "A"
+  def loop_letter(2), do: "B"
+  def loop_letter(3), do: "C"
 
   def mscv(loop) when loop in 1..3,
     do: %OrderedValve{
@@ -83,137 +83,50 @@ defmodule AutoNuke.API.Valves do
       set_key: "STEAM_EJECTOR_CONDENSER_RETURN_VALVE"
     }
 
-  # Core to primary pump
-  def valve_a1,
-    do: %ActuatedValve{
-      name: "Valve A1",
-      short_name: "A1",
-      valve_panel_key: "VALVULA_ENTRADA_NUCLEO_01"
-    }
+  # The six actuated isolation valves in each loop:
+  @loop_valve_panel_keys %{
+    # Core to primary pump
+    1 => "VALVULA_ENTRADA_NUCLEO",
+    # Steam generator return to core
+    2 => "VALVULA_SALIDA_NUCLEO",
+    # Primary pump to steam generator
+    3 => "VALVULA_ENTRE_BC_Y_EVA",
+    # Steam generator to turbine (MSCV)
+    4 => "VALVULA_ENTRADA_TURBINA",
+    # Turbine to condenser
+    5 => "VALVULA_ENTRADA_CONDENSADOR",
+    # Condenser to secondary pump
+    6 => "VALVULA_SALIDA_CONDENSADOR"
+  }
 
-  def valve_b1,
-    do: %ActuatedValve{
-      name: "Valve B1",
-      short_name: "B1",
-      valve_panel_key: "VALVULA_ENTRADA_NUCLEO_02"
-    }
+  def loop_valve(loop, num) when loop in 1..3 and num in 1..6 do
+    short = "#{loop_letter(loop)}#{num}"
 
-  def valve_c1,
-    do: %ActuatedValve{
-      name: "Valve C1",
-      short_name: "C1",
-      valve_panel_key: "VALVULA_ENTRADA_NUCLEO_03"
+    %ActuatedValve{
+      name: "Valve #{short}",
+      short_name: short,
+      valve_panel_key: "#{Map.fetch!(@loop_valve_panel_keys, num)}_0#{loop}"
     }
+  end
 
-  # Steam generator return to core
-  def valve_a2,
-    do: %ActuatedValve{
-      name: "Valve A2",
-      short_name: "A2",
-      valve_panel_key: "VALVULA_SALIDA_NUCLEO_01"
-    }
-
-  def valve_b2,
-    do: %ActuatedValve{
-      name: "Valve B2",
-      short_name: "B2",
-      valve_panel_key: "VALVULA_SALIDA_NUCLEO_02"
-    }
-
-  def valve_c2,
-    do: %ActuatedValve{
-      name: "Valve C2",
-      short_name: "C2",
-      valve_panel_key: "VALVULA_SALIDA_NUCLEO_03"
-    }
-
-  # Primary pump to steam generator
-  def valve_a3,
-    do: %ActuatedValve{
-      name: "Valve A3",
-      short_name: "A3",
-      valve_panel_key: "VALVULA_ENTRE_BC_Y_EVA_01"
-    }
-
-  def valve_b3,
-    do: %ActuatedValve{
-      name: "Valve B3",
-      short_name: "B3",
-      valve_panel_key: "VALVULA_ENTRE_BC_Y_EVA_02"
-    }
-
-  def valve_c3,
-    do: %ActuatedValve{
-      name: "Valve C3",
-      short_name: "C3",
-      valve_panel_key: "VALVULA_ENTRE_BC_Y_EVA_03"
-    }
-
-  # Steam generator to turbine (MSCV)
-  def valve_a4,
-    do: %ActuatedValve{
-      name: "Valve A4",
-      short_name: "A4",
-      valve_panel_key: "VALVULA_ENTRADA_TURBINA_01"
-    }
-
-  def valve_b4,
-    do: %ActuatedValve{
-      name: "Valve B4",
-      short_name: "B4",
-      valve_panel_key: "VALVULA_ENTRADA_TURBINA_02"
-    }
-
-  def valve_c4,
-    do: %ActuatedValve{
-      name: "Valve C4",
-      short_name: "C4",
-      valve_panel_key: "VALVULA_ENTRADA_TURBINA_03"
-    }
-
-  # Turbine to condenser
-  def valve_a5,
-    do: %ActuatedValve{
-      name: "Valve A5",
-      short_name: "A5",
-      valve_panel_key: "VALVULA_ENTRADA_CONDENSADOR_01"
-    }
-
-  def valve_b5,
-    do: %ActuatedValve{
-      name: "Valve B5",
-      short_name: "B5",
-      valve_panel_key: "VALVULA_ENTRADA_CONDENSADOR_02"
-    }
-
-  def valve_c5,
-    do: %ActuatedValve{
-      name: "Valve C5",
-      short_name: "C5",
-      valve_panel_key: "VALVULA_ENTRADA_CONDENSADOR_03"
-    }
-
-  # Condenser to secondary pump
-  def valve_a6,
-    do: %ActuatedValve{
-      name: "Valve A6",
-      short_name: "A6",
-      valve_panel_key: "VALVULA_SALIDA_CONDENSADOR_01"
-    }
-
-  def valve_b6,
-    do: %ActuatedValve{
-      name: "Valve B6",
-      short_name: "B6",
-      valve_panel_key: "VALVULA_SALIDA_CONDENSADOR_02"
-    }
-
-  def valve_c6,
-    do: %ActuatedValve{
-      name: "Valve C6",
-      short_name: "C6",
-      valve_panel_key: "VALVULA_SALIDA_CONDENSADOR_03"
-    }
+  def valve_a1, do: loop_valve(1, 1)
+  def valve_b1, do: loop_valve(2, 1)
+  def valve_c1, do: loop_valve(3, 1)
+  def valve_a2, do: loop_valve(1, 2)
+  def valve_b2, do: loop_valve(2, 2)
+  def valve_c2, do: loop_valve(3, 2)
+  def valve_a3, do: loop_valve(1, 3)
+  def valve_b3, do: loop_valve(2, 3)
+  def valve_c3, do: loop_valve(3, 3)
+  def valve_a4, do: loop_valve(1, 4)
+  def valve_b4, do: loop_valve(2, 4)
+  def valve_c4, do: loop_valve(3, 4)
+  def valve_a5, do: loop_valve(1, 5)
+  def valve_b5, do: loop_valve(2, 5)
+  def valve_c5, do: loop_valve(3, 5)
+  def valve_a6, do: loop_valve(1, 6)
+  def valve_b6, do: loop_valve(2, 6)
+  def valve_c6, do: loop_valve(3, 6)
 
   def steam_gen_drain(loop) when loop in 1..3,
     do: %ActuatedValve{

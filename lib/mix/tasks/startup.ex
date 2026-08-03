@@ -29,6 +29,10 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Once that's done, SteamFlow will take over MSCV and bypass control.
   @startup_mscv 10
 
+  # Loop isolation valves that must be open before starting the loop's pumps.
+  # Valve 4 (steam generator to turbine) is not needed to start the pumps.
+  @required_loop_valves [1, 2, 3, 5, 6]
+
   # Start primary pumps at this speed:
   @startup_primary_speed Op.PrimaryPumps.speed_range().first
   # Start cooling pumps at this speed:
@@ -88,6 +92,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     check_power_source()
     test_control_rods()
+    check_loop_readiness(loops)
 
     {:ok, _} = Op.CoreFill.start_link()
     {:ok, _} = Op.PCSTFill.start_link()
@@ -214,6 +219,59 @@ defmodule Mix.Tasks.AutoNuke.Startup do
         API.put(key, init_pos)
       end
     end)
+  end
+
+  def check_loop_readiness(loops) do
+    UI.console("Coolant System")
+    check_loop_pumps(loops)
+    ensure_loop_valves_open(loops)
+  end
+
+  defp check_loop_pumps(loops) do
+    installed = API.get_json("INSTALLED_LOOPS_JSON")
+
+    missing =
+      loops
+      |> Enum.flat_map(fn loop ->
+        letter = API.Valves.loop_letter(loop)
+        pumps = Map.fetch!(installed, "Loop_#{loop - 1}")
+
+        [
+          {"Primary_Pump", "Pump #{letter}1 (Loop #{loop} primary)"},
+          {"Secondary_Pump", "Pump #{letter}2 (Loop #{loop} secondary)"}
+        ]
+        |> Enum.reject(fn {key, _name} -> Map.fetch!(pumps, key) end)
+        |> Enum.map(fn {_key, name} -> name end)
+      end)
+
+    case missing do
+      [] ->
+        :ok
+
+      missing ->
+        missing |> Enum.each(&UI.warn("#{&1} is not installed."))
+        Mix.raise("Missing pumps — install them, or start up without their loops.")
+    end
+  end
+
+  def closed_loop_valves(loops) do
+    for loop <- loops,
+        num <- @required_loop_valves,
+        valve = API.Valves.loop_valve(loop, num),
+        API.Valves.get_open_percent(valve) < 100,
+        do: valve
+  end
+
+  defp ensure_loop_valves_open(loops) do
+    case closed_loop_valves(loops) do
+      [] ->
+        UI.success("All loop valves are open.")
+
+      closed ->
+        names = closed |> Enum.map(& &1.short_name) |> Enum.join(", ")
+        UI.notice("Loop valves not fully open: #{names} — opening them now.")
+        UI.Valves.bulk_open(closed)
+    end
   end
 
   defp start_pressurizer do
