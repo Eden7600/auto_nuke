@@ -48,8 +48,13 @@ defmodule AutoNuke.API do
   defp to_integer(str), do: String.to_integer(str)
 
   # Handles either `62.3` or just `62`.
+  # Games running in locales with a decimal comma send `62,3` instead.
   defp to_float(str) do
-    {float, ""} = Float.parse(str)
+    {float, ""} =
+      str
+      |> String.replace(",", ".")
+      |> Float.parse()
+
     float
   end
 end
