@@ -480,6 +480,27 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     vacuum
   end
 
+  # There's no API switch for the external grid feed, so the most we can
+  # do is notice it's missing and say so — loudly, because losing the
+  # turbines with no external power and no diesels stops the cascade.
+  defp check_external_power do
+    external = safe_number(fn -> API.Power.get_external_used_kw() end, 0.0)
+    batteries = safe_number(fn -> API.get_float("EMERGENCY_BATTERIES_POWER_OUTPUT_KW") end, 0.0)
+
+    cond do
+      external > 0.0 ->
+        UI.set("External Power", "ON (#{fmt(external)} kW)")
+
+      batteries > 0.0 ->
+        UI.warn("External power is OFF — on batteries. Switch the grid feed on in-game.")
+        Logger.warning("[Meltdown] External power is off; running on batteries.")
+
+      true ->
+        UI.warn("External power is OFF — switch the grid feed on in-game (no API for it).")
+        Logger.warning("[Meltdown] External power is off and nothing is carrying the plant.")
+    end
+  end
+
   defp starting_mscv([]), do: 100.0
 
   defp starting_mscv([sg | _]) do
@@ -514,6 +535,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   end
 
   defp start_emergency_generators do
+    check_external_power()
+
     case safe(fn -> Op.EmergencyPower.generator_statuses() end) do
       statuses when is_list(statuses) ->
         case for {gen, "INACTIVO"} <- statuses, do: gen do
