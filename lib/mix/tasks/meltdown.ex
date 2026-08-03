@@ -85,6 +85,9 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   # Vacuum (a 0-1 fraction) has collapsed far enough below this that the
   # turbines are done for; no need to watch it all the way down:
   @vacuum_gone 0.6
+  # Minutes of real time to starve the condenser over. Deliberately slow:
+  # the whole point is that cooling fades rather than drops.
+  @cooling_walkdown_minutes 8.0
   # Get the diesels running before the turbines stop carrying the plant:
   @generator_start_vacuum 80.0
   # A generator making less than this (MW) has stopped generating:
@@ -344,14 +347,23 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     if start_speed <= 0.1 do
       UI.set("Condenser Cooling Pump", "ALREADY STOPPED")
     else
-      UI.set("Condenser Cooling Pump", "WALK DOWN TO 0")
+      # Paced by duration, not by the global rate: however fast the pump
+      # was running, starving the condenser takes the same long while.
+      walkdown_ticks = round(@cooling_walkdown_minutes * @ticks_per_minute)
+      step = start_speed / walkdown_ticks
+
+      UI.set(
+        "Condenser Cooling Pump",
+        "WALK DOWN FROM #{fmt(start_speed)}% OVER #{fmt(@cooling_walkdown_minutes)} MIN"
+      )
 
       bar(
         "Cooling",
         PBConfig.target(start_speed, 0.0, "%", 1),
-        fn -> cooling_step(cooling_pump, state.step, start_speed) end,
+        fn -> cooling_step(cooling_pump, step, start_speed) end,
         fn actual -> actual <= 0.1 end,
-        state.limit
+        # Its own budget — the global patience is far shorter than this.
+        round(walkdown_ticks * 1.5)
       )
     end
 
