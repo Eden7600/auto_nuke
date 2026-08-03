@@ -16,7 +16,7 @@ defmodule AutoNuke.Tui.DashboardTest do
       notice: nil,
       ops: %{cursor: 0, list: [], actions: nil, action_cursor: 0, input: nil, flash: nil},
       drills: %{cursor: 0, input: nil, flash: nil},
-      history: %{core_temp: [], net_mw: [], sg_pressure: [], rods: []},
+      history: %{core_temp: [], net_mw: [], sg_pressure: [], rods: [], xenon: []},
       diag: %{data: :err, fetched_at: nil, fetching_since: nil},
       health_scroll: 0
     }

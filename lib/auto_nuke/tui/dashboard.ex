@@ -47,7 +47,7 @@ defmodule AutoNuke.Tui.Dashboard do
       notice: nil,
       ops: %{cursor: 0, list: [], actions: nil, action_cursor: 0, input: nil, flash: nil},
       drills: %{cursor: 0, input: nil, flash: nil},
-      history: %{core_temp: [], net_mw: [], sg_pressure: [], rods: []},
+      history: %{core_temp: [], net_mw: [], sg_pressure: [], rods: [], xenon: []},
       diag: %{data: :err, fetched_at: nil, fetching_since: nil},
       health_scroll: 0
     }
@@ -134,7 +134,8 @@ defmodule AutoNuke.Tui.Dashboard do
       core_temp: Enum.take(history.core_temp ++ [data.core.temp], -@history_len),
       net_mw: Enum.take(history.net_mw ++ [net_mw], -@history_len),
       sg_pressure: Enum.take(history.sg_pressure ++ [sg_avg], -@history_len),
-      rods: Enum.take(history.rods ++ [rods_avg], -@history_len)
+      rods: Enum.take(history.rods ++ [rods_avg], -@history_len),
+      xenon: Enum.take(history.xenon ++ [data.core.xenon], -@history_len)
     }
   end
 
@@ -939,9 +940,39 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(row + 4, col + 2, "Fill #{fmt(core.fill, "m³", 0)}")
     |> spark_after(row + 1, col, temp_text, history.core_temp, w)
     |> spark_after(row + 2, col, rods_text, history.rods, w)
+    |> poison_line(row + 3, col, core, history, w)
     |> Canvas.put_text(row + 1, col + w - 24, "PZR #{fmt(pzr.temp, "°C", 0)}")
     |> Canvas.put_text(row + 2, col + w - 24, "    #{fmt(pzr.pressure, "bar", 1)}")
     |> Canvas.put_text(row + 3, col + w - 24, "    heat #{onoff(pzr.heaters)}")
+  end
+
+  # Xenon/iodine readout with trend sparkline, sharing the Boron row.
+  defp poison_line(canvas, row, col, core, history, w) do
+    start = col + 24
+    budget = col + w - 26 - start
+
+    if budget >= 12 do
+      xe_style =
+        case core.xenon do
+          xe when is_number(xe) and xe > 80 -> [:red, :bright]
+          xe when is_number(xe) and xe > 70 -> [:yellow]
+          _ -> []
+        end
+
+      Canvas.put_segments(
+        canvas,
+        row,
+        start,
+        [
+          {"Xe #{fmt(core.xenon, "", 1)} ", xe_style},
+          {Canvas.sparkline(history.xenon, 10) <> " ", [:green]},
+          {"I #{fmt(core.iodine, "", 1)}", [:faint]}
+        ],
+        budget
+      )
+    else
+      canvas
+    end
   end
 
   # Draw a sparkline after `text`, in whatever room remains before the

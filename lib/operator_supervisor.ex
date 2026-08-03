@@ -16,7 +16,8 @@ defmodule AutoNuke.OperatorSupervisor do
     AutoNuke.Operator.CondenserFill,
     AutoNuke.Operator.CondenserCooling,
     AutoNuke.Operator.EmergencyPower,
-    AutoNuke.Operator.ResistorBanks
+    AutoNuke.Operator.ResistorBanks,
+    AutoNuke.Operator.XenonGuard
   ]
 
   def start_link(opts) do

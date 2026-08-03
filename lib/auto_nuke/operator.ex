@@ -17,6 +17,7 @@ defmodule AutoNuke.Operator do
   def assigned_tick(Op.CondenserCooling), do: 4
   def assigned_tick(Op.EmergencyPower), do: 1
   def assigned_tick(Op.ResistorBanks), do: 3
+  def assigned_tick(Op.XenonGuard), do: 2
 
   def assigned_tick_modulo(Op.PCSTFill), do: 25
   def assigned_tick_modulo(_), do: 5

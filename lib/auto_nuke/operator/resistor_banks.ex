@@ -124,9 +124,10 @@ defmodule AutoNuke.Operator.ResistorBanks do
     generated - API.Power.get_used_kw()
   end
 
-  defp enabled?, do: API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH")
+  def enabled?, do: API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH")
 
-  defp enable_banks do
+  # Also used by XenonGuard's burn-off procedure.
+  def enable_banks do
     API.put("RESISTOR_BANKS_MAIN_SWITCH", true)
 
     API.get_json("RESISTOR_BANKS_JSON")
@@ -138,7 +139,7 @@ defmodule AutoNuke.Operator.ResistorBanks do
     end)
   end
 
-  defp disable_banks do
+  def disable_banks do
     1..4 |> Enum.each(&API.put("RESISTOR_BANK_0#{&1}_SWITCH", false))
     API.put("RESISTOR_BANKS_MAIN_SWITCH", false)
   end

@@ -67,9 +67,17 @@ defmodule AutoNuke.Tui.Data do
       boost("SecondaryFill L2", secondary_boost(2)),
       boost("SecondaryFill L3", secondary_boost(3)),
       boost("CondenserFill", safe_call(Op.CondenserFill, :get_boost_mode)),
-      boost("CondenserCooling", safe_call(Op.CondenserCooling, :get_boost_mode))
+      boost("CondenserCooling", safe_call(Op.CondenserCooling, :get_boost_mode)),
+      xenon_burn()
     ]
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp xenon_burn do
+    case safe_call(Op.XenonGuard, :burning?) do
+      true -> %{op: "XenonGuard", desc: "burning off xenon"}
+      _ -> nil
+    end
   end
 
   defp steam_flow_override do
@@ -137,6 +145,7 @@ defmodule AutoNuke.Tui.Data do
     |> add_issue("Em. generator 2 maintenance", fn ->
       API.get_boolean("EMERGENCY_GENERATOR_2_MAINTENANCE_NEEDED")
     end)
+    |> add_issue("Xenon high", fn -> API.get_float("CORE_XENON_CUMULATIVE") > 80 end)
     |> Enum.reverse()
     |> Kernel.++(safe_list(&panel_issues/0))
   end
@@ -191,7 +200,9 @@ defmodule AutoNuke.Tui.Data do
         target: :err,
         rods: Enum.map(1..9, &{&1, :err}),
         boron_ppm: :err,
-        fill: :err
+        fill: :err,
+        xenon: :err,
+        iodine: :err
       },
       pzr: %{temp: :err, pressure: :err, heaters: :err},
       loops:
@@ -252,7 +263,9 @@ defmodule AutoNuke.Tui.Data do
       target: safe_call(Op.ControlRods, :get_target),
       rods: Enum.map(1..9, &{&1, safe(fn -> rod_position(&1) end)}),
       boron_ppm: safe(fn -> API.get_float("CHEM_BORON_PPM") end),
-      fill: safe(fn -> API.Vessels.get_fill_gauge(@core_vessel) end)
+      fill: safe(fn -> API.Vessels.get_fill_gauge(@core_vessel) end),
+      xenon: safe(fn -> API.get_float("CORE_XENON_CUMULATIVE") end),
+      iodine: safe(fn -> API.get_float("CORE_IODINE_CUMULATIVE") end)
     }
   end
 
@@ -312,7 +325,8 @@ defmodule AutoNuke.Tui.Data do
     CondenserFill: Op.CondenserFill,
     CondenserCooling: Op.CondenserCooling,
     EmergencyPower: Op.EmergencyPower,
-    ResistorBanks: Op.ResistorBanks
+    ResistorBanks: Op.ResistorBanks,
+    XenonGuard: Op.XenonGuard
   ]
 
   defp operators do
