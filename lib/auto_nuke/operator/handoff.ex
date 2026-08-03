@@ -31,7 +31,9 @@ defmodule AutoNuke.Operator.Handoff do
     Op.CoreFill,
     Op.BoronLevel,
     Op.CondenserFill,
-    Op.CondenserCooling
+    Op.CondenserCooling,
+    Op.EmergencyPower,
+    Op.ResistorBanks
   ]
 
   # Registered helper loops spawned by the startup task.

@@ -92,6 +92,13 @@ The pre-TUI workflow still works (and is what the TUI uses under the hood):
   - Tries to maintain a level between 35% and 65% (i.e. within 15% of half full).
   - If level increases beyond 65%, opens the drain valve until it drops to below 60%.
   - If level drops below 35%, runs the freight pump until level is back up to 40%.
+- [`EmergencyPower`](lib/auto_nuke/operator/emergency_power.ex) - Backup power management.
+  - Detects a station blackout (no external or turbine supply — batteries draining) and starts the emergency diesel generators.
+  - Stops the generators it started once normal supply returns; generators you started by hand are left alone.
+  - Warns about low diesel fuel and pending generator maintenance.
+- [`ResistorBanks`](lib/auto_nuke/operator/resistor_banks.ex) - Overproduction protection.
+  - Keeps the resistor banks off in steady state (power fed to resistors is power not sold).
+  - Enables them when supply sustains above 108% of demand (approaching the 110% scoring ceiling), disables them again after a sustained calm period.
 - [`CondenserCooling`](lib/auto_nuke/operators/condenser_cooling.ex) - Manages the condenser cooling pump.
   - Runs the pump at the lowest speed it can get away with (down to 10%) without temperature climbing.
   - Uses a probe/backoff strategy, where it will (very slowly) reduce speed until temperature starts climbing, then back off and leave it alone for 15+ minutes at a time.

@@ -23,7 +23,8 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     steam_flow: {Op.SteamFlow, "Steam Flow Operator"},
     vacuum_tank: {Op.VacuumTank, "Vacuum Tank Operator"},
     condenser_cooling: {Op.CondenserCooling, "Condenser Cooling Operator"},
-    boron_level: {Op.BoronLevel, "Boron Level Operator"}
+    boron_level: {Op.BoronLevel, "Boron Level Operator"},
+    resistor_banks: {Op.ResistorBanks, "Resistor Banks Operator"}
   }
 
   def run([]) do
@@ -37,7 +38,10 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
     open_breakers()
     set_shutdown_mode()
 
+    # ResistorBanks goes first — shutdown drives the banks itself and the
+    # operator would fight it once the supply ratio collapses.
     disable_remotes(node, [
+      :resistor_banks,
       :core_temp,
       :control_rods,
       :primary_pumps,

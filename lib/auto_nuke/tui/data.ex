@@ -301,7 +301,9 @@ defmodule AutoNuke.Tui.Data do
     CoreFill: Op.CoreFill,
     BoronLevel: Op.BoronLevel,
     CondenserFill: Op.CondenserFill,
-    CondenserCooling: Op.CondenserCooling
+    CondenserCooling: Op.CondenserCooling,
+    EmergencyPower: Op.EmergencyPower,
+    ResistorBanks: Op.ResistorBanks
   ]
 
   defp operators do

@@ -34,7 +34,9 @@ defmodule AutoNuke.Tui.Operators do
     {Op.CoreFill, "CoreFill", "Keeps core vessel fill level: pumps in, drains out"},
     {Op.BoronLevel, "BoronLevel", "Doses or filters boron based on rod insertion"},
     {Op.CondenserFill, "CondenserFill", "Keeps condenser level 35-65%: pump or drain"},
-    {Op.CondenserCooling, "CondenserCooling", "Runs the cooling pump as slow as it can get away with"}
+    {Op.CondenserCooling, "CondenserCooling", "Runs the cooling pump as slow as it can get away with"},
+    {Op.EmergencyPower, "EmergencyPower", "Starts diesel generators on station blackout"},
+    {Op.ResistorBanks, "ResistorBanks", "Enables resistor banks when overproducing"}
   ]
 
   @doc "Current operator list with status."
