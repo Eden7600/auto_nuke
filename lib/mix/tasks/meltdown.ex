@@ -45,9 +45,10 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
       150 kL and takes its time.
     * **Part IV — Heat sink.** Every freight pump switched on and the
       secondary circulation opened right up — helpful at first, then
-      steadily fatal as the pumps fight vessel pressure — while the core
-      pool finishes draining and equipment failures are called out as
-      they happen.
+      steadily fatal as the pumps fight vessel pressure — the
+      pressurizer vent and spray both opened so the core loses pressure
+      control entirely, and the core pool finishes draining. Equipment
+      failures are called out as they happen.
     * **Part V — Prompt criticality.** Rods withdrawn and primary
       circulation throttled to nothing, on a core that has been losing
       boron since Part I.
@@ -543,6 +544,16 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     Enum.each(@loops, fn loop ->
       safe(fn -> API.Pumps.secondary(loop) |> API.Pumps.set_speed(100) end)
     end)
+
+    # Venting and spraying the pressurizer at once: the core loses
+    # pressure control from both directions.
+    UI.set("Pressurizer Vent", "OPEN")
+    safe(fn -> API.Valves.set_actuator(API.Valves.pzr_vent(), "OPEN") end)
+
+    UI.set("Pressurizer Cooling", "OPEN")
+    safe(fn -> API.Valves.set_actuator(API.Valves.pzr_cooling(), "OPEN") end)
+
+    UI.notice("Pressurizer is open to the room and spraying.")
 
     # Draining since Part III; re-assert in case anything reset it.
     safe(fn -> API.put("CORE_POOL_PUMP", "REMOVE") end)
