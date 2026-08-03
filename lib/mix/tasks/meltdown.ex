@@ -221,18 +221,63 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   defp start_stripping_boron do
     stand_down(Op.BoronLevel, "Boron Level Operator")
 
+    # The ion exchange only removes anything if its inlet and outlet are
+    # open — and those are manual valves, so all we can do is look.
+    if ion_exchange_open?() do
+      UI.set("Ion Exchange Valves", "OPEN")
+    else
+      UI.warn("Ion exchange inlet/outlet are SHUT — open them in-game or no boron comes out.")
+      Logger.warning("[Meltdown] Ion exchange valves are shut; boron will not fall.")
+    end
+
     UI.set("Boron Dosing", "BLOCKED")
-    safe(fn -> API.Pumps.set_speed(API.Pumps.boron_dosing(), 0) end)
+    assert_speed(API.Pumps.boron_dosing(), 0, "CHEM_BORON_DOSAGE_ORDERED")
 
     UI.set("Ion Exchange", "MAXIMUM")
-    safe(fn -> API.Pumps.set_speed(API.Pumps.boron_filter(), 100) end)
+    assert_speed(API.Pumps.boron_filter(), 100, "CHEM_BORON_FILTER_ORDERED")
 
     UI.notice(
-      "Boron is coming out of the core (#{fmt(boron_ppm())} ppm) and none is going back in."
+      "Boron #{fmt(boron_ppm())} ppm, ion exchange running at #{fmt(filter_speed())}%."
     )
   end
 
+  defp ion_exchange_open? do
+    safe(fn -> API.Valves.get_opened?(API.Valves.ion_inlet()) end) == true and
+      safe(fn -> API.Valves.get_opened?(API.Valves.ion_outlet()) end) == true
+  end
+
+  # Writes don't always take first time; confirm against the ordered
+  # reading before moving on.
+  defp assert_speed(pump, speed, ordered_key, attempts \\ 10)
+
+  defp assert_speed(_pump, speed, ordered_key, 0) do
+    UI.warn("#{ordered_key} won't settle at #{speed}.")
+  end
+
+  defp assert_speed(pump, speed, ordered_key, attempts) do
+    if safe_number(fn -> API.get_float(ordered_key) end, -1.0) == speed do
+      :ok
+    else
+      safe(fn -> API.Pumps.set_speed(pump, speed) end)
+      Process.sleep(300)
+      assert_speed(pump, speed, ordered_key, attempts - 1)
+    end
+  end
+
+  # The cascade runs for a long time; make sure nothing has quietly put
+  # the chemistry back the way it was.
+  defp keep_stripping_boron do
+    if safe_number(fn -> API.get_float("CHEM_BORON_FILTER_ORDERED") end, 0.0) < 100.0 do
+      safe(fn -> API.Pumps.set_speed(API.Pumps.boron_filter(), 100) end)
+    end
+
+    if safe_number(fn -> API.get_float("CHEM_BORON_DOSAGE_ORDERED") end, 0.0) > 0.0 do
+      safe(fn -> API.Pumps.set_speed(API.Pumps.boron_dosing(), 0) end)
+    end
+  end
+
   defp boron_ppm, do: safe_number(fn -> API.get_float("CHEM_BORON_PPM") end, 0.0)
+  defp filter_speed, do: safe_number(fn -> API.get_float("CHEM_BORON_FILTER_ACTUAL") end, 0.0)
 
   # Accumulates its own history: true once output has been flat for a
   # sustained stretch, not merely flat for an instant.
@@ -273,6 +318,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   defp part_2_destroy_turbines(state) do
     UI.console("PART II — DESTROY THE TURBINES")
+    keep_stripping_boron()
 
     stand_down(Op.VacuumTank, "Vacuum Tank Operator")
     stand_down(Op.CondenserCooling, "Condenser Cooling Operator")
@@ -504,6 +550,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
   defp part_3_overpressure(state) do
     UI.console("PART III — OVERPRESSURE")
 
+    keep_stripping_boron()
+
     # These would undo the choking, the flooding and the overheating.
     stand_down(Op.SteamFlow, "Steam Flow Operator")
     stand_down(Op.SecondaryFill, "Secondary Fill Operators")
@@ -641,6 +689,8 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
 
   defp part_4_heat_sink(state) do
     UI.console("PART IV — HEAT SINK")
+    keep_stripping_boron()
+    UI.set("Boron", "#{fmt(boron_ppm())} ppm, ion exchange #{fmt(filter_speed())}%")
 
     # These would switch the freight pumps back off as levels are met.
     stand_down(Op.CoreFill, "Core Fill Operator")
@@ -763,6 +813,7 @@ defmodule Mix.Tasks.AutoNuke.Meltdown do
     stand_down(Op.ControlRods, "Control Rods Operator")
     stand_down(Op.CoreTemp, "Core Temperature Operator")
 
+    keep_stripping_boron()
     UI.notice("Boron is down to #{fmt(boron_ppm())} ppm.")
 
     pumps = Enum.map(@loops, &API.Pumps.primary/1)
