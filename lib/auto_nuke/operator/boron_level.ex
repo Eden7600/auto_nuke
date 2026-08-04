@@ -1,4 +1,21 @@
 defmodule AutoNuke.Operator.BoronLevel do
+  @moduledoc """
+  Runs the boron-heavy strategy: dose until the rods sit mostly out
+  (~25% inserted) and let boron carry the absorption.
+
+  Why (community-sourced game mechanics): boron suppresses iodine
+  production at the same power output, and iodine is what becomes xenon
+  6 game-hours later — so boron-instead-of-rods directly shrinks future
+  xenon waves. It also leaves the rods with travel, and the boron itself
+  is a reserve: when a wave drives the rods near the bottom, filtering
+  boron out is the "big extra control rod" that keeps the reaction alive
+  until the wave decays (~9 hours after forming).
+
+  Concretely: rods above the target → dose (up to 3500 ppm, past which
+  boron has no further effect); rods near the bottom → filter, spending
+  the reserve; in between → leave it alone.
+  """
+
   use GenServer
   use AutoNuke.Operator
   require Logger
@@ -21,6 +38,15 @@ defmodule AutoNuke.Operator.BoronLevel do
   # I'm told boron beyond 3500 has no effect.
   # Practically speaking, it's hard to maintain at 3500 anyway.
   @dosing_max_ppm 3500
+
+  # Rods further in than this → dose boron to push them out.
+  @rod_target 25
+  # Rods further out than this → filter boron, spending the reserve to
+  # win rod travel back (this is what rides out a xenon wave).
+  @rod_reserve 10
+  # Between the two: deadband, touch nothing.
+
+  @dosing_max_rate 50
 
   # Peform ready check once every 10 in-game seconds:
   tps = AutoNuke.Ticker.ticks_per_second()
@@ -129,25 +155,30 @@ defmodule AutoNuke.Operator.BoronLevel do
 
   def get_boron_ppm, do: API.get_float("CHEM_BORON_PPM")
 
-  defp calculate_dosing_rate(rods) when rods <= 66, do: 0
+  defp calculate_dosing_rate(rods), do: dosing_rate_for(rods, get_boron_ppm())
+  defp calculate_filter_rate(rods), do: filter_rate_for(rods, get_boron_ppm())
 
-  defp calculate_dosing_rate(rods) do
-    # Cube curve from 0 g/min at 66% rods to 50 g/min at 100% rods:
-    (50 * ((rods - 66) / 34) ** 3)
+  @doc false
+  def dosing_rate_for(rods, _ppm) when rods <= @rod_target, do: 0
+
+  def dosing_rate_for(rods, ppm) do
+    # Square curve from 0 g/min at the rod target up to 50 g/min at 100%:
+    (@dosing_max_rate * ((rods - @rod_target) / (100 - @rod_target)) ** 2)
     |> ceil()
     # Limit our rate to whatever rate will get us to 3500 ppm.
-    |> min(@dosing_max_ppm - get_boron_ppm())
+    |> min(@dosing_max_ppm - ppm)
     |> max(0)
   end
 
-  defp calculate_filter_rate(rods) when rods >= 33, do: 0
+  @doc false
+  def filter_rate_for(rods, _ppm) when rods >= @rod_reserve, do: 0
 
-  defp calculate_filter_rate(rods) do
-    # Square curve from 0% at 33% rods up to 100% at 0% rods:
-    (100 * ((33 - rods) / 33) ** 2)
+  def filter_rate_for(rods, ppm) do
+    # Square curve from 0% at the reserve line up to 100% at 0% rods:
+    (100 * ((@rod_reserve - rods) / @rod_reserve) ** 2)
     |> ceil()
     # Below 100 ppm, start throttling back.
-    |> min(get_boron_ppm() |> floor())
+    |> min(ppm |> floor())
     |> max(0)
     |> min(100)
   end

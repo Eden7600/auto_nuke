@@ -59,10 +59,10 @@ The pre-TUI workflow still works (and is what the TUI uses under the hood):
   - Sets maximum speed (49%) at 400°C.
   - Everything inbetween scales linearly between those two extremes.
   - The net effect is that heat flow scales with temperature in order to deliver a continuous, stable, and predictable amount of heat.
-- [`BoronLevel`](lib/auto_nuke/operators/boron_level.ex) — Increases or decreases boron concentration to maintain reactor control.
-  - If control rods are more than 50% inserted, will begin slowly dosing the core with more boron (to hopefully reduce iodine production).
-  - If control rods are less than 20% inserted, will begin filtering boron out of the core.
-  - Both of these use exponential curves, such that dosing and filtering start out slow, but climb rapidly as you approach 100% and 0% rods, respectively.
+- [`BoronLevel`](lib/auto_nuke/operators/boron_level.ex) — Runs the boron-heavy strategy: boron carries the absorption so the rods sit mostly out.
+  - If control rods are more than 25% inserted, doses boron (up to 3500 ppm, past which it has no further effect) to push them out — boron suppresses iodine production at the same power, which directly shrinks the xenon wave scheduled 6 game-hours out.
+  - If control rods drop below 10% inserted (a xenon wave eating the margin), filters boron out — spending the chemical reserve like a big extra control rod to keep the reaction alive while the wave passes.
+  - Both use square curves, so dosing and filtering start out slow but climb rapidly as rods approach 100% and 0% respectively; between 10% and 25% it touches nothing.
 
 ### Other operators
 
