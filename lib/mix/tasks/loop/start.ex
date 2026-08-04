@@ -31,12 +31,22 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     IO.puts("#{@loop_emoji} Starting loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
 
+    # Pumps present, isolation valves open (a stopped loop's are closed):
+    Startup.check_loop_readiness([loop])
+
     UI.tablet("AutoNuke Remote Control")
     UI.Operators.resistor_banks_hold({Op.ResistorBanks, remote_node})
 
     capacity = Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
-    Op.SecondaryFill.stop({loop, remote_node})
+
+    # Idle after a loop.stop (or freshly supervisor-restarted) — stopping
+    # it is best-effort; the loop intent keeps it out of the way anyway.
+    try do
+      Op.SecondaryFill.stop({loop, remote_node})
+    catch
+      :exit, _ -> :ok
+    end
 
     Startup.start_primary_circulation([loop], nil)
     Startup.start_turbine([loop])

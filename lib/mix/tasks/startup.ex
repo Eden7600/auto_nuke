@@ -29,10 +29,6 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # Once that's done, SteamFlow will take over MSCV and bypass control.
   @startup_mscv 10
 
-  # Loop isolation valves that must be open before starting the loop's pumps.
-  # Valve 4 (steam generator to turbine) is not needed to start the pumps.
-  @required_loop_valves [1, 2, 3, 5, 6]
-
   # Start primary pumps at this speed:
   @startup_primary_speed Op.PrimaryPumps.speed_range().first
   # Start cooling pumps at this speed:
@@ -267,8 +263,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
   def closed_loop_valves(loops) do
     for loop <- loops,
-        num <- @required_loop_valves,
-        valve = API.Valves.loop_valve(loop, num),
+        valve <- API.Valves.loop_isolation_valves(loop),
         API.Valves.get_open_percent(valve) < 100,
         do: valve
   end

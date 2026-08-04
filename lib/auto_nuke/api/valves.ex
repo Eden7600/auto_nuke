@@ -109,6 +109,12 @@ defmodule AutoNuke.API.Valves do
     }
   end
 
+  # The loop's actuated isolation valves, except the turbine inlet (4) —
+  # despite the A4/B4/C4 labeling, that one is not treated as part of the
+  # set. These are opened before a loop enters service and closed when it
+  # is taken out of service.
+  def loop_isolation_valves(loop), do: [1, 2, 3, 5, 6] |> Enum.map(&loop_valve(loop, &1))
+
   def valve_a1, do: loop_valve(1, 1)
   def valve_b1, do: loop_valve(2, 1)
   def valve_c1, do: loop_valve(3, 1)

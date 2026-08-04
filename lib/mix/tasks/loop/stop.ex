@@ -95,6 +95,10 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       fn -> SteamGen.set_vent_open(steam_gen, false) end
     )
 
+    UI.console("Coolant System")
+    API.Pumps.secondary(loop) |> UI.Pumps.stop()
+    API.Valves.loop_isolation_valves(loop) |> UI.Valves.bulk_close()
+
     UI.tablet("AutoNuke Remote Control")
     UI.Operators.resistor_banks_release({ResistorBanks, remote_node})
   end

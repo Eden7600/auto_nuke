@@ -158,7 +158,17 @@ defmodule AutoNuke.Operator.SecondaryFill do
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info({:tick, _}, %State{loop: loop, speed: old_speed} = state) do
+  def handle_info({:tick, _}, %State{loop: loop} = state) do
+    # An out-of-service loop has its isolation valves shut — leave its
+    # pump alone. (Survives a supervisor restart, unlike being stopped.)
+    if AutoNuke.LoopIntent.intents()[loop] == :stopped do
+      {:noreply, state}
+    else
+      do_tick(state)
+    end
+  end
+
+  defp do_tick(%State{loop: loop, speed: old_speed} = state) do
     state = maybe_expire_boost_mode(state)
 
     steam_gen = state.steam_gen
