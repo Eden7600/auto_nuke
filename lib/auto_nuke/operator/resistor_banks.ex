@@ -33,12 +33,26 @@ defmodule AutoNuke.Operator.ResistorBanks do
   @fallback_target 1.0
 
   defmodule State do
-    defstruct high: 0, low: 0
+    defstruct high: 0, low: 0, hold: false
   end
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, nil, opts)
+  end
+
+  @doc """
+  For tasks that drive the banks by hand (loop start/stop): suspend
+  automatic control, and `release/1` afterwards to resume it.
+  Tolerates the operator not running at all.
+  """
+  def hold(server \\ __MODULE__), do: set_hold(server, true)
+  def release(server \\ __MODULE__), do: set_hold(server, false)
+
+  defp set_hold(server, enabled) do
+    GenServer.call(server, {:set_hold, enabled})
+  catch
+    :exit, _ -> {:error, :not_running}
   end
 
   @impl true
@@ -49,7 +63,25 @@ defmodule AutoNuke.Operator.ResistorBanks do
   end
 
   @impl true
+  def handle_call({:set_hold, hold}, _from, %State{} = state) do
+    if hold != state.hold do
+      Logger.notice(
+        @log_prefix <>
+          if(hold,
+            do: "Holding for manual bank control.",
+            else: "Resuming automatic control."
+          )
+      )
+    end
+
+    {:reply, :ok, %State{state | hold: hold, high: 0, low: 0}}
+  end
+
+  @impl true
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
+
+  @impl true
+  def handle_info({:tick, _}, %State{hold: true} = state), do: {:noreply, state}
 
   @impl true
   def handle_info({:tick, _}, %State{} = state) do

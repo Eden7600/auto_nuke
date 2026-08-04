@@ -107,4 +107,33 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
 
     refute_put("RESISTOR_BANKS_MAIN_SWITCH")
   end
+
+  test "hold suppresses automatic control until released" do
+    state = init()
+    {:reply, :ok, state} = ResistorBanks.handle_call({:set_hold, true}, nil, state)
+
+    # Held: ticks are ignored entirely — no reads, no switch commands.
+    state =
+      Enum.reduce(1..5, state, fn _, acc ->
+        {:noreply, acc} = ResistorBanks.handle_info({:tick, @tick}, acc)
+        acc
+      end)
+
+    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
+
+    # Released: streaks restart from zero, automatic control resumes.
+    {:reply, :ok, state} = ResistorBanks.handle_call({:set_hold, false}, nil, state)
+    state = state |> tick(1.12) |> tick(1.12)
+
+    MockAPI.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
+    MockAPI.mock_get("RESISTOR_BANKS_JSON", @banks_json)
+    tick(state, 1.12)
+
+    assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == true
+  end
+
+  test "hold and release tolerate a stopped operator" do
+    assert ResistorBanks.hold(__MODULE__.NotRunning) == {:error, :not_running}
+    assert ResistorBanks.release(__MODULE__.NotRunning) == {:error, :not_running}
+  end
 end

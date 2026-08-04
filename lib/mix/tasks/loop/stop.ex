@@ -6,7 +6,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI
-  alias AutoNuke.Operator.SteamFlow
+  alias AutoNuke.Operator.{ResistorBanks, SteamFlow}
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -25,6 +25,9 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     UI.init()
     IO.puts("#{@loop_emoji} Stopping loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
+
+    UI.tablet("AutoNuke Remote Control")
+    UI.Operators.resistor_banks_hold({ResistorBanks, remote_node})
 
     Startup.enable_resistor_bank()
 
@@ -83,6 +86,8 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       fn -> !SteamGen.get_vent_open?(steam_gen) end,
       fn -> SteamGen.set_vent_open(steam_gen, false) end
     )
-  end
 
+    UI.tablet("AutoNuke Remote Control")
+    UI.Operators.resistor_banks_release({ResistorBanks, remote_node})
+  end
 end

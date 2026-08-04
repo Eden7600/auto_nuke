@@ -31,6 +31,9 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     IO.puts("#{@loop_emoji} Starting loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
 
+    UI.tablet("AutoNuke Remote Control")
+    UI.Operators.resistor_banks_hold({Op.ResistorBanks, remote_node})
+
     capacity = Startup.enable_resistor_bank()
     Startup.start_secondary_circulation([loop])
     Op.SecondaryFill.stop({loop, remote_node})
@@ -72,6 +75,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     # The plant's SteamFlow has taken over; retire the temporary one.
     # (In task.sh mode it died with the VM; in the TUI it must be stopped.)
     GenServer.stop(temp_steam_flow)
-  end
 
+    UI.Operators.resistor_banks_release({Op.ResistorBanks, remote_node})
+  end
 end
