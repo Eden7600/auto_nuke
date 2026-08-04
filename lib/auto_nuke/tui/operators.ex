@@ -151,12 +151,16 @@ defmodule AutoNuke.Tui.Operators do
       %{
         label: "Set power override (%)",
         params: [%{label: "Percent", hint: "0-100"}],
-        run: fn [p] -> attempt(fn -> Op.SteamFlow.set_target_override_percent(to_num(p)) end) end
+        run: fn [p] ->
+          attempt(fn -> Op.SteamFlow.set_target_override_percent(to_num(p), :never) end)
+        end
       },
       %{
         label: "Set power override (MW)",
         params: [%{label: "Megawatts", hint: "e.g. 120"}],
-        run: fn [mw] -> attempt(fn -> Op.SteamFlow.set_target_override_mw(to_num(mw)) end) end
+        run: fn [mw] ->
+          attempt(fn -> Op.SteamFlow.set_target_override_mw(to_num(mw), :never) end)
+        end
       },
       %{
         label: "Clear power override",
@@ -173,7 +177,7 @@ defmodule AutoNuke.Tui.Operators do
       %{
         label: "Set temperature override (°C)",
         params: [%{label: "Temperature", hint: "e.g. 330"}],
-        run: fn [t] -> attempt(fn -> Op.CoreTemp.set_override(to_num(t)) end) end
+        run: fn [t] -> attempt(fn -> Op.CoreTemp.set_override(to_num(t), :never) end) end
       },
       %{
         label: "Clear temperature override",
