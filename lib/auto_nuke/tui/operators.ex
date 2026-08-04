@@ -37,7 +37,7 @@ defmodule AutoNuke.Tui.Operators do
     {Op.CondenserCooling, "CondenserCooling", "Runs the cooling pump as slow as it can get away with"},
     {Op.EmergencyPower, "EmergencyPower", "Starts diesel generators on station blackout"},
     {Op.ResistorBanks, "ResistorBanks", "Enables resistor banks when overproducing"},
-    {Op.XenonGuard, "XenonGuard", "Burns off rising xenon before it stalls the core"}
+    {Op.XenonGuard, "XenonGuard", "Watches iodine and xenon; alarms before a stall"}
   ]
 
   @doc "Current operator list with status."

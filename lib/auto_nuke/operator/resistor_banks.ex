@@ -160,7 +160,6 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   def enabled?, do: API.get_boolean("RESISTOR_BANKS_MAIN_SWITCH")
 
-  # Also used by XenonGuard's burn-off procedure.
   def enable_banks do
     API.put("RESISTOR_BANKS_MAIN_SWITCH", true)
 

@@ -99,10 +99,10 @@ The pre-TUI workflow still works (and is what the TUI uses under the hood):
 - [`ResistorBanks`](lib/auto_nuke/operator/resistor_banks.ex) - Resistor bank management.
   - Keeps the resistor banks off while supply tracks the target (power fed to resistors is power not sold).
   - Enables them whenever supply strays outside ±8% of SteamFlow's current target — proactively, since the plant gets in trouble at 10% — and disables them again once supply has hugged the target for a sustained stretch.
-- [`XenonGuard`](lib/auto_nuke/operator/xenon_guard.ex) - Xenon poisoning prevention.
-  - Watches the net trend of core xenon (burn-off scales with core flux, so the cumulative trend is the real signal).
-  - When xenon is high and rising while the rods still have travel, runs a burn-off: resistor banks on plus a SteamFlow power override above demand (the resistors keep the surplus from hurting the score).
-  - If the rods are already out of travel with the reaction dying, raises a loud xenon-spiral alarm instead — at that point it's SCRAM-and-wait.
+- [`XenonGuard`](lib/auto_nuke/operator/xenon_guard.ex) - Xenon poisoning watchdog.
+  - In Nucleares, iodine converts to xenon exactly 6 game-hours after it's produced (and that xenon decays ~9 hours later) — so today's xenon is yesterday's iodine, and "burning it off" with extra power just schedules a bigger wave. The guard therefore watches and warns rather than fighting the wave (riding it out is BoronLevel's job).
+  - Warns when iodine production exceeds ~3.5 — with the ETA of the wave it schedules — and when cumulative xenon crosses the 20 ceiling.
+  - If the rods are out of travel and the boron reserve is gone with the reaction dying, raises a loud xenon-spiral alarm — at that point it's SCRAM-and-wait.
 - [`CondenserCooling`](lib/auto_nuke/operators/condenser_cooling.ex) - Manages the condenser cooling pump.
   - Runs the pump at the lowest speed it can get away with (down to 10%) without temperature climbing.
   - Uses a probe/backoff strategy, where it will (very slowly) reduce speed until temperature starts climbing, then back off and leave it alone for 15+ minutes at a time.

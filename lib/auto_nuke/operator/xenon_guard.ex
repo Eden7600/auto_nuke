@@ -1,29 +1,32 @@
 defmodule AutoNuke.Operator.XenonGuard do
   @moduledoc """
-  Xenon poisoning prevention.
+  Xenon poisoning watchdog.
 
-  The game reports gross xenon production (`CORE_XENON_GENERATION`), which
-  stays high on a perfectly healthy core because burn-off scales with flux
-  and cancels it. The signal that matters is the NET trend of
-  `CORE_XENON_CUMULATIVE`.
+  How xenon actually works in Nucleares (community-sourced, not like real
+  life): iodine converts to xenon exactly 6 in-game hours after it is
+  produced, and that xenon disappears about 9 hours after forming. Today's
+  xenon is yesterday's iodine — nothing done to the core now changes the
+  wave that is already scheduled. In particular, burning xenon with extra
+  power is a trap: it burns a little now while raising iodine production
+  instantly, seeding a bigger wave 6 hours later. (This operator used to
+  run exactly that burn procedure; it made things worse.)
 
-  Absolute xenon levels are deliberately NOT used as triggers: what counts
-  as "high" depends on the plant and its power level, and guessing wrong
-  either cries wolf or misses the problem. Instead this operator watches
-  the thing that actually hurts — **reactivity margin being spent to
-  compensate for rising xenon**. `BoronLevel` keeps the rods in a 33-66%
-  band; rods driven well below that while xenon climbs means the
-  compensation loop is losing.
+  What controls xenon is iodine *production*: keep
+  `CORE_IODINE_GENERATION` under ~3.5 and the waves stay manageable. High
+  boron suppresses iodine production at the same power output — that's
+  `BoronLevel`'s boron-heavy strategy (rods mostly out, boron carrying the
+  absorption), and the boron doubles as the reserve that gets filtered
+  away to keep the reaction alive while a wave passes.
 
-    * **Burn**: xenon net-rising while rod margin is low but not gone →
-      enable the resistor banks (excess power isn't counted against the
-      score while they absorb it) and set a SteamFlow override above
-      demand. Cleared once xenon falls and margin recovers.
-    * **Spiral alarm**: margin gone (rods bottomed, boron nearly gone) with
-      the reaction dying and xenon still rising — burning is no longer
-      possible; say so, loudly.
+  So this operator watches and warns; riding out the wave is BoronLevel's
+  job:
 
-  A user-set SteamFlow override is never overridden or cleared.
+    * **Iodine watch**: production over 3.5 → warn with the expected wave
+      arrival (+6 game hours); all-clear once it settles back down.
+    * **Xenon watch**: cumulative over 20 is bad on any plant → warn that
+      a wave is in progress (it clears on its own within ~9 game hours).
+    * **Spiral alarm**: rods bottomed, boron reserve gone, reaction dying,
+      xenon still rising — nothing left to ride on; say so, loudly.
   """
 
   use GenServer
@@ -31,7 +34,6 @@ defmodule AutoNuke.Operator.XenonGuard do
   require Logger
 
   alias AutoNuke.API
-  alias AutoNuke.Operator.{ResistorBanks, SteamFlow}
   alias AutoNuke.Smoother
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
@@ -43,24 +45,35 @@ defmodule AutoNuke.Operator.XenonGuard do
   @trend_window 30
   @rising_slope 0.5
 
-  # Rod margin (percent inserted). BoronLevel aims to hold 33-66%, so
-  # being pushed below @margin_low means we're losing ground...
-  @margin_low 25.0
-  # ...and this much recovery means we've won it back.
-  @margin_ok 35.0
-  # Below this there is nothing left to withdraw — burning is impossible.
-  @min_rod_margin 10.0
-  # With rods bottomed, boron this low means no chemical margin either.
-  @min_boron 100.0
+  # Cumulative xenon above this is bad on any plant; recovered once it is
+  # back below @xenon_ok (hysteresis so the watch doesn't flap).
+  @xenon_high 20.0
+  @xenon_ok 15.0
 
-  # Burn power: this multiple of demand (resistors soak the surplus).
-  @burn_power_ratio 1.10
+  # Iodine production above this schedules an unmanageable xenon wave for
+  # 6 game-hours out; settled once back below @iodine_ok. Averaged over a
+  # window because the readout wobbles tick to tick.
+  @iodine_high 3.5
+  @iodine_ok 3.0
+  @iodine_window 10
+
+  # Iodine turns into xenon this long after being produced.
+  @wave_delay_min 6 * 60
+
+  # Below this there is no rod travel left to give.
+  @min_rod_margin 10.0
+  # With rods bottomed, boron this low means no chemical reserve either.
+  @min_boron 100.0
 
   # Re-issue the spiral alarm at most every N ticks (~2 game-minutes):
   @spiral_alarm_interval 120
 
   defmodule State do
-    defstruct history: nil, burning: false, our_override: false, next_spiral_alarm: 0
+    defstruct xenon_history: nil,
+              iodine_history: nil,
+              iodine_high: false,
+              wave: false,
+              next_spiral_alarm: 0
   end
 
   def start_link(opts \\ []) do
@@ -68,19 +81,37 @@ defmodule AutoNuke.Operator.XenonGuard do
     GenServer.start_link(__MODULE__, nil, opts)
   end
 
-  def burning?(pid \\ __MODULE__), do: GenServer.call(pid, :burning?)
+  @doc "Is a xenon wave (cumulative over the ceiling) in progress?"
+  def wave?(pid \\ __MODULE__), do: GenServer.call(pid, :wave?)
+
+  @doc "Cumulative xenon above this is bad on any plant."
+  def xenon_ceiling, do: @xenon_high
+
+  @doc "Iodine production above this makes the next wave unmanageable."
+  def iodine_limit, do: @iodine_high
 
   @impl true
   def init(nil) do
     PubSub.subscribe(self(), :ticker)
     xenon = API.get_float("CORE_XENON_CUMULATIVE")
-    Logger.info(@log_prefix <> "Started with xenon at #{Float.round(xenon, 1)}.")
-    {:ok, %State{history: Smoother.new(@trend_window) |> Smoother.add(xenon)}}
+    iodine_gen = API.get_float("CORE_IODINE_GENERATION")
+
+    Logger.info(
+      @log_prefix <>
+        "Started with xenon at #{Float.round(xenon, 1)}, " <>
+        "iodine production #{Float.round(iodine_gen, 2)}."
+    )
+
+    {:ok,
+     %State{
+       xenon_history: Smoother.new(@trend_window) |> Smoother.add(xenon),
+       iodine_history: Smoother.new(@iodine_window) |> Smoother.add(iodine_gen)
+     }}
   end
 
   @impl true
-  def handle_call(:burning?, _from, %State{} = state) do
-    {:reply, state.burning, state}
+  def handle_call(:wave?, _from, %State{} = state) do
+    {:reply, state.wave, state}
   end
 
   @impl true
@@ -89,122 +120,36 @@ defmodule AutoNuke.Operator.XenonGuard do
   @impl true
   def handle_info({:tick, t}, %State{} = state) do
     xenon = API.get_float("CORE_XENON_CUMULATIVE")
-    history = Smoother.add(state.history, xenon)
+    iodine_gen = API.get_float("CORE_IODINE_GENERATION")
     rods = API.get_float("RODS_POS_ACTUAL")
 
-    state = %State{state | history: history}
+    state = %State{
+      state
+      | xenon_history: Smoother.add(state.xenon_history, xenon),
+        iodine_history: Smoother.add(state.iodine_history, iodine_gen)
+    }
 
-    # `rate_of_change` extrapolates from a partial window, so a small
-    # wiggle during warmup reads as a steep slope. Wait for a full window
-    # before trusting the trend.
-    state =
-      if trend_ready?(history) do
-        slope = Smoother.rate_of_change(history)
-
-        cond do
-          spiral?(rods, slope) -> spiral_alarm(state, xenon, t)
-          not state.burning and should_burn?(slope, rods) -> start_burn(state, xenon, rods)
-          state.burning and should_stop?(slope, rods) -> stop_burn(state, xenon)
-          state.burning -> maybe_renew_override(state)
-          true -> state
-        end
-      else
-        state
-      end
-
-    {:noreply, state}
+    state
+    |> check_spiral(xenon, rods, t)
+    |> check_wave(xenon)
+    |> check_iodine()
+    |> then(&{:noreply, &1})
   end
 
   defp trend_ready?(%Smoother{size: size, max: max}), do: size >= max
 
-  # Our override carries an hourly expiry as a failsafe (it clears itself
-  # if this operator dies mid-burn); while alive and burning, renew it.
-  defp maybe_renew_override(%State{our_override: true} = state) do
-    case steam_flow_override() do
-      :none ->
-        burn_mw = API.Power.get_demand_mw() * @burn_power_ratio
-        SteamFlow.set_target_override_mw(burn_mw, :next_hour)
-        state
-
-      _ ->
-        state
-    end
-  end
-
-  defp maybe_renew_override(state), do: state
-
-  # -- Burn procedure ---------------------------------------------------------
-
-  # Rising xenon that we're paying for in rod margin, while enough margin
-  # remains to actually raise flux.
-  defp should_burn?(slope, rods) do
-    slope > @rising_slope and rods < @margin_low and rods > @min_rod_margin
-  end
-
-  # Stop once xenon is genuinely falling, or margin has recovered.
-  defp should_stop?(slope, rods) do
-    (slope < -@rising_slope and rods > @margin_low) or rods > @margin_ok
-  end
-
-  defp start_burn(%State{} = state, xenon, rods) do
-    Logger.warning(
-      @log_prefix <>
-        "Xenon at #{Float.round(xenon, 1)} and rising with rods down to " <>
-        "#{Float.round(rods, 1)}% — starting burn-off procedure."
-    )
-
-    ResistorBanks.enable_banks()
-
-    our_override =
-      case steam_flow_override() do
-        :absent ->
-          Logger.warning(@log_prefix <> "SteamFlow not running — burning with resistors only.")
-          false
-
-        {:set, _} ->
-          Logger.warning(@log_prefix <> "A power override is already set — not touching it.")
-          false
-
-        :none ->
-          burn_mw = API.Power.get_demand_mw() * @burn_power_ratio
-          SteamFlow.set_target_override_mw(burn_mw, :next_hour)
-          Logger.warning(@log_prefix <> "Power override set to #{Float.round(burn_mw, 1)} MW.")
-          true
-      end
-
-    %State{state | burning: true, our_override: our_override}
-  end
-
-  defp stop_burn(%State{} = state, xenon) do
-    Logger.notice(
-      @log_prefix <> "Xenon down to #{Float.round(xenon, 1)} — ending burn-off procedure."
-    )
-
-    if state.our_override do
-      case steam_flow_override() do
-        {:set, _} -> SteamFlow.clear_target_override()
-        _ -> :ok
-      end
-    end
-
-    ResistorBanks.disable_banks()
-    %State{state | burning: false, our_override: false}
-  end
-
-  # Keep our override alive while burning (it expires hourly on its own if
-  # this operator dies — deliberate failsafe).
-  defp steam_flow_override do
-    try do
-      case GenServer.call(SteamFlow, :get_override, 250) do
-        nil -> :none
-        override -> {:set, override}
-      end
-    catch
-      :exit, _ -> :absent
-    end
-  end
-
   # -- Spiral alarm -----------------------------------------------------------
+
+  # `rate_of_change` extrapolates from a partial window, so a small wiggle
+  # during warmup reads as a steep slope. Wait for a full window before
+  # trusting the trend.
+  defp check_spiral(%State{xenon_history: history} = state, xenon, rods, t) do
+    if trend_ready?(history) and spiral?(rods, Smoother.rate_of_change(history)) do
+      spiral_alarm(state, xenon, t)
+    else
+      state
+    end
+  end
 
   # No rods left to withdraw, no boron left to filter, reaction dying, and
   # xenon still climbing.
@@ -218,7 +163,7 @@ defmodule AutoNuke.Operator.XenonGuard do
     Logger.error(
       @log_prefix <>
         "XENON SPIRAL: xenon #{Float.round(xenon, 1)} rising with no rod margin left " <>
-        "and the reaction dying. Burn-off is no longer possible — " <>
+        "and the reaction dying. No reserve left to ride on — " <>
         "SCRAM and wait out the decay, or shed load immediately."
     )
 
@@ -226,4 +171,59 @@ defmodule AutoNuke.Operator.XenonGuard do
   end
 
   defp spiral_alarm(state, _xenon, _t), do: state
+
+  # -- Xenon wave watch -------------------------------------------------------
+
+  defp check_wave(%State{wave: false} = state, xenon) when xenon > @xenon_high do
+    Logger.warning(
+      @log_prefix <>
+        "Xenon at #{Float.round(xenon, 1)} — over the #{@xenon_high} ceiling. " <>
+        "A wave is in progress; it clears on its own within ~9 game hours. " <>
+        "Riding it out on rod travel and boron reserve."
+    )
+
+    %State{state | wave: true}
+  end
+
+  defp check_wave(%State{wave: true} = state, xenon) when xenon < @xenon_ok do
+    Logger.notice(@log_prefix <> "Xenon down to #{Float.round(xenon, 1)} — wave passed.")
+    %State{state | wave: false}
+  end
+
+  defp check_wave(state, _xenon), do: state
+
+  # -- Iodine production watch ------------------------------------------------
+
+  # Averaged, and only once the window is full — a single-tick spike
+  # shouldn't cry wolf.
+  defp check_iodine(%State{iodine_history: history} = state) do
+    if trend_ready?(history) do
+      check_iodine(state, Smoother.average(history))
+    else
+      state
+    end
+  end
+
+  defp check_iodine(%State{iodine_high: false} = state, avg) when avg > @iodine_high do
+    eta = AutoNuke.Time.get_current_time() + @wave_delay_min
+
+    Logger.warning(
+      @log_prefix <>
+        "Iodine production at #{Float.round(avg, 2)} — over the #{@iodine_high} line. " <>
+        "This schedules a xenon wave for ~#{AutoNuke.Time.timestamp_to_string(eta)}. " <>
+        "More boron (or less power swing) brings it down."
+    )
+
+    %State{state | iodine_high: true}
+  end
+
+  defp check_iodine(%State{iodine_high: true} = state, avg) when avg < @iodine_ok do
+    Logger.notice(
+      @log_prefix <> "Iodine production down to #{Float.round(avg, 2)} — back in range."
+    )
+
+    %State{state | iodine_high: false}
+  end
+
+  defp check_iodine(state, _avg), do: state
 end

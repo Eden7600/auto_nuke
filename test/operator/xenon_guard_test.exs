@@ -1,32 +1,12 @@
 defmodule AutoNuke.Operator.XenonGuardTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias AutoNuke.Operator.XenonGuard
   alias AutoNuke.Test.MockAPI
 
   @tick AutoNuke.Operator.assigned_tick(XenonGuard)
-
-  defmodule StubSteamFlow do
-    use GenServer
-
-    def start(owner, override \\ nil) do
-      GenServer.start(__MODULE__, {owner, override}, name: AutoNuke.Operator.SteamFlow)
-    end
-
-    @impl true
-    def init(state), do: {:ok, state}
-
-    @impl true
-    def handle_call(:get_override, _from, {_owner, override} = state) do
-      {:reply, override, state}
-    end
-
-    @impl true
-    def handle_call(msg, _from, {owner, _} = state) do
-      send(owner, {:steam_flow_call, msg})
-      {:reply, :ok, state}
-    end
-  end
 
   setup do
     start_supervised!(PubSub)
@@ -34,131 +14,109 @@ defmodule AutoNuke.Operator.XenonGuardTest do
     :ok
   end
 
-  # The trend window must fill before the operator trusts a slope, so
-  # warm up with a flat history at the starting level.
-  defp init(xenon) do
+  # Both watch windows must fill before the operator trusts its readings,
+  # so warm up with a flat history at the starting levels.
+  defp init(xenon, iodine \\ 1.0, rods \\ 50.0) do
     MockAPI.mock_get("CORE_XENON_CUMULATIVE", xenon)
+    MockAPI.mock_get("CORE_IODINE_GENERATION", iodine)
     {:ok, state} = XenonGuard.init(nil)
 
-    Enum.reduce(1..30, state, fn _, acc -> tick(acc, xenon, 50.0) end)
+    Enum.reduce(1..30, state, fn _, acc -> tick(acc, xenon, iodine, rods) end)
   end
 
-  defp tick(state, xenon, rods) do
+  defp tick(state, xenon, iodine, rods) do
     MockAPI.mock_get("CORE_XENON_CUMULATIVE", xenon)
+    MockAPI.mock_get("CORE_IODINE_GENERATION", iodine)
     MockAPI.mock_get("RODS_POS_ACTUAL", rods)
     {:noreply, state} = XenonGuard.handle_info({:tick, @tick}, state)
     state
-  end
-
-  defp with_stub(override \\ nil, fun) do
-    {:ok, pid} = StubSteamFlow.start(self(), override)
-
-    try do
-      fun.()
-    after
-      GenServer.stop(pid)
-    end
-  end
-
-  defp mock_banks_json do
-    MockAPI.mock_get(
-      "RESISTOR_BANKS_JSON",
-      Jason.encode!(%{"resistors" => %{"Resistor_Bank_01" => %{"IsInstalled" => 1}}})
-    )
   end
 
   defp refute_put(key) do
     assert_raise RuntimeError, ~r/not received/, fn -> MockAPI.mock_put_value(key) end
   end
 
-  # Triggers are margin-based: rising xenon while rods are driven below
-  # 25% (but still above 10%) means we're paying for xenon in reactivity.
+  # The guard is a watchdog: it warns on trouble but never commands the
+  # plant — riding out a wave is BoronLevel's job.
 
-  test "rising xenon with spent rod margin starts the burn" do
-    with_stub(fn ->
-      mock_banks_json()
-      MockAPI.mock_get("POWER_DEMAND_MW", 100.0)
+  test "a quiet plant raises no flags" do
+    state = init(15.0, 2.0, 20.0)
 
-      state = init(70.0) |> tick(74.0, 20.0)
-
-      assert state.burning
-      assert state.our_override
-      assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == true
-      assert MockAPI.mock_put_value("RESISTOR_BANK_01_SWITCH") == true
-
-      # Burn power = 110% of the 100 MW demand:
-      assert_receive {:steam_flow_call, {:override, {mw, :mw}, _expiry}}
-      assert_in_delta mw, 110.0, 0.001
-    end)
-  end
-
-  test "rising xenon with healthy rod margin is left alone" do
-    # Same xenon rise, but the rods are sitting comfortably — the
-    # compensation loop is winning, so there's nothing to do.
-    state = init(70.0) |> tick(74.0, 50.0)
-
-    refute state.burning
-    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
-  end
-
-  test "a user-set override is respected, not replaced" do
-    with_stub({{0.5, :ratio}, :never}, fn ->
-      mock_banks_json()
-
-      state = init(70.0) |> tick(74.0, 20.0)
-
-      assert state.burning
-      refute state.our_override
-      refute_receive {:steam_flow_call, {:override, _, _}}
-    end)
-  end
-
-  test "no burn without rod margin — the spiral alarm fires instead" do
-    MockAPI.mock_get("CHEM_BORON_PPM", 20.0)
-    MockAPI.mock_get("CORE_STATE_CRITICALITY", -0.5)
-
-    state = init(70.0) |> tick(78.0, 3.0)
-
-    refute state.burning
-    assert state.next_spiral_alarm > 0
-    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
-  end
-
-  test "bottomed rods with boron left is not a spiral" do
-    # Boron can still be filtered out — margin exists, no alarm.
-    MockAPI.mock_get("CHEM_BORON_PPM", 1800.0)
-
-    state = init(70.0) |> tick(78.0, 3.0)
-
+    refute state.wave
+    refute state.iodine_high
     assert state.next_spiral_alarm == 0
   end
 
-  test "recovered rod margin ends the burn" do
-    with_stub(fn ->
-      mock_banks_json()
-      MockAPI.mock_get("POWER_DEMAND_MW", 100.0)
+  test "xenon over the ceiling flags a wave and warns" do
+    {state, log} =
+      with_log(fn -> init(15.0) |> tick(21.0, 1.0, 50.0) end)
 
-      state = init(70.0) |> tick(74.0, 20.0)
-      assert state.burning
-      assert_receive {:steam_flow_call, {:override, _, _}}
-
-      # Drain the enable puts so the disable puts are unambiguous.
-      MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH")
-      MockAPI.mock_put_value("RESISTOR_BANK_01_SWITCH")
-
-      state = tick(state, 73.0, 40.0)
-      refute state.burning
-
-      # Banks off (bank switches then main):
-      assert MockAPI.mock_put_value("RESISTOR_BANK_01_SWITCH") == false
-      assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == false
-    end)
+    assert state.wave
+    assert log =~ "over the 20.0 ceiling"
   end
 
-  test "quiet xenon does nothing" do
-    state = init(50.0) |> tick(50.0, 20.0) |> tick(50.1, 20.0)
+  test "a wave clears below the hysteresis band" do
+    state = init(15.0) |> tick(21.0, 1.0, 50.0)
+    assert state.wave
 
-    refute state.burning
+    # Under the ceiling but not yet under @xenon_ok — still the same wave.
+    state = tick(state, 17.0, 1.0, 50.0)
+    assert state.wave
+
+    # (The all-clear is a notice, which the test log level filters out —
+    # the flag is the assertable signal.)
+    state = tick(state, 14.0, 1.0, 50.0)
+    refute state.wave
+  end
+
+  test "high iodine production warns with the scheduled wave's ETA" do
+    # TIME_STAMP is 100 game-minutes; the wave lands 6 game-hours later.
+    {state, log} = with_log(fn -> init(10.0, 4.0) end)
+
+    assert state.iodine_high
+    assert log =~ "Iodine production at 4.0"
+    assert log =~ "xenon wave for ~0+07:40"
+  end
+
+  test "iodine recovery clears the flag once the average settles" do
+    state = init(10.0, 4.0)
+    assert state.iodine_high
+
+    # One low tick barely moves a 10-sample average — no flap.
+    state = tick(state, 10.0, 1.0, 50.0)
+    assert state.iodine_high
+
+    state = Enum.reduce(1..10, state, fn _, acc -> tick(acc, 10.0, 1.0, 50.0) end)
+
+    refute state.iodine_high
+  end
+
+  test "the guard never touches banks or steam" do
+    state = init(15.0) |> tick(30.0, 5.0, 50.0)
+
+    assert state.wave
     refute_put("RESISTOR_BANKS_MAIN_SWITCH")
+    refute_put("STEAM_TURBINE_TRIP")
+  end
+
+  # Spiral: no rod travel, no boron reserve, reaction dying, xenon rising.
+
+  test "exhausted reserves with rising xenon fire the spiral alarm" do
+    MockAPI.mock_get("CHEM_BORON_PPM", 20.0)
+    MockAPI.mock_get("CORE_STATE_CRITICALITY", -0.5)
+
+    {state, log} = with_log(fn -> init(70.0, 1.0, 3.0) |> tick(78.0, 1.0, 3.0) end)
+
+    assert state.next_spiral_alarm > 0
+    assert log =~ "XENON SPIRAL"
+  end
+
+  test "bottomed rods with boron left is not a spiral" do
+    # Boron can still be filtered out — reserve exists, no alarm.
+    MockAPI.mock_get("CHEM_BORON_PPM", 1800.0)
+
+    state = init(70.0, 1.0, 3.0) |> tick(78.0, 1.0, 3.0)
+
+    assert state.next_spiral_alarm == 0
   end
 end
