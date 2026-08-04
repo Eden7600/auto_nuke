@@ -665,6 +665,40 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
+  describe "loop intent" do
+    setup do
+      start_supervised!(AutoNuke.LoopIntent)
+      :ok
+    end
+
+    test "add_loop and remove_loop record plant-wide intent" do
+      pid = start_steam_flow(turbine1: false)
+
+      assert :ok = SteamFlow.remove_loop(2, pid)
+      assert AutoNuke.LoopIntent.intents() == %{2 => :stopped}
+
+      TurbineFactory.create(loop: 2, mock_only: true)
+      assert :ok = SteamFlow.add_loop(2, pid)
+      assert AutoNuke.LoopIntent.intents() == %{2 => :active}
+    end
+
+    test "a tick drops loops marked out of service" do
+      pid = start_steam_flow([])
+      :ok = AutoNuke.LoopIntent.set_stopped(3)
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("GENERATOR_2_KW", :rand.uniform() * 25000, times: :any)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) / 1000)
+      turbine_mocks()
+
+      send(pid, {:tick, Enum.random(@tick)})
+
+      assert SteamFlow.get_loops(pid) == [1, 2]
+    end
+  end
+
   defmodule SimState do
     @enforce_keys [:tick, :supplied_total]
     defstruct(@enforce_keys)

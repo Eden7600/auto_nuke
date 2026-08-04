@@ -6,7 +6,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
   alias AutoNuke.TaskUI, as: UI
-  alias AutoNuke.Operator.{ResistorBanks, SteamFlow}
+  alias AutoNuke.Operator.{CoreTemp, ResistorBanks, SteamFlow}
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -20,6 +20,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   def stop(loop) do
     remote_node = AutoNuke.PlantNode.find("auto_nuke.loop.stop <loop>")
     steam_flow_pid = {SteamFlow, remote_node}
+    core_temp_pid = {CoreTemp, remote_node}
     steam_gen = SteamGen.for_loop(loop)
 
     UI.init()
@@ -38,6 +39,13 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       "REMOVE LOOP #{loop}",
       fn -> loop not in SteamFlow.get_loops(steam_flow_pid) end,
       fn -> SteamFlow.remove_loop(loop, steam_flow_pid) end
+    )
+
+    UI.set_wait(
+      "Core Temperature Operator",
+      "REMOVE LOOP #{loop}",
+      fn -> loop not in CoreTemp.get_loops(core_temp_pid) end,
+      fn -> CoreTemp.remove_loop(loop, core_temp_pid) end
     )
 
     UI.wait("Turbine 0#{loop} Circuit Breaker", "OPEN", fn ->

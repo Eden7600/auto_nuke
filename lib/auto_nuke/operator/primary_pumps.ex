@@ -9,6 +9,7 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   end
 
   alias AutoNuke.API
+  alias AutoNuke.LoopIntent
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @core API.Vessels.core_vessel()
@@ -93,8 +94,16 @@ defmodule AutoNuke.Operator.PrimaryPumps do
     |> Statistex.average()
   end
 
+  # Never drive the pump of a loop that's out of service — restarting a
+  # stopped pump against a vented loop is exactly what maintenance
+  # doesn't want.
   defp set_pump_speeds(speed) when speed in @pump_speeds do
-    @pumps |> Enum.each(&API.Pumps.set_speed(&1, speed))
+    intents = LoopIntent.intents()
+
+    1..3
+    |> Enum.reject(&(intents[&1] == :stopped))
+    |> Enum.map(&API.Pumps.primary/1)
+    |> Enum.each(&API.Pumps.set_speed(&1, speed))
   end
 
   defp get_temperature(), do: API.Vessels.get_temperature(@core)

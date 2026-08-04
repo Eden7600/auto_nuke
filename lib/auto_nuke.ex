@@ -20,6 +20,7 @@ defmodule AutoNuke do
     children =
       [
         PubSub,
+        AutoNuke.LoopIntent,
         AutoNuke.TimeTracker,
         AutoNuke.Ticker
       ]

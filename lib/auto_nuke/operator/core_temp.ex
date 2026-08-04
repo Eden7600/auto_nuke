@@ -4,6 +4,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   require Logger
 
   alias AutoNuke.API
+  alias AutoNuke.LoopIntent
   alias AutoNuke.Operator.CoreTemp.Drift
   alias AutoNuke.Time, as: ANTime
 
@@ -144,6 +145,8 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_call({:add_loop, loop}, _from, %State{monitored: old_monitored} = state) do
+    LoopIntent.set_active(loop)
+
     case old_monitored |> Enum.any?(&(&1.loop == loop)) do
       true ->
         {:reply, {:error, :already_active}, state}
@@ -159,6 +162,7 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   @impl true
   def handle_call({:remove_loop, loop}, _from, %State{monitored: old_monitored} = state) do
+    LoopIntent.set_stopped(loop)
     {found, rest} = old_monitored |> Enum.split_with(&(&1.loop == loop))
 
     case found do
@@ -221,6 +225,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   def handle_info({:tick, _}, %State{} = state) do
     state =
       state
+      |> reconcile_loops()
       |> apply_drift()
       |> maybe_expire_override()
 
@@ -228,6 +233,32 @@ defmodule AutoNuke.Operator.CoreTemp do
 
     %State{state | monitored: monitored}
     |> do_tick()
+  end
+
+  # Keep our loop list consistent with the plant-wide intent: a task or
+  # operator taking a loop out of service must not leave us holding core
+  # temperature against its vented steam generator.
+  defp reconcile_loops(%State{monitored: monitored} = state) do
+    intents = LoopIntent.intents()
+
+    {dropped, kept} = monitored |> Enum.split_with(&(intents[&1.loop] == :stopped))
+
+    dropped
+    |> Enum.each(
+      &Logger.warning(@log_prefix <> "Loop #{&1.loop} is out of service — dropping it.")
+    )
+
+    added =
+      intents
+      |> Enum.filter(fn {loop, intent} ->
+        intent == :active and not Enum.any?(monitored, &(&1.loop == loop))
+      end)
+      |> Enum.map(fn {loop, _} ->
+        Logger.warning(@log_prefix <> "Loop #{loop} is in service but unwatched — adding it.")
+        MonitoredVessel.new(loop)
+      end)
+
+    %State{state | monitored: (kept ++ added) |> Enum.sort_by(& &1.loop)}
   end
 
   defp do_tick(%State{override: nil} = state) do

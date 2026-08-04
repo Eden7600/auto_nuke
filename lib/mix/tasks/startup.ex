@@ -90,6 +90,17 @@ defmodule Mix.Tasks.AutoNuke.Startup do
     IO.puts("#{@loop_emoji} Starting using loops: #{inspect(loops)} #{@loop_emoji}")
     IO.puts("#{@core_emoji} Starting using cores: #{inspect(cores)} #{@core_emoji}")
 
+    # Reset the plant-wide loop intent: the loops we're starting are in
+    # service, everything else is not (until a later `loop.start`).
+    1..3
+    |> Enum.each(fn loop ->
+      if loop in loops do
+        AutoNuke.LoopIntent.set_active(loop)
+      else
+        AutoNuke.LoopIntent.set_stopped(loop)
+      end
+    end)
+
     check_power_source()
     test_control_rods()
     check_loop_readiness(loops)

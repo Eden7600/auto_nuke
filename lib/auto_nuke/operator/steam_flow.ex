@@ -3,6 +3,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   use AutoNuke.Operator
   require Logger
 
+  alias AutoNuke.LoopIntent
   alias AutoNuke.Operator.SteamFlow.{Turbine, DemandTracker}
   alias AutoNuke.Time, as: ANTime
 
@@ -16,6 +17,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       boost_mode: nil,
       flow_control: nil,
       anti_hunting: true,
+      reconcile: true,
       # Demand debounce (feedforward fires only on confirmed changes):
       stable_demand: nil,
       pending_demand: nil
@@ -103,8 +105,11 @@ defmodule AutoNuke.Operator.SteamFlow do
   def start_link(opts \\ []) do
     {loops, opts} = Keyword.pop(opts, :loops, :detect)
     {override, opts} = Keyword.pop(opts, :override)
+    # Temporary instances (loop.start) must not sync against the
+    # plant-wide loop intent:
+    {reconcile, opts} = Keyword.pop(opts, :reconcile, true)
     opts = Keyword.put_new(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, {loops, override}, opts)
+    GenServer.start_link(__MODULE__, {loops, override, reconcile}, opts)
   end
 
   def add_loop(loop, pid \\ __MODULE__) when loop in @loops do
@@ -167,7 +172,10 @@ defmodule AutoNuke.Operator.SteamFlow do
     do: GenServer.call(pid, {:set_anti_hunting, enabled})
 
   @impl true
-  def init({loops, override}) do
+  def init({loops, override}), do: init({loops, override, true})
+
+  @impl true
+  def init({loops, override, reconcile}) do
     loops =
       case loops do
         :detect -> get_closed_breakers()
@@ -199,7 +207,8 @@ defmodule AutoNuke.Operator.SteamFlow do
           nil -> nil
           {_, _} = o -> {o, :never}
         end,
-      anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true)
+      anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true),
+      reconcile: reconcile
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -222,6 +231,8 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   @impl true
   def handle_call({:add_loop, loop}, _from, %State{turbines: old_turbines} = state) do
+    LoopIntent.set_active(loop)
+
     case old_turbines |> Enum.any?(&(&1.loop == loop)) do
       true ->
         {:reply, {:error, :already_active}, state}
@@ -237,6 +248,7 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   @impl true
   def handle_call({:remove_loop, loop}, _from, %State{turbines: old_turbines} = state) do
+    LoopIntent.set_stopped(loop)
     {found, rest} = old_turbines |> Enum.split_with(&(&1.loop == loop))
 
     case found do
@@ -376,7 +388,8 @@ defmodule AutoNuke.Operator.SteamFlow do
   def handle_info({:tick, t}, state) when not is_my_tick(t), do: {:noreply, state}
 
   @impl true
-  def handle_info({:tick, _}, %State{turbines: turbines} = state) do
+  def handle_info({:tick, _}, %State{} = state) do
+    %State{turbines: turbines} = state = reconcile_loops(state)
     supply_kw = get_current_supply(turbines)
 
     state =
@@ -398,6 +411,34 @@ defmodule AutoNuke.Operator.SteamFlow do
       state
     end
     |> then(fn %State{} = s -> {:noreply, s} end)
+  end
+
+  # Keep our loop list consistent with the plant-wide intent — a loop
+  # taken out of service through another operator must not keep its MSCV
+  # and bypass driven here.
+  defp reconcile_loops(%State{reconcile: false} = state), do: state
+
+  defp reconcile_loops(%State{turbines: turbines} = state) do
+    intents = LoopIntent.intents()
+
+    {dropped, kept} = turbines |> Enum.split_with(&(intents[&1.loop] == :stopped))
+
+    dropped
+    |> Enum.each(
+      &Logger.warning(@log_prefix <> "Loop #{&1.loop} is out of service — dropping it.")
+    )
+
+    added =
+      intents
+      |> Enum.filter(fn {loop, intent} ->
+        intent == :active and not Enum.any?(turbines, &(&1.loop == loop))
+      end)
+      |> Enum.map(fn {loop, _} ->
+        Logger.warning(@log_prefix <> "Loop #{loop} is in service but unmanaged — adding it.")
+        Turbine.new(loop)
+      end)
+
+    %State{state | turbines: (kept ++ added) |> Enum.sort_by(& &1.loop)}
   end
 
   # How different two demand readings must be to count as a change:

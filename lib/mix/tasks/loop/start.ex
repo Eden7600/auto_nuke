@@ -48,7 +48,8 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
       Op.SteamFlow.start_link(
         loops: [loop],
         override: {capacity / 3, :mw},
-        name: __MODULE__.TempSteamFlow
+        name: __MODULE__.TempSteamFlow,
+        reconcile: false
       )
 
     Startup.connect_to_grid([loop])
