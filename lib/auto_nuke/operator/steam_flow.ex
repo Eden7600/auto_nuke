@@ -15,6 +15,7 @@ defmodule AutoNuke.Operator.SteamFlow do
       target_override: nil,
       boost_mode: nil,
       flow_control: nil,
+      anti_hunting: true,
       # Demand debounce (feedforward fires only on confirmed changes):
       stable_demand: nil,
       pending_demand: nil
@@ -81,6 +82,17 @@ defmodule AutoNuke.Operator.SteamFlow do
 
   # When overriding, use a flat 5% deadzone.
   @override_deadzone 0.05
+
+  # Anti-hunting: near steady state the PID's rounded total flaps by ±1,
+  # and re-allocating from scratch lets pressure noise shuffle power
+  # between loops — either way the MSCVs hunt. Hold the current
+  # allocation until the requested total moves by at least this many
+  # levels, letting the PID's intent accumulate into one real move.
+  @min_power_move 2
+
+  # Toggleable from the TUI; persisted across restarts.
+  @anti_hunting_setting "mscv_anti_hunting"
+  def anti_hunting_setting, do: @anti_hunting_setting
 
   # Precalculate power level axis conversion factors:
   @power_levels Turbine.allowed_power_levels()
@@ -149,6 +161,11 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, {:set_generated_mwh, mwh})
   end
 
+  def get_anti_hunting(pid \\ __MODULE__), do: GenServer.call(pid, :get_anti_hunting)
+
+  def set_anti_hunting(enabled, pid \\ __MODULE__) when is_boolean(enabled),
+    do: GenServer.call(pid, {:set_anti_hunting, enabled})
+
   @impl true
   def init({loops, override}) do
     loops =
@@ -181,7 +198,8 @@ defmodule AutoNuke.Operator.SteamFlow do
         case override do
           nil -> nil
           {_, _} = o -> {o, :never}
-        end
+        end,
+      anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true)
     }
 
     PubSub.subscribe(self(), :ticker)
@@ -289,6 +307,18 @@ defmodule AutoNuke.Operator.SteamFlow do
   @impl true
   def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state) do
     {:reply, boost, state}
+  end
+
+  @impl true
+  def handle_call(:get_anti_hunting, _from, %State{} = state) do
+    {:reply, state.anti_hunting, state}
+  end
+
+  @impl true
+  def handle_call({:set_anti_hunting, enabled}, _from, %State{} = state) do
+    Logger.notice(@log_prefix <> "Anti-hunting #{if enabled, do: "enabled", else: "disabled"}.")
+    AutoNuke.Settings.put(@anti_hunting_setting, enabled)
+    {:reply, :ok, %State{state | anti_hunting: enabled}}
   end
 
   @impl true
@@ -426,13 +456,17 @@ defmodule AutoNuke.Operator.SteamFlow do
       turbine_count = Enum.count(old_turbines)
       total_power = axis_to_total_power(value, turbine_count)
 
-      case update_power_levels(old_turbines, total_power, boost_mode, state.flow_control) do
-        {:ok, new_turbines} ->
-          {axis, new_turbines}
+      if hold_power_levels?(state, total_power) do
+        {axis, old_turbines}
+      else
+        case update_power_levels(old_turbines, total_power, boost_mode, state.flow_control) do
+          {:ok, new_turbines} ->
+            {axis, new_turbines}
 
-        {:error, :at_max, max_total_power, new_turbines} ->
-          max_axis = total_power_to_axis(max_total_power, turbine_count)
-          {axis |> ControlAxis.clamp(max_axis), new_turbines}
+          {:error, :at_max, max_total_power, new_turbines} ->
+            max_axis = total_power_to_axis(max_total_power, turbine_count)
+            {axis |> ControlAxis.clamp(max_axis), new_turbines}
+        end
       end
     end)
     |> then(fn {%ControlAxis{} = axis, turbines} ->
@@ -445,6 +479,19 @@ defmodule AutoNuke.Operator.SteamFlow do
             |> Enum.map(&Turbine.tick/1)
       }
     end)
+  end
+
+  # Anti-hunting gate: hold the current allocation until the requested
+  # total moves by @min_power_move — the axis keeps its intent, and only
+  # a move worth making is issued. Never hold past a flow-control limit:
+  # holds and backoffs must apply immediately.
+  defp hold_power_levels?(%State{anti_hunting: false}, _total_power), do: false
+
+  defp hold_power_levels?(%State{turbines: turbines, flow_control: flow_control}, total_power) do
+    current_total = turbines |> Enum.sum_by(& &1.power_level)
+
+    abs(total_power - current_total) < @min_power_move and
+      (flow_control == nil or current_total <= flow_control)
   end
 
   # Feedforward: when demand steps (new hour, new objective), jump the axis

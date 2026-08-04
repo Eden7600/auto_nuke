@@ -577,6 +577,94 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
+  describe "anti-hunting" do
+    setup do
+      on_exit(fn -> File.rm(Application.get_env(:auto_nuke, :settings_file)) end)
+      :ok
+    end
+
+    defp uneven_pressure_mocks do
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("GENERATOR_2_KW", kw3 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      # Supply (kW) is exactly 100% of demand (MW):
+      demand_tracker_mocks(demand_mw: (kw1 + kw2 + kw3) / 1000)
+      turbine_mocks()
+    end
+
+    defp start_uneven_pressure do
+      start_steam_flow(
+        turbine1: [power_level: 3, pressure: 64.857],
+        turbine2: [power_level: 5, pressure: 58.477],
+        turbine3: [power_level: 4, pressure: 61.436]
+      )
+    end
+
+    test "holds the current allocation when demand is met" do
+      pid = start_uneven_pressure()
+      :ok = SteamFlow.set_anti_hunting(true, pid)
+      # Pin the target so the PID is content at the current ratio:
+      :ok = SteamFlow.set_target_override_percent(100, :never, pid)
+
+      uneven_pressure_mocks()
+      send(pid, {:tick, Enum.random(@tick)})
+
+      # Without the hold, from-scratch re-allocation shuffles this into
+      # something like [6, 3, 4] even though demand is met.
+      assert power_levels(pid) == [3, 5, 4]
+      assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
+    end
+
+    test "disabled: re-allocation shuffles power between loops as before" do
+      pid = start_uneven_pressure()
+      :ok = SteamFlow.set_anti_hunting(false, pid)
+      :ok = SteamFlow.set_target_override_percent(100, :never, pid)
+
+      uneven_pressure_mocks()
+      send(pid, {:tick, Enum.random(@tick)})
+
+      refute power_levels(pid) == [3, 5, 4]
+    end
+
+    test "does not hold past a flow-control backoff" do
+      pressure = TurbineFactory.random_pressure()
+
+      pid =
+        start_steam_flow(
+          turbine1: [power_level: 4, pressure: pressure],
+          turbine2: [power_level: 4, pressure: pressure],
+          turbine3: false
+        )
+
+      :ok = SteamFlow.set_anti_hunting(true, pid)
+
+      # Flow control backs off to 7 while the PID is content at 8:
+      send(pid, {:steam_flow_control, :backoff})
+
+      API.mock_get("GENERATOR_0_KW", kw1 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("GENERATOR_1_KW", kw2 = :rand.uniform() * 25000, times: :any)
+      API.mock_get("POWER_FROM_TURBINE_KW", 0)
+      demand_tracker_mocks(demand_mw: (kw1 + kw2) / 1000)
+      turbine_mocks()
+
+      send(pid, {:tick, Enum.random(@tick)})
+
+      assert total_power(pid) == 7
+    end
+
+    test "is read from settings at startup, and persisted when set" do
+      AutoNuke.Settings.put(SteamFlow.anti_hunting_setting(), false)
+      pid = start_steam_flow([])
+
+      assert SteamFlow.get_anti_hunting(pid) == false
+
+      :ok = SteamFlow.set_anti_hunting(true, pid)
+      assert SteamFlow.get_anti_hunting(pid) == true
+      assert AutoNuke.Settings.get(SteamFlow.anti_hunting_setting(), false) == true
+    end
+  end
+
   defmodule SimState do
     @enforce_keys [:tick, :supplied_total]
     defstruct(@enforce_keys)

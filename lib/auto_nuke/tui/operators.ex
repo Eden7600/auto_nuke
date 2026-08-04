@@ -140,7 +140,14 @@ defmodule AutoNuke.Tui.Operators do
   end
 
   defp extra_actions(Op.SteamFlow) do
+    anti_hunting = AutoNuke.Settings.get(Op.SteamFlow.anti_hunting_setting(), true)
+
     [
+      %{
+        label: "Anti-hunting: #{if anti_hunting, do: "ON", else: "OFF"} — toggle",
+        params: [],
+        run: fn _ -> toggle_anti_hunting(Op.SteamFlow, not anti_hunting) end
+      },
       %{
         label: "Set power override (%)",
         params: [%{label: "Percent", hint: "0-100"}],
@@ -183,7 +190,7 @@ defmodule AutoNuke.Tui.Operators do
       %{
         label: "Anti-hunting: #{if anti_hunting, do: "ON", else: "OFF"} — toggle",
         params: [],
-        run: fn _ -> toggle_anti_hunting(not anti_hunting) end
+        run: fn _ -> toggle_anti_hunting(Op.ControlRods, not anti_hunting) end
       },
       %{
         label: "Mode: predictive",
@@ -229,13 +236,13 @@ defmodule AutoNuke.Tui.Operators do
   end
 
   # Persisted either way; applied live when the operator is running.
-  defp toggle_anti_hunting(enabled) do
-    case Process.whereis(Op.ControlRods) do
+  defp toggle_anti_hunting(op, enabled) do
+    case Process.whereis(op) do
       pid when is_pid(pid) ->
-        attempt(fn -> Op.ControlRods.set_anti_hunting(enabled) end)
+        attempt(fn -> op.set_anti_hunting(enabled) end)
 
       nil ->
-        AutoNuke.Settings.put(Op.ControlRods.anti_hunting_setting(), enabled)
+        AutoNuke.Settings.put(op.anti_hunting_setting(), enabled)
         :ok
     end
     |> case do
