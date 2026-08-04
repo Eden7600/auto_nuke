@@ -140,14 +140,8 @@ defmodule AutoNuke.Tui.Operators do
   end
 
   defp extra_actions(Op.SteamFlow) do
-    anti_hunting = AutoNuke.Settings.get(Op.SteamFlow.anti_hunting_setting(), true)
-
     [
-      %{
-        label: "Anti-hunting: #{if anti_hunting, do: "ON", else: "OFF"} — toggle",
-        params: [],
-        run: fn _ -> toggle_anti_hunting(Op.SteamFlow, not anti_hunting) end
-      },
+      tolerance_action(),
       %{
         label: "Set power override (%)",
         params: [%{label: "Percent", hint: "0-100"}],
@@ -188,14 +182,8 @@ defmodule AutoNuke.Tui.Operators do
   end
 
   defp extra_actions(Op.ControlRods) do
-    anti_hunting = AutoNuke.Settings.get(Op.ControlRods.anti_hunting_setting(), true)
-
     [
-      %{
-        label: "Anti-hunting: #{if anti_hunting, do: "ON", else: "OFF"} — toggle",
-        params: [],
-        run: fn _ -> toggle_anti_hunting(Op.ControlRods, not anti_hunting) end
-      },
+      tolerance_action(),
       %{
         label: "Mode: predictive",
         params: [],
@@ -239,20 +227,21 @@ defmodule AutoNuke.Tui.Operators do
     end
   end
 
-  # Persisted either way; applied live when the operator is running.
-  defp toggle_anti_hunting(op, enabled) do
-    case Process.whereis(op) do
-      pid when is_pid(pid) ->
-        attempt(fn -> op.set_anti_hunting(enabled) end)
+  # The global plant-wide tolerance mode, reachable from the operators
+  # it affects most. A preference, not an override.
+  defp tolerance_action do
+    mode = AutoNuke.Tolerance.mode()
 
-      nil ->
-        AutoNuke.Settings.put(op.anti_hunting_setting(), enabled)
-        :ok
-    end
-    |> case do
-      :ok -> {:ok, "Anti-hunting #{if enabled, do: "enabled", else: "disabled"} (persisted)"}
-      error -> error
-    end
+    %{
+      label: "Tolerance mode: #{mode} — cycle (global)",
+      params: [],
+      run: fn _ ->
+        case AutoNuke.Tolerance.cycle() do
+          {:ok, new} -> {:ok, "Tolerance mode: #{new} (global, persisted)"}
+          error -> error
+        end
+      end
+    }
   end
 
   defp boost_on(fun),

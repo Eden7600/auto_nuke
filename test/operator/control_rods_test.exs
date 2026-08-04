@@ -90,12 +90,11 @@ defmodule AutoNuke.Operator.ControlRodsTest do
     assert MockAPI.mock_put_value("ROD_BANK_POS_0_ORDERED") < 40.0
   end
 
-  test "with anti-hunting off, calm-zone jitter commands the rods again" do
-    AutoNuke.Settings.put(ControlRods.anti_hunting_setting(), false)
+  test "in :exact tolerance mode, calm-zone jitter commands the rods again" do
+    start_supervised!(AutoNuke.Tolerance)
+    :ok = AutoNuke.Tolerance.set_mode(:exact)
 
     state = init(340.0, 340.0)
-    assert state.anti_hunting == false
-
     set_temp(340.0, 1)
     state = tick(state)
 
@@ -104,18 +103,6 @@ defmodule AutoNuke.Operator.ControlRodsTest do
 
     # The same jitter the gated tests hold back now issues a command:
     assert is_number(MockAPI.mock_put_value("ROD_BANK_POS_0_ORDERED"))
-  end
-
-  test "toggling anti-hunting persists across a restart" do
-    state = init(340.0, 340.0)
-    assert state.anti_hunting == true
-
-    {:reply, :ok, state} = ControlRods.handle_call({:set_anti_hunting, false}, nil, state)
-    assert state.anti_hunting == false
-
-    # A fresh init (as after a VM restart) reads the persisted value:
-    state = init(340.0, 340.0)
-    assert state.anti_hunting == false
   end
 
   test "sub-degree target changes are ignored; real ones accepted" do

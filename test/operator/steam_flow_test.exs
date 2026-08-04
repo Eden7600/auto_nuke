@@ -577,7 +577,7 @@ defmodule AutoNuke.Operator.SteamFlowTest do
     end
   end
 
-  describe "anti-hunting" do
+  describe "tolerance" do
     setup do
       on_exit(fn -> File.rm(Application.get_env(:auto_nuke, :settings_file)) end)
       :ok
@@ -603,7 +603,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
 
     test "holds the current allocation when demand is met" do
       pid = start_uneven_pressure()
-      :ok = SteamFlow.set_anti_hunting(true, pid)
       # Pin the target so the PID is content at the current ratio:
       :ok = SteamFlow.set_target_override_percent(100, :never, pid)
 
@@ -616,9 +615,11 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert [] = API.unused_mocks() |> ignore_bypass_mock_puts()
     end
 
-    test "disabled: re-allocation shuffles power between loops as before" do
+    test "in :exact mode, re-allocation shuffles power between loops freely" do
+      start_supervised!(AutoNuke.Tolerance)
+      :ok = AutoNuke.Tolerance.set_mode(:exact)
+
       pid = start_uneven_pressure()
-      :ok = SteamFlow.set_anti_hunting(false, pid)
       :ok = SteamFlow.set_target_override_percent(100, :never, pid)
 
       uneven_pressure_mocks()
@@ -637,8 +638,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
           turbine3: false
         )
 
-      :ok = SteamFlow.set_anti_hunting(true, pid)
-
       # Flow control backs off to 7 while the PID is content at 8:
       send(pid, {:steam_flow_control, :backoff})
 
@@ -653,16 +652,6 @@ defmodule AutoNuke.Operator.SteamFlowTest do
       assert total_power(pid) == 7
     end
 
-    test "is read from settings at startup, and persisted when set" do
-      AutoNuke.Settings.put(SteamFlow.anti_hunting_setting(), false)
-      pid = start_steam_flow([])
-
-      assert SteamFlow.get_anti_hunting(pid) == false
-
-      :ok = SteamFlow.set_anti_hunting(true, pid)
-      assert SteamFlow.get_anti_hunting(pid) == true
-      assert AutoNuke.Settings.get(SteamFlow.anti_hunting_setting(), false) == true
-    end
   end
 
   describe "loop intent" do

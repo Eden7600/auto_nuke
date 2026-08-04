@@ -21,6 +21,7 @@ defmodule AutoNuke do
       [
         PubSub,
         AutoNuke.LoopIntent,
+        AutoNuke.Tolerance,
         AutoNuke.TimeTracker,
         AutoNuke.Ticker
       ]

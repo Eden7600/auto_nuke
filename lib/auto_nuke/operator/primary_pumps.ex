@@ -10,6 +10,7 @@ defmodule AutoNuke.Operator.PrimaryPumps do
 
   alias AutoNuke.API
   alias AutoNuke.LoopIntent
+  alias AutoNuke.Tolerance
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @core API.Vessels.core_vessel()
@@ -21,8 +22,8 @@ defmodule AutoNuke.Operator.PrimaryPumps do
   # Scale pumps from min speed at @temp_min, to max speed at @temp_max.
   @temp_min 300
   @temp_max 400
-  # Apply a deadband to limit oscillation.
-  # Calculated speed needs to differ from current speed by
+  # Apply a deadband to limit oscillation (Tolerance-scaled; zero in
+  # :exact mode). Calculated speed needs to differ from current speed by
   # at least this much for any change to occur.
   @speed_deadband 1.4
 
@@ -119,8 +120,9 @@ defmodule AutoNuke.Operator.PrimaryPumps do
     new_speed = @pump_speeds.first + @pump_span * percent_in_range
 
     # Apply a deadband around the prior value.
-    upper = old_speed + @speed_deadband
-    lower = old_speed - @speed_deadband
+    deadband = Tolerance.hysteresis(@speed_deadband)
+    upper = old_speed + deadband
+    lower = old_speed - deadband
 
     if new_speed >= upper || new_speed <= lower do
       new_speed

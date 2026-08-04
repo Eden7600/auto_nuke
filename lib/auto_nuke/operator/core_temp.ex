@@ -7,6 +7,7 @@ defmodule AutoNuke.Operator.CoreTemp do
   alias AutoNuke.LoopIntent
   alias AutoNuke.Operator.CoreTemp.Drift
   alias AutoNuke.Time, as: ANTime
+  alias AutoNuke.Tolerance
 
   defmodule State do
     @enforce_keys [:monitored, :axis]
@@ -52,7 +53,9 @@ defmodule AutoNuke.Operator.CoreTemp do
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @loops 1..3
 
-  # Target 60 bar of pressure, plus or minus half a bar.
+  # Target 60 bar of pressure, plus or minus half a bar (the deadzone is
+  # Tolerance-scaled — this is where wide temperature-target swings are
+  # born, so steadying the plant starts here).
   @target_pressure 60
   @deadzone 0.5
 
@@ -263,8 +266,9 @@ defmodule AutoNuke.Operator.CoreTemp do
 
   defp do_tick(%State{override: nil} = state) do
     future_pressure = get_future_pressure(state.monitored)
+    axis = %ControlAxis{state.axis | deadzone: Tolerance.deadzone(@deadzone)}
 
-    case ControlAxis.step(state.axis, @target_pressure, future_pressure) do
+    case ControlAxis.step(axis, @target_pressure, future_pressure) do
       {:changed, axis, new, old} ->
         {new, axis} = maybe_clamp_movement(axis, old, new)
         publish_core_temp(new)

@@ -6,6 +6,7 @@ defmodule AutoNuke.Operator.SteamFlow do
   alias AutoNuke.LoopIntent
   alias AutoNuke.Operator.SteamFlow.{Turbine, DemandTracker}
   alias AutoNuke.Time, as: ANTime
+  alias AutoNuke.Tolerance
 
   defmodule State do
     @enforce_keys [:axis, :turbines, :demand_tracker, :target_override]
@@ -16,7 +17,6 @@ defmodule AutoNuke.Operator.SteamFlow do
       target_override: nil,
       boost_mode: nil,
       flow_control: nil,
-      anti_hunting: true,
       reconcile: true,
       # Demand debounce (feedforward fires only on confirmed changes):
       stable_demand: nil,
@@ -82,19 +82,9 @@ defmodule AutoNuke.Operator.SteamFlow do
   # Valid loop numbers:
   @loops 1..3
 
-  # When overriding, use a flat 5% deadzone.
+  # When overriding, use a flat 5% deadzone (Tolerance-scaled, like the
+  # demand tracker's own deadzone).
   @override_deadzone 0.05
-
-  # Anti-hunting: near steady state the PID's rounded total flaps by ±1,
-  # and re-allocating from scratch lets pressure noise shuffle power
-  # between loops — either way the MSCVs hunt. Hold the current
-  # allocation until the requested total moves by at least this many
-  # levels, letting the PID's intent accumulate into one real move.
-  @min_power_move 2
-
-  # Toggleable from the TUI; persisted across restarts.
-  @anti_hunting_setting "mscv_anti_hunting"
-  def anti_hunting_setting, do: @anti_hunting_setting
 
   # Precalculate power level axis conversion factors:
   @power_levels Turbine.allowed_power_levels()
@@ -166,11 +156,6 @@ defmodule AutoNuke.Operator.SteamFlow do
     GenServer.call(pid, {:set_generated_mwh, mwh})
   end
 
-  def get_anti_hunting(pid \\ __MODULE__), do: GenServer.call(pid, :get_anti_hunting)
-
-  def set_anti_hunting(enabled, pid \\ __MODULE__) when is_boolean(enabled),
-    do: GenServer.call(pid, {:set_anti_hunting, enabled})
-
   @impl true
   def init({loops, override}), do: init({loops, override, true})
 
@@ -207,7 +192,6 @@ defmodule AutoNuke.Operator.SteamFlow do
           nil -> nil
           {_, _} = o -> {o, :never}
         end,
-      anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true),
       reconcile: reconcile
     }
 
@@ -319,18 +303,6 @@ defmodule AutoNuke.Operator.SteamFlow do
   @impl true
   def handle_call(:get_boost_mode, _from, %State{boost_mode: boost} = state) do
     {:reply, boost, state}
-  end
-
-  @impl true
-  def handle_call(:get_anti_hunting, _from, %State{} = state) do
-    {:reply, state.anti_hunting, state}
-  end
-
-  @impl true
-  def handle_call({:set_anti_hunting, enabled}, _from, %State{} = state) do
-    Logger.notice(@log_prefix <> "Anti-hunting #{if enabled, do: "enabled", else: "disabled"}.")
-    AutoNuke.Settings.put(@anti_hunting_setting, enabled)
-    {:reply, :ok, %State{state | anti_hunting: enabled}}
   end
 
   @impl true
@@ -476,7 +448,7 @@ defmodule AutoNuke.Operator.SteamFlow do
        ) do
     ratio = state.demand_tracker |> DemandTracker.current_ratio(supply_kw)
     {target, deadzone} = get_target_ratio_and_deadzone(state)
-    old_axis = %ControlAxis{old_axis | deadzone: deadzone}
+    old_axis = %ControlAxis{old_axis | deadzone: Tolerance.deadzone(deadzone)}
     old_axis = maybe_feedforward(old_axis, state, confirmed_demand_change, target, supply_kw)
     boost_mode = !is_nil(state.boost_mode)
 
@@ -522,16 +494,19 @@ defmodule AutoNuke.Operator.SteamFlow do
     end)
   end
 
-  # Anti-hunting gate: hold the current allocation until the requested
-  # total moves by @min_power_move — the axis keeps its intent, and only
-  # a move worth making is issued. Never hold past a flow-control limit:
-  # holds and backoffs must apply immediately.
-  defp hold_power_levels?(%State{anti_hunting: false}, _total_power), do: false
-
+  # Re-allocation gate (Tolerance-scaled; off in :exact mode): near
+  # steady state the PID's rounded total flaps by ±1 and from-scratch
+  # re-allocation shuffles power between loops, so the MSCVs hunt. Hold
+  # the current allocation until the requested total moves by the gate —
+  # the axis keeps its intent, and only a move worth making is issued.
+  # Never hold past a flow-control limit: holds and backoffs must apply
+  # immediately.
   defp hold_power_levels?(%State{turbines: turbines, flow_control: flow_control}, total_power) do
+    min_move = Tolerance.min_power_move()
     current_total = turbines |> Enum.sum_by(& &1.power_level)
 
-    abs(total_power - current_total) < @min_power_move and
+    min_move > 0 and
+      abs(total_power - current_total) < min_move and
       (flow_control == nil or current_total <= flow_control)
   end
 

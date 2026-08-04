@@ -5,12 +5,13 @@ defmodule AutoNuke.Operator.ControlRods do
 
   defmodule State do
     @enforce_keys [:banks, :target, :axis, :mode, :last_temp, :last_rods, :temp_history]
-    defstruct(@enforce_keys ++ [anti_hunting: true])
+    defstruct(@enforce_keys)
   end
 
   alias AutoNuke.ControlAxis
   alias AutoNuke.API
   alias AutoNuke.Smoother
+  alias AutoNuke.Tolerance
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
   @core API.Vessels.core_vessel()
@@ -19,17 +20,18 @@ defmodule AutoNuke.Operator.ControlRods do
   # Rods take time to move.  Try to keep our ordered rod height within 1% of actual.
   @rods_clamping 1.0
 
-  # Anti-hunting: a 1°C variance is harmless (and the game only resolves
-  # 0.1 anyway), so ignore published target changes smaller than this...
+  # Command gating, all scaled by the global Tolerance mode (:exact
+  # zeroes them — hunt freely): a 1°C variance is harmless (and the game
+  # only resolves 0.1 anyway), so ignore published target changes
+  # smaller than this...
   @target_hysteresis 1.0
   # ...and while within a degree of target, don't issue rod commands
   # smaller than @min_move — let the intent accumulate into one real move.
   @calm_zone 1.0
   @min_move 0.5
+  # PID deadzone on the temperature error (also Tolerance-scaled):
+  @deadzone 1.0
 
-  # Toggleable from the TUI; persisted across restarts.
-  @anti_hunting_setting "rod_anti_hunting"
-  def anti_hunting_setting, do: @anti_hunting_setting
   # Keep the last 10 temperature readings:
   @temp_history_size 10
   # Look ahead 5 more readings during control loop:
@@ -57,11 +59,6 @@ defmodule AutoNuke.Operator.ControlRods do
 
   def get_rods(pid \\ __MODULE__), do: GenServer.call(pid, :get_rods)
 
-  def get_anti_hunting(pid \\ __MODULE__), do: GenServer.call(pid, :get_anti_hunting)
-
-  def set_anti_hunting(enabled, pid \\ __MODULE__) when is_boolean(enabled),
-    do: GenServer.call(pid, {:set_anti_hunting, enabled})
-
   def add_bank(bank, pid \\ __MODULE__) when bank in @all_banks,
     do: GenServer.call(pid, {:add_bank, bank})
 
@@ -80,7 +77,7 @@ defmodule AutoNuke.Operator.ControlRods do
       ControlAxis.new(
         kp: if(boron?, do: 0.05, else: 0.0005),
         ki: if(boron?, do: 0.005, else: 0.00005),
-        deadzone: 1.0,
+        deadzone: @deadzone,
         to_value_fn: &Function.identity/1,
         offset: rods |> rods_to_axis(),
         initial_value: rods |> rods_to_axis()
@@ -94,8 +91,7 @@ defmodule AutoNuke.Operator.ControlRods do
         mode: mode,
         last_temp: temp,
         last_rods: rods,
-        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp),
-        anti_hunting: AutoNuke.Settings.get(@anti_hunting_setting, true)
+        temp_history: Smoother.new(@temp_history_size) |> Smoother.add(temp)
       }
 
     PubSub.subscribe(self(), :ticker)
@@ -132,18 +128,6 @@ defmodule AutoNuke.Operator.ControlRods do
   def handle_call(:get_rods, _from, %State{} = state) do
     banks_and_rods = Enum.zip(state.banks, state.last_rods)
     {:reply, banks_and_rods, state}
-  end
-
-  @impl true
-  def handle_call(:get_anti_hunting, _from, %State{} = state) do
-    {:reply, state.anti_hunting, state}
-  end
-
-  @impl true
-  def handle_call({:set_anti_hunting, enabled}, _from, %State{} = state) do
-    Logger.notice(@log_prefix <> "Anti-hunting #{if enabled, do: "enabled", else: "disabled"}.")
-    AutoNuke.Settings.put(@anti_hunting_setting, enabled)
-    {:reply, :ok, %State{state | anti_hunting: enabled}}
   end
 
   @impl true
@@ -188,7 +172,7 @@ defmodule AutoNuke.Operator.ControlRods do
 
   @impl true
   def handle_info({:core_temp, t}, %State{} = state) do
-    if not state.anti_hunting or abs(t - state.target) >= @target_hysteresis do
+    if abs(t - state.target) >= Tolerance.hysteresis(@target_hysteresis) do
       {:noreply, %State{state | target: t}}
     else
       {:noreply, state}
@@ -209,7 +193,9 @@ defmodule AutoNuke.Operator.ControlRods do
         :direct -> current_temp
       end
 
-    case ControlAxis.step(state.axis, state.target, measurement) do
+    axis = %ControlAxis{state.axis | deadzone: Tolerance.deadzone(@deadzone)}
+
+    case ControlAxis.step(axis, state.target, measurement) do
       {:changed, axis, new, _old} -> {new, axis}
       {:unchanged, axis, old} -> {old, axis}
     end
@@ -232,22 +218,22 @@ defmodule AutoNuke.Operator.ControlRods do
     end)
   end
 
-  # Anti-hunting gate: near the target, sub-@min_move commands are held —
-  # the axis keeps its intent (bounded by @rods_clamping), and only a move
-  # worth making is issued. Real deviations behave exactly as before.
-  defp gate_rod_command(%State{anti_hunting: false} = state, _measurement, new_rods) do
-    {new_rods, calculate_rod_changes(state.banks, state.last_rods, new_rods)}
-  end
-
+  # Command gate (Tolerance-scaled; off entirely in :exact mode): near
+  # the target, sub-min-move commands are held — the axis keeps its
+  # intent (bounded by @rods_clamping), and only a move worth making is
+  # issued. Real deviations always pass straight through.
   defp gate_rod_command(%State{} = state, measurement, new_rods) do
-    calm? = abs(state.target - measurement) <= @calm_zone
+    calm_zone = Tolerance.hysteresis(@calm_zone)
+    min_move = Tolerance.hysteresis(@min_move)
+
+    calm? = calm_zone > 0 and abs(state.target - measurement) <= calm_zone
 
     small? =
       state.last_rods != [] and new_rods != [] and
-        abs(Statistex.average(new_rods) - Statistex.average(state.last_rods)) < @min_move
+        abs(Statistex.average(new_rods) - Statistex.average(state.last_rods)) < min_move
 
     if calm? and small? and new_rods != state.last_rods do
-      Logger.debug(@log_prefix <> "Holding rods (calm zone, move under #{@min_move}%).")
+      Logger.debug(@log_prefix <> "Holding rods (calm zone, move under #{min_move}%).")
       {state.last_rods, []}
     else
       {new_rods, calculate_rod_changes(state.banks, state.last_rods, new_rods)}
