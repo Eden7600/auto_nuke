@@ -18,6 +18,8 @@ defmodule AutoNuke.Tui.Dashboard do
 
   @behaviour AutoNuke.Tui
 
+  require Logger
+
   alias AutoNuke.Tui.{Canvas, Data, Drills, LogBuffer, Menu, Operators, Runner}
 
   # Don't refetch plant data more often than this.
@@ -334,14 +336,10 @@ defmodule AutoNuke.Tui.Dashboard do
 
       {:char, "s"} ->
         flash =
-          try do
+          run_flashing("Supervise-all failed", fn ->
             AutoNuke.Operator.Handoff.adopt()
             {:ok, "Supervised operators started."}
-          rescue
-            e -> {:error, Exception.message(e)}
-          catch
-            :exit, reason -> {:error, inspect(reason)}
-          end
+          end)
 
         {:ok, %{state | ops: %{ops | list: Operators.list(), flash: flash}}}
 
@@ -478,13 +476,31 @@ defmodule AutoNuke.Tui.Dashboard do
 
   defp handle_key(_view, _key, state), do: {:ok, state}
 
+  # Run a UI action that may raise or exit (dead process, game API down).
+  # The flash line gets clipped to the pane width, so the full error goes
+  # to the log and the flash carries a pointer to it.
+  defp run_flashing(context, fun) do
+    fun.()
+  rescue
+    e -> logged_error(context, Exception.format(:error, e, __STACKTRACE__))
+  catch
+    :exit, reason -> logged_error(context, "exited: " <> inspect(reason, limit: :infinity))
+  end
+
+  defp logged_error(context, detail) do
+    Logger.error("[Tui] #{context}: #{detail}")
+    {:error, "#{context} (full error in log): #{detail}"}
+  end
+
   defp run_drill(state, item, answers) do
     flash =
-      case item.run.(answers) do
-        :ok -> {:ok, "#{item.label} ✓"}
-        {:ok, game_reply} -> {:ok, game_reply}
-        {:error, msg} -> {:error, msg}
-      end
+      run_flashing("#{item.label} failed", fn ->
+        case item.run.(answers) do
+          :ok -> {:ok, "#{item.label} ✓"}
+          {:ok, game_reply} -> {:ok, game_reply}
+          {:error, msg} -> {:error, msg}
+        end
+      end)
 
     %{state | view: :drills, drills: %{state.drills | flash: flash}}
   end
@@ -500,14 +516,10 @@ defmodule AutoNuke.Tui.Dashboard do
     end
 
     notice =
-      try do
+      run_flashing("SCRAM press failed", fn ->
         AutoNuke.API.Misc.press_scram()
         {:ok, "SCRAM — rods dropping; ControlRods & CoreTemp disabled"}
-      rescue
-        e -> {:error, "SCRAM press failed: #{Exception.message(e)}"}
-      catch
-        :exit, reason -> {:error, "SCRAM press failed: #{inspect(reason)}"}
-      end
+      end)
 
     %{state | view: :dash, notice: notice, ops: %{state.ops | list: Operators.list()}}
   end
@@ -516,11 +528,13 @@ defmodule AutoNuke.Tui.Dashboard do
 
   defp run_op_action(state, action, answers) do
     flash =
-      case action.run.(answers) do
-        :ok -> {:ok, "#{action.label} ✓"}
-        {:ok, msg} -> {:ok, msg}
-        {:error, msg} -> {:error, msg}
-      end
+      run_flashing("#{action.label} failed", fn ->
+        case action.run.(answers) do
+          :ok -> {:ok, "#{action.label} ✓"}
+          {:ok, msg} -> {:ok, msg}
+          {:error, msg} -> {:error, msg}
+        end
+      end)
 
     %{state | ops: %{state.ops | list: Operators.list(), flash: flash}}
   end
@@ -713,10 +727,18 @@ defmodule AutoNuke.Tui.Dashboard do
     |> Canvas.put_text(2, 3, power_line(data.power))
     |> task_chip(state, cols)
     |> override_chip(data.overrides, cols)
+    |> tolerance_chip(Map.get(data, :tolerance, :normal), cols)
   end
 
   # Overrides mean the operators are NOT doing their normal thing — keep
   # that permanently visible while any are active.
+  # A non-default tolerance mode is worth a glance at the header.
+  defp tolerance_chip(canvas, :normal, _cols), do: canvas
+
+  defp tolerance_chip(canvas, mode, cols) do
+    Canvas.put_text(canvas, 2, cols - 32, " ⊙ #{mode} ", [:cyan, :bright])
+  end
+
   defp override_chip(canvas, [], _cols), do: canvas
 
   defp override_chip(canvas, overrides, cols) do
@@ -752,7 +774,7 @@ defmodule AutoNuke.Tui.Dashboard do
   defp supply(:batteries), do: "supply: BATTERIES ⚠"
   defp supply(:err), do: "supply: ──"
 
-  defp demand_panel(canvas, {row, col, w, _h} = rect, %{demand: demand}, history) do
+  defp demand_panel(canvas, {row, col, w, _h} = rect, %{demand: demand} = data, history) do
     canvas = Canvas.box(canvas, rect, title: "DEMAND", style: [:green])
 
     case demand do
@@ -768,12 +790,11 @@ defmodule AutoNuke.Tui.Dashboard do
 
         {proj_text, proj_style} = projection(d.projected_ratio, band_min, band_max)
 
+        # The active override/boost values themselves, not just flags:
         flags =
-          [if(d.override?, do: "OVERRIDE"), if(d.boost?, do: "BOOST")]
-          |> Enum.reject(&is_nil/1)
-          |> case do
+          case overrides_for(data, "SteamFlow") do
             [] -> ""
-            list -> "   [#{Enum.join(list, "] [")}]"
+            descs -> "   ⚙ " <> Enum.join(descs, " · ")
           end
 
         levels =
@@ -782,20 +803,28 @@ defmodule AutoNuke.Tui.Dashboard do
             levels -> "MSCV " <> Enum.map_join(levels, "+", &to_string/1)
           end
 
+        target_style = if flags == "", do: [], else: [:yellow]
+
         canvas
         |> Canvas.put_text(row + 1, col + 2, supplied)
         |> Canvas.put_text(row + 2, col + 2, proj_text, proj_style)
         |> Canvas.put_text(
           row + 2,
           col + 28,
-          "target #{pct(d.target)}  (band #{pct(band_min)}–#{pct(band_max)})"
+          "target #{pct(d.target)}  (band #{pct(band_min)}–#{pct(band_max)})",
+          target_style
         )
         |> Canvas.put_text(
           row + 3,
           col + 2,
           "net #{fmt_mw(d.supply_kw)}  " <> Canvas.sparkline(history.net_mw, w - 24)
         )
-        |> Canvas.put_text(row + 4, col + 2, Canvas.clip(levels <> flags, w - 4))
+        |> Canvas.put_segments(
+          row + 4,
+          col + 2,
+          [{levels, []}, {flags, [:yellow, :bright]}],
+          w - 4
+        )
     end
   end
 
@@ -913,7 +942,7 @@ defmodule AutoNuke.Tui.Dashboard do
   defp message_style(:debug), do: [:faint]
   defp message_style(_), do: []
 
-  defp core_panel(canvas, {row, col, w, _h} = rect, %{core: core, pzr: pzr}, history) do
+  defp core_panel(canvas, {row, col, w, _h} = rect, %{core: core, pzr: pzr} = data, history) do
     target =
       case core.target do
         :err -> ""
@@ -930,12 +959,43 @@ defmodule AutoNuke.Tui.Dashboard do
       |> Enum.join(" ")
 
     temp_text = "Temp #{fmt(core.temp, "°C", 1)}#{target}"
-    rods_text = "Rods #{rods} %"
+
+    rods_tag =
+      case overrides_for(data, "ControlRods") do
+        [] -> ""
+        descs -> " ⚙" <> Enum.join(descs, ", ")
+      end
+
+    rods_text = "Rods #{rods} %" <> rods_tag
 
     canvas
     |> Canvas.box(rect, title: "CORE", style: [:green])
     |> Canvas.put_text(row + 1, col + 2, temp_text, [:bright])
+    |> then(fn c ->
+      # An overridden temperature target is drawn in yellow, in place:
+      case {target, overrides_for(data, "CoreTemp")} do
+        {"", _} ->
+          c
+
+        {_, []} ->
+          c
+
+        {t, _} ->
+          start = col + 2 + String.length(temp_text) - String.length(t)
+          Canvas.put_text(c, row + 1, start, t <> " ⚙", [:yellow, :bright])
+      end
+    end)
     |> Canvas.put_text(row + 2, col + 2, rods_text)
+    |> then(fn c ->
+      case rods_tag do
+        "" ->
+          c
+
+        tag ->
+          start = col + 2 + String.length(rods_text) - String.length(tag)
+          Canvas.put_text(c, row + 2, start, tag, [:yellow])
+      end
+    end)
     |> Canvas.put_text(row + 3, col + 2, "Boron #{fmt(core.boron_ppm, "ppm", 0)}")
     |> Canvas.put_text(row + 4, col + 2, "Fill #{fmt(core.fill, "m³", 0)}")
     |> spark_after(row + 1, col, temp_text, history.core_temp, w)
@@ -952,14 +1012,21 @@ defmodule AutoNuke.Tui.Dashboard do
     budget = col + w - 26 - start
 
     if budget >= 12 do
-      # Colour by what xenon is *costing* (rod margin), not by an absolute
-      # level — see XenonGuard for why magnitudes aren't meaningful.
+      # Rods sitting mostly out is normal under the boron-heavy strategy;
+      # red only when the wave has eaten into the reserve band. Yellow at
+      # the xenon ceiling XenonGuard warns on.
       xe_style =
         case rod_margin(core) do
           m when is_number(m) and m < 10 -> [:red, :bright]
-          m when is_number(m) and m < 25 -> [:yellow]
-          _ -> []
+          _ -> if is_number(core.xenon) and core.xenon > 20, do: [:yellow], else: []
         end
+
+      # Iodine *production* is the leading signal: it becomes xenon 6
+      # game-hours later. Highlight it before it becomes a wave.
+      io_style =
+        if is_number(core.iodine_gen) and core.iodine_gen > 3.5,
+          do: [:yellow],
+          else: [:faint]
 
       Canvas.put_segments(
         canvas,
@@ -968,7 +1035,8 @@ defmodule AutoNuke.Tui.Dashboard do
         [
           {"Xe #{fmt(core.xenon, "", 1)} ", xe_style},
           {Canvas.sparkline(history.xenon, 10) <> " ", [:green]},
-          {"I #{fmt(core.iodine, "", 1)}", [:faint]}
+          {"I+#{fmt(core.iodine_gen, "", 1)} ", io_style},
+          {"Σ#{fmt(core.iodine, "", 0)}", [:faint]}
         ],
         budget
       )
@@ -1000,7 +1068,7 @@ defmodule AutoNuke.Tui.Dashboard do
     end
   end
 
-  defp loops_panel(canvas, {row, col, w, _h} = rect, %{loops: loops}, history) do
+  defp loops_panel(canvas, {row, col, w, _h} = rect, %{loops: loops} = data, history) do
     canvas = Canvas.box(canvas, rect, title: "LOOPS", style: [:green])
 
     head = "     SG °C    bar   steam kg/m      gen"
@@ -1014,32 +1082,88 @@ defmodule AutoNuke.Tui.Dashboard do
     loops
     |> Enum.with_index()
     |> Enum.reduce(canvas, fn {l, i}, acc ->
+      {mark, mark_style, service?} = loop_state_mark(data, l.loop)
+
       grid =
-        case l.connected do
-          true -> "⚡ #{fmt_mw(l.gen_kw)} #{fmt(l.gen_hz, "Hz", 1)}"
-          false -> "off grid"
-          :err -> "──"
+        case {service?, l.connected} do
+          {false, _} -> "out of service"
+          {_, true} -> "⚡ #{fmt_mw(l.gen_kw)} #{fmt(l.gen_hz, "Hz", 1)}"
+          {_, false} -> "off grid"
+          {_, :err} -> "──"
         end
 
       line =
         " #{circled(l.loop)}  #{fmt(l.sg_temp, "", 1)}  #{fmt(l.sg_pressure, "", 1)}   " <>
           "#{fmt(l.outlet, "", 0)}          #{grid}"
 
-      Canvas.put_text(acc, row + 2 + i, col + 2, line)
+      acc
+      |> Canvas.put_text(row + 2 + i, col + 2, line, if(service?, do: [], else: [:faint]))
+      |> Canvas.put_text(row + 2 + i, col + 3 + String.length(" #{circled(l.loop)}"), mark, mark_style)
+      |> loop_boost_tag(row + 2 + i, col + 2 + String.length(line) + 2, w - String.length(line) - 6, data, l.loop)
     end)
   end
 
-  defp condenser_panel(canvas, {row, col, _w, _h} = rect, %{condenser: c}) do
+  # Intended vs. actual loop state, from the plant-wide intent registry
+  # and the loop lists the operators actually hold:
+  #   ✓ in service · × out of service · ~ operators still syncing
+  defp loop_state_mark(%{loop_state: ls}, loop) do
+    intent = Map.get(ls.intents, loop)
+
+    managed =
+      [ls.steam_flow, ls.core_temp]
+      |> Enum.filter(&is_list/1)
+      |> Enum.map(&(loop in &1))
+
+    case {intent, managed} do
+      {nil, _} -> {" ", [], true}
+      {:active, []} -> {"✓", [:green], true}
+      {:active, m} -> if Enum.all?(m), do: {"✓", [:green], true}, else: {"~", [:yellow, :bright], true}
+      {:stopped, m} -> if Enum.any?(m), do: {"~", [:yellow, :bright], true}, else: {"×", [:yellow], false}
+    end
+  end
+
+  defp loop_state_mark(_data, _loop), do: {" ", [], true}
+
+  defp loop_boost_tag(canvas, r, start, budget, data, loop) do
+    case overrides_for(data, "SecondaryFill L#{loop}") do
+      [] -> canvas
+      _ when budget < 7 -> canvas
+      _ -> Canvas.put_text(canvas, r, start, "⚙ boost", [:yellow, :bright])
+    end
+  end
+
+  # All active override/boost descriptions for one operator label.
+  defp overrides_for(data, op) do
+    Map.get(data, :overrides, [])
+    |> Enum.filter(&(&1.op == op))
+    |> Enum.map(& &1.desc)
+  end
+
+  defp condenser_panel(canvas, {row, col, _w, _h} = rect, %{condenser: c} = data) do
+    fill_line = "Fill #{fmt(c.fill, "%", 1)}   Temp #{fmt(c.temp, "°C", 1)}"
+    # Vacuum reads as a 0-1 fraction (0.998 = 99.8%).
+    vac_line = "Vacuum #{fmt(ratio_percent(c.vacuum), "%", 1)}   pump #{onoff(c.vac_active)}"
+
     canvas
     |> Canvas.box(rect, title: "CONDENSER / VACUUM", style: [:green])
-    |> Canvas.put_text(row + 1, col + 2, "Fill #{fmt(c.fill, "%", 1)}   Temp #{fmt(c.temp, "°C", 1)}")
-    |> Canvas.put_text(
+    |> Canvas.put_text(row + 1, col + 2, fill_line)
+    |> boost_tag(row + 1, col + 4 + String.length(fill_line), data, "CondenserFill", "fill boost")
+    |> Canvas.put_text(row + 2, col + 2, vac_line)
+    |> boost_tag(
       row + 2,
-      col + 2,
-      # Vacuum reads as a 0-1 fraction (0.998 = 99.8%).
-      "Vacuum #{fmt(ratio_percent(c.vacuum), "%", 1)}   pump #{onoff(c.vac_active)}"
+      col + 4 + String.length(vac_line),
+      data,
+      "CondenserCooling",
+      "cooling boost"
     )
     |> Canvas.put_text(row + 3, col + 2, "Retention tank #{fmt(c.retention, "%", 1)}")
+  end
+
+  defp boost_tag(canvas, r, start, data, op, label) do
+    case overrides_for(data, op) do
+      [] -> canvas
+      _ -> Canvas.put_text(canvas, r, start, "⚙ #{label}", [:yellow, :bright])
+    end
   end
 
   defp operators_panel(canvas, {row, col, w, _h} = rect, %{operators: operators} = data) do

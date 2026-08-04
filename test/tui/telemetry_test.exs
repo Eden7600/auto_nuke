@@ -287,7 +287,13 @@ defmodule AutoNuke.Tui.TelemetryTest do
       }
 
       state = Dashboard.init([])
-      data = %{Data.empty() | demand: demand}
+
+      data = %{
+        Data.empty()
+        | demand: demand,
+          overrides: [%{op: "SteamFlow", desc: "→ 105% (no expiry)"}]
+      }
+
       {:ok, state} = Dashboard.update({:tui_data, data}, state)
 
       frame = rendered(state)
@@ -297,11 +303,48 @@ defmodule AutoNuke.Tui.TelemetryTest do
       assert frame =~ "proj 102%"
       assert frame =~ "target 105%"
       assert frame =~ "MSCV 28+28+27"
-      assert frame =~ "[OVERRIDE]"
+      # The override value itself is shown, not just a flag:
+      assert frame =~ "⚙ → 105% (no expiry)"
     end
 
     test "demand panel degrades when SteamFlow is down" do
       assert rendered(Dashboard.init([])) =~ "SteamFlow operator not running"
+    end
+
+    test "loops panel shows intended vs. actual loop state" do
+      state = Dashboard.init([])
+
+      data = %{
+        Data.empty()
+        | loop_state: %{
+            intents: %{1 => :active, 2 => :stopped, 3 => :stopped},
+            steam_flow: [1],
+            core_temp: [1, 3]
+          }
+      }
+
+      {:ok, state} = Dashboard.update({:tui_data, data}, state)
+      frame = rendered(state)
+
+      # Loop 1 in service; loop 2 fully out; loop 3 still held by an
+      # operator, so it shows as syncing.
+      assert frame =~ "✓"
+      assert frame =~ "out of service"
+      assert frame =~ "~"
+    end
+
+    test "core panel shows the overridden temperature target in place" do
+      state = Dashboard.init([])
+      core = %{Data.empty().core | target: 320.0}
+
+      data = %{
+        Data.empty()
+        | core: core,
+          overrides: [%{op: "CoreTemp", desc: "→ 320.0°C (no expiry)"}]
+      }
+
+      {:ok, state} = Dashboard.update({:tui_data, data}, state)
+      assert rendered(state) =~ "→ 320.0 ⚙"
     end
 
     test "health panel lists issues in red, or all-clear" do

@@ -47,7 +47,22 @@ defmodule AutoNuke.Tui.Data do
       operators: operators(),
       demand: safe_call(Op.SteamFlow, :get_demand_status),
       health: health(),
-      overrides: overrides()
+      overrides: overrides(),
+      loop_state: loop_state(),
+      tolerance: AutoNuke.Tolerance.mode()
+    }
+  end
+
+  @doc """
+  Intended vs. actual loop state: the plant-wide intent registry alongside
+  the loops each loop-aware operator actually manages. All local process
+  state — live even when the game is unreachable.
+  """
+  def loop_state do
+    %{
+      intents: AutoNuke.LoopIntent.intents(),
+      steam_flow: safe_call(Op.SteamFlow, :get_loops),
+      core_temp: safe_call(Op.CoreTemp, :get_loops)
     }
   end
 
@@ -62,20 +77,19 @@ defmodule AutoNuke.Tui.Data do
       boost("SteamFlow", safe_call(Op.SteamFlow, :get_boost_mode)),
       core_temp_override(),
       rods_mode(),
-      rods_anti_hunting(),
       boost("SecondaryFill L1", secondary_boost(1)),
       boost("SecondaryFill L2", secondary_boost(2)),
       boost("SecondaryFill L3", secondary_boost(3)),
       boost("CondenserFill", safe_call(Op.CondenserFill, :get_boost_mode)),
       boost("CondenserCooling", safe_call(Op.CondenserCooling, :get_boost_mode)),
-      xenon_burn()
+      xenon_wave()
     ]
     |> Enum.reject(&is_nil/1)
   end
 
-  defp xenon_burn do
-    case safe_call(Op.XenonGuard, :burning?) do
-      true -> %{op: "XenonGuard", desc: "burning off xenon"}
+  defp xenon_wave do
+    case safe_call(Op.XenonGuard, :wave?) do
+      true -> %{op: "XenonGuard", desc: "riding out a xenon wave"}
       _ -> nil
     end
   end
@@ -103,13 +117,9 @@ defmodule AutoNuke.Tui.Data do
     end
   end
 
-  # Anti-hunting off is non-default behaviour worth surfacing.
-  defp rods_anti_hunting do
-    case safe_call(Op.ControlRods, :get_anti_hunting) do
-      false -> %{op: "ControlRods", desc: "anti-hunting off"}
-      _ -> nil
-    end
-  end
+  # Anti-hunting (rods or MSCV) is deliberately absent here: it's a
+  # player preference, not an override — overrides are things that change
+  # the plant's operating behaviour in substantial ways.
 
   defp secondary_boost(loop) do
     safe_call(Module.concat(Op.SecondaryFill, "L#{loop}"), :get_boost_mode)
@@ -145,10 +155,14 @@ defmodule AutoNuke.Tui.Data do
     |> add_issue("Em. generator 2 maintenance", fn ->
       API.get_boolean("EMERGENCY_GENERATOR_2_MAINTENANCE_NEEDED")
     end)
-    # Xenon has no universal "high" level — what matters is paying for it
-    # in rod margin (the same signal XenonGuard acts on).
-    |> add_issue("Xenon costing rod margin", fn ->
-      API.get_float("CORE_XENON_CUMULATIVE") > 0 and API.get_float("RODS_POS_ACTUAL") < 25
+    # Xenon over the ceiling means a wave is in progress; high iodine
+    # production means the next one is being scheduled (it converts to
+    # xenon 6 game-hours later). Same thresholds XenonGuard warns on.
+    |> add_issue("Xenon wave in progress", fn ->
+      API.get_float("CORE_XENON_CUMULATIVE") > Op.XenonGuard.xenon_ceiling()
+    end)
+    |> add_issue("Iodine production high", fn ->
+      API.get_float("CORE_IODINE_GENERATION") > Op.XenonGuard.iodine_limit()
     end)
     |> Enum.reverse()
     |> Kernel.++(safe_list(&panel_issues/0))
@@ -206,7 +220,8 @@ defmodule AutoNuke.Tui.Data do
         boron_ppm: :err,
         fill: :err,
         xenon: :err,
-        iodine: :err
+        iodine: :err,
+        iodine_gen: :err
       },
       pzr: %{temp: :err, pressure: :err, heaters: :err},
       loops:
@@ -226,8 +241,11 @@ defmodule AutoNuke.Tui.Data do
       operators: operators(),
       demand: :err,
       health: %{integrity: :err, wear: :err, issues: :err},
-      # Override state is local process state — live even when offline.
-      overrides: overrides()
+      # Override, loop and tolerance state are local process state —
+      # live even when offline.
+      overrides: overrides(),
+      loop_state: loop_state(),
+      tolerance: AutoNuke.Tolerance.mode()
     }
   end
 
@@ -269,7 +287,8 @@ defmodule AutoNuke.Tui.Data do
       boron_ppm: safe(fn -> API.get_float("CHEM_BORON_PPM") end),
       fill: safe(fn -> API.Vessels.get_fill_gauge(@core_vessel) end),
       xenon: safe(fn -> API.get_float("CORE_XENON_CUMULATIVE") end),
-      iodine: safe(fn -> API.get_float("CORE_IODINE_CUMULATIVE") end)
+      iodine: safe(fn -> API.get_float("CORE_IODINE_CUMULATIVE") end),
+      iodine_gen: safe(fn -> API.get_float("CORE_IODINE_GENERATION") end)
     }
   end
 
