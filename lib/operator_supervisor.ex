@@ -33,7 +33,10 @@ defmodule AutoNuke.OperatorSupervisor do
       :all -> @children
       :none -> []
     end
-    |> Supervisor.init(strategy: :one_for_one)
+    # A game-API stall makes many of the 16 operators crash at once, and
+    # the default 3-restarts-in-5s gives up on the first burst. Ride out
+    # a stall; still give up on a genuine crash loop.
+    |> Supervisor.init(strategy: :one_for_one, max_restarts: 20, max_seconds: 10)
   end
 
   @doc "Resolved child specs for every operator."
