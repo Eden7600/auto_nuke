@@ -4,10 +4,11 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   Resistor banks burn surplus power, but with them enabled the plant only
   targets 100% of demand — power fed to resistors is power not sold. So:
-  keep them OFF while supply tracks the target, and switch them ON
-  whenever supply strays outside ±10% of SteamFlow's current target —
-  overproduction *or* an aggressive catch-up transient both count. Back
-  OFF once supply has hugged the target again for a sustained stretch.
+  keep them OFF while supply tracks the target, and switch them ON when
+  supply overshoots SteamFlow's current target by a sustained margin.
+  Back OFF once supply is no longer overshooting for a sustained stretch.
+  Undersupply never enables them — burning power while short only digs
+  the hole deeper.
   """
 
   use GenServer
@@ -19,10 +20,10 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Enable when |supply ratio - target| sustains beyond this. The plant
-  # gets in trouble at 10% off — act before that, not at it.
+  # Enable when supply overshoots the target beyond this. The plant
+  # gets in trouble at 10% over — act before that, not at it.
   @on_deviation 0.08
-  # Disable when it sustains within this (the gap is the hysteresis):
+  # Disable when it sustains at or below this (the gap is the hysteresis):
   @off_deviation 0.06
 
   # Sustain requirements, in this operator's ticks (≈1 game-second each):
@@ -97,8 +98,9 @@ defmodule AutoNuke.Operator.ResistorBanks do
   defp track(%State{} = state, ratio, deviation) do
     state =
       cond do
-        abs(deviation) > @on_deviation -> %State{state | high: state.high + 1, low: 0}
-        abs(deviation) <= @off_deviation -> %State{state | low: state.low + 1, high: 0}
+        deviation > @on_deviation -> %State{state | high: state.high + 1, low: 0}
+        # On target or undersupplying — either way, no place for resistors:
+        deviation <= @off_deviation -> %State{state | low: state.low + 1, high: 0}
         # In the hysteresis margin: hold both streaks.
         true -> %State{state | high: 0, low: 0}
       end
@@ -108,7 +110,7 @@ defmodule AutoNuke.Operator.ResistorBanks do
         Logger.warning(
           @log_prefix <>
             "Supply at #{round(ratio * 100)}% of demand, " <>
-            "#{round(deviation * 100)}% off target — enabling resistor banks."
+            "#{round(deviation * 100)}% over target — enabling resistor banks."
         )
 
         enable_banks()

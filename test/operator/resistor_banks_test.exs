@@ -58,14 +58,20 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
     refute_put("RESISTOR_BANK_03_SWITCH")
   end
 
-  test "sustained undersupply also enables the banks" do
-    state = init() |> tick(0.85) |> tick(0.85)
+  test "sustained undersupply never enables the banks" do
+    init() |> tick(0.85) |> tick(0.85) |> tick(0.85) |> tick(0.85)
 
-    MockAPI.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-    MockAPI.mock_get("RESISTOR_BANKS_JSON", @banks_json)
+    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
+  end
+
+  test "sustained undersupply disables banks that are on" do
+    state = init()
+    state = Enum.reduce(1..29, state, fn _, acc -> tick(acc, 0.85) end)
+
+    MockAPI.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "True")
     tick(state, 0.85)
 
-    assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == true
+    assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == false
   end
 
   test "a brief spike does not enable anything" do
