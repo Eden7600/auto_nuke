@@ -245,10 +245,10 @@ defmodule Mix.Tasks.AutoNuke.Shutdown do
       temp = SteamGen.get_temperature(steam_gen)
 
       UI.ProgressBar.wait(
-        config: UI.ProgressBar.Config.target(max(temp, 100), 50, "°C", 1),
+        config: UI.ProgressBar.Config.target(max(temp, 100), 60, "°C", 1),
         label: "Temperature",
         current_fn: fn -> SteamGen.get_temperature(steam_gen) end,
-        done_fn: &(&1 <= 50)
+        done_fn: &(&1 <= 60)
       )
     end)
 
