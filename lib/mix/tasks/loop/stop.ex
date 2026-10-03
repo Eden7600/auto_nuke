@@ -3,10 +3,12 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   @shortdoc "Stop a loop"
 
   use Mix.Task
+
   alias AutoNuke.API
   alias AutoNuke.API.SteamGen
-  alias AutoNuke.TaskUI, as: UI
+  alias AutoNuke.Operator.CoreTemp
   alias AutoNuke.Operator.SteamFlow
+  alias AutoNuke.TaskUI, as: UI
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -20,6 +22,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   def stop(loop) do
     remote_node = AutoNuke.PlantNode.find("auto_nuke.loop.stop <loop>")
     steam_flow_pid = {SteamFlow, remote_node}
+    core_temp_pid = {CoreTemp, remote_node}
     steam_gen = SteamGen.for_loop(loop)
 
     UI.init()
@@ -29,6 +32,15 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     Startup.enable_resistor_bank()
 
     UI.tablet("AutoNuke Remote Control")
+
+    # Remove the loop from the automatic operators first so they stop
+    # controlling it while the manual shutdown sequence is running.
+    UI.set_wait(
+      "Core Temperature Operator",
+      "REMOVE LOOP #{loop}",
+      fn -> loop not in CoreTemp.get_loops(core_temp_pid) end,
+      fn -> CoreTemp.remove_loop(loop, core_temp_pid) end
+    )
 
     UI.set_wait(
       "Steam Flow Operator",
@@ -40,8 +52,6 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     UI.wait("Turbine 0#{loop} Circuit Breaker", "OPEN", fn ->
       API.get_boolean("GENERATOR_#{loop - 1}_BREAKER")
     end)
-
-    UI.console("Generation & Distribution")
 
     UI.console("Generation & Distribution")
     steam_gen.bypass |> UI.Valves.set(100, wait: false)
@@ -84,5 +94,4 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       fn -> SteamGen.set_vent_open(steam_gen, false) end
     )
   end
-
 end
