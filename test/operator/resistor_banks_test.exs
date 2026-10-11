@@ -42,7 +42,7 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
               })
 
   # With SteamFlow not running, the operator assumes a target of 1.0 —
-  # the on-trigger is |ratio - 1.0| > 0.08.
+  # the on-trigger is ratio - 1.0 > 0.08 (overproduction only).
 
   test "sustained overproduction enables main switch and installed banks" do
     state = init() |> tick(1.12) |> tick(1.12)
@@ -58,14 +58,10 @@ defmodule AutoNuke.Operator.ResistorBanksTest do
     refute_put("RESISTOR_BANK_03_SWITCH")
   end
 
-  test "sustained undersupply also enables the banks" do
-    state = init() |> tick(0.85) |> tick(0.85)
+  test "sustained undersupply never enables the banks" do
+    init() |> tick(0.85) |> tick(0.85) |> tick(0.85)
 
-    MockAPI.mock_get("RESISTOR_BANKS_MAIN_SWITCH", "False")
-    MockAPI.mock_get("RESISTOR_BANKS_JSON", @banks_json)
-    tick(state, 0.85)
-
-    assert MockAPI.mock_put_value("RESISTOR_BANKS_MAIN_SWITCH") == true
+    refute_put("RESISTOR_BANKS_MAIN_SWITCH")
   end
 
   test "a brief spike does not enable anything" do

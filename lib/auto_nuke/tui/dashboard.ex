@@ -1479,9 +1479,19 @@ defmodule AutoNuke.Tui.Dashboard do
 
     case prompt.stage do
       :confirm ->
-        canvas
-        |> Canvas.put_text(r + 1, col0 + 2, prompt.item[:confirm] || "Run this task?", [:bright])
-        |> Canvas.put_text(row0 + h - 1, col0 + 2, " [y] yes · [n/esc] no ", [:yellow])
+        confirm = prompt.item[:confirm] || "Run this task?"
+        max_lines = row0 + h - 1 - (r + 1)
+
+        canvas =
+          confirm
+          |> Canvas.wrap(w - 4)
+          |> Enum.take(max_lines)
+          |> Enum.with_index()
+          |> Enum.reduce(canvas, fn {line, i}, acc ->
+            Canvas.put_text(acc, r + 1 + i, col0 + 2, line, [:bright])
+          end)
+
+        Canvas.put_text(canvas, row0 + h - 1, col0 + 2, " [y] yes · [n/esc] no ", [:yellow])
 
       :input ->
         param = Enum.at(prompt.item.params, length(prompt.answers))

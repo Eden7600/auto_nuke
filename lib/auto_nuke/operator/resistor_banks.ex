@@ -4,10 +4,11 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   Resistor banks burn surplus power, but with them enabled the plant only
   targets 100% of demand — power fed to resistors is power not sold. So:
-  keep them OFF while supply tracks the target, and switch them ON
-  whenever supply strays outside ±10% of SteamFlow's current target —
-  overproduction *or* an aggressive catch-up transient both count. Back
-  OFF once supply has hugged the target again for a sustained stretch.
+  keep them OFF while supply tracks the target, and switch them ON only
+  when supply runs *above* SteamFlow's current target (genuine
+  overproduction worth burning off). Underproduction must never enable
+  them — it would only waste the power we're short of. Back OFF once
+  supply has hugged the target again for a sustained stretch.
   """
 
   use GenServer
@@ -19,10 +20,11 @@ defmodule AutoNuke.Operator.ResistorBanks do
 
   @log_prefix "[#{inspect(__MODULE__)}] " |> String.replace("AutoNuke.Operator.", "")
 
-  # Enable when |supply ratio - target| sustains beyond this. The plant
-  # gets in trouble at 10% off — act before that, not at it.
+  # Enable when supply ratio exceeds the target by this much, sustained.
+  # The plant gets in trouble at 10% off — act before that, not at it.
+  # Only positive deviations count: underproduction never enables banks.
   @on_deviation 0.08
-  # Disable when it sustains within this (the gap is the hysteresis):
+  # Disable when supply sits at or below this (the gap is the hysteresis):
   @off_deviation 0.06
 
   # Sustain requirements, in this operator's ticks (≈1 game-second each):
@@ -65,8 +67,10 @@ defmodule AutoNuke.Operator.ResistorBanks do
   defp track(%State{} = state, ratio, deviation) do
     state =
       cond do
-        abs(deviation) > @on_deviation -> %State{state | high: state.high + 1, low: 0}
-        abs(deviation) <= @off_deviation -> %State{state | low: state.low + 1, high: 0}
+        # Only overproduction (generation above target) may enable banks.
+        deviation > @on_deviation -> %State{state | high: state.high + 1, low: 0}
+        # At or below target — including any underproduction — count toward off.
+        deviation <= @off_deviation -> %State{state | low: state.low + 1, high: 0}
         # In the hysteresis margin: hold both streaks.
         true -> %State{state | high: 0, low: 0}
       end

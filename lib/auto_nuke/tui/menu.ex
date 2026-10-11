@@ -47,7 +47,8 @@ defmodule AutoNuke.Tui.Menu do
         label: "Shutdown — stop the entire reactor",
         params: [],
         task: T.Shutdown,
-        confirm: "Begin a controlled shutdown of the whole plant?"
+        confirm:
+          "Begin shutdown? Confirm external power is ENABLED and backup generators are set to MANUAL."
       },
       %{
         id: :refuel,

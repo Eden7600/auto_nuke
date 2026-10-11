@@ -30,7 +30,9 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   @startup_mscv 10
 
   # Start primary pumps at this speed:
-  @startup_primary_speed Op.PrimaryPumps.speed_range().first
+  # The PrimaryPumps operator corrects this once it is enabled.
+  @startup_primary_speed 10
+  def startup_primary_speed, do: @startup_primary_speed
   # Start cooling pumps at this speed:
   @startup_cooling_speed 50
   # Need at least this % in the retention tank before we start the vacuum pump:
@@ -38,7 +40,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
   # The reason we don't use 50% is that we'll already have the retention tank
   # process running and targeting 50%, and it might linger around 49%.
 
-  # To get reactor up to temperature, increase 
+  # To get reactor up to temperature, increase
   # the core temperature target by 1°C per second.
   @core_temp_increase 1 / AutoNuke.Ticker.ticks_per_second()
   # Clamp this at 10°C above the current actual temperature.
@@ -113,7 +115,7 @@ defmodule Mix.Tasks.AutoNuke.Startup do
 
     start_reaction()
     {:ok, _} = Op.CoreTemp.start_link(loops: loops)
-    {:ok, _} = Op.PrimaryPumps.start_link()
+    {:ok, _} = Op.PrimaryPumps.start_link(loops: loops)
     {:ok, _} = Op.ControlRods.start_link(mode: :direct)
     achieve_criticality()
 
