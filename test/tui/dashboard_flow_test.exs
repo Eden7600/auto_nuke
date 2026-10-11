@@ -88,7 +88,8 @@ defmodule AutoNuke.Tui.DashboardFlowTest do
 
     assert state.view == :prompt
     assert state.prompt.stage == :confirm
-    assert rendered(state) =~ "controlled shutdown"
+    assert rendered(state) =~ "external power"
+    assert rendered(state) =~ "backup generators"
 
     # n backs out without running anything.
     state = press(state, {:char, "n"})

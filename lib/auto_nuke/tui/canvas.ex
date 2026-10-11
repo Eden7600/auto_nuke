@@ -106,6 +106,26 @@ defmodule AutoNuke.Tui.Canvas do
     |> then(fn {acc, _} -> acc |> Enum.reverse() |> Enum.join() end)
   end
 
+  @doc """
+  Wrap `text` into lines of at most `max_width` display columns, breaking on
+  word boundaries. Returns a list of strings.
+  """
+  def wrap(text, max_width) do
+    text
+    |> to_string()
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.reduce([""], fn word, [line | rest] ->
+      candidate = if line == "", do: word, else: line <> " " <> word
+
+      if display_width(candidate) <= max_width do
+        [candidate | rest]
+      else
+        [word, line | rest]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
   @spark_blocks ~w(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
 
   @doc """
