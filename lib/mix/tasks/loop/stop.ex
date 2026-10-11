@@ -9,6 +9,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
   alias AutoNuke.Operator.CoreTemp
   alias AutoNuke.Operator.SteamFlow
   alias AutoNuke.TaskUI, as: UI
+  alias AutoNuke.Operator.ResistorBanks
   alias Mix.Tasks.AutoNuke.Startup
 
   def run([loop]) do
@@ -28,6 +29,10 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
     UI.init()
     IO.puts("#{@loop_emoji} Stopping loop #{loop} #{@loop_emoji}")
     UI.log_to_file("startup.log")
+
+    # The ResistorBanks operator would fight the resistor bank handling below,
+    # so stand it down for the duration of this task if it's running.
+    resistor_banks_was_running = suspend_resistor_banks_operator(remote_node)
 
     Startup.enable_resistor_bank()
 
@@ -92,6 +97,36 @@ defmodule Mix.Tasks.AutoNuke.Loop.Stop do
       "SHUT",
       fn -> !SteamGen.get_vent_open?(steam_gen) end,
       fn -> SteamGen.set_vent_open(steam_gen, false) end
+    )
+
+    if resistor_banks_was_running, do: resume_resistor_banks_operator(remote_node)
+  end
+
+  defp suspend_resistor_banks_operator(node) do
+    running? = :erpc.call(node, Process, :whereis, [ResistorBanks]) |> is_pid()
+
+    if running? do
+      UI.tablet("AutoNuke Remote Control")
+
+      UI.set_wait(
+        "Resistor Banks Operator",
+        "DISABLE",
+        fn -> :erpc.call(node, Process, :whereis, [ResistorBanks]) |> is_nil() end,
+        fn -> :erpc.call(node, AutoNuke.Tui.Operators, :disable, [ResistorBanks]) end
+      )
+    end
+
+    running?
+  end
+
+  defp resume_resistor_banks_operator(node) do
+    UI.tablet("AutoNuke Remote Control")
+
+    UI.set_wait(
+      "Resistor Banks Operator",
+      "ENABLE",
+      fn -> :erpc.call(node, Process, :whereis, [ResistorBanks]) |> is_pid() end,
+      fn -> :erpc.call(node, AutoNuke.Tui.Operators, :enable, [ResistorBanks]) end
     )
   end
 end
