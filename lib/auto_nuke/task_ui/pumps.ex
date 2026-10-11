@@ -43,18 +43,24 @@ defmodule AutoNuke.TaskUI.Pumps do
 
     if pump.set_key, do: PumpAPI.set_speed(pump, 0)
 
+    # Ring the terminal bell only once: repeating it every poll (500ms) is
+    # suspected to cause frame drops in the game while waiting.
+    {:ok, beeped} = Agent.start_link(fn -> false end)
+
     UI.wait(
       pump.name,
       "OFF",
       fn ->
         if PumpAPI.get_active?(pump) do
-          IO.write(:stderr, "\a")
+          unless Agent.get_and_update(beeped, &{&1, true}), do: IO.write(:stderr, "\a")
           false
         else
           true
         end
       end
     )
+
+    Agent.stop(beeped)
   end
 
   def set_speed(%Pump{} = pump, target, opts \\ []) do

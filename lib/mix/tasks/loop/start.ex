@@ -19,6 +19,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     remote_node = AutoNuke.PlantNode.find("auto_nuke.loop.start <loop>")
     steam_flow_pid = {Op.SteamFlow, remote_node}
     core_temp_pid = {Op.CoreTemp, remote_node}
+    primary_pumps_pid = {Op.PrimaryPumps, remote_node}
 
     steam_loops = Op.SteamFlow.get_loops(steam_flow_pid)
     temp_loops = Op.CoreTemp.get_loops(core_temp_pid)
@@ -39,7 +40,7 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
     Startup.start_secondary_circulation([loop])
     Op.SecondaryFill.stop({loop, remote_node})
 
-    Startup.start_primary_circulation([loop], nil)
+    Startup.start_primary_circulation([loop], Startup.startup_primary_speed())
     Startup.start_turbine([loop])
 
     # Start our own temporary SteamFlow for just this loop. It gets a
@@ -64,6 +65,13 @@ defmodule Mix.Tasks.AutoNuke.Loop.Start do
       "ADD LOOP #{loop}",
       fn -> loop in Op.CoreTemp.get_loops(core_temp_pid) end,
       fn -> Op.CoreTemp.add_loop(loop, core_temp_pid) end
+    )
+
+    UI.set_wait(
+      "Primary Pumps Operator",
+      "ADD LOOP #{loop}",
+      fn -> loop in Op.PrimaryPumps.get_loops(primary_pumps_pid) end,
+      fn -> Op.PrimaryPumps.add_loop(loop, primary_pumps_pid) end
     )
 
     UI.set_wait(
